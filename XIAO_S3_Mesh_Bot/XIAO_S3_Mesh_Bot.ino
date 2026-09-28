@@ -107,6 +107,10 @@ struct MonitoredNode {
 };
 MonitoredNode monitoredNodes[16];
 
+// Dinamiškai parsiunčiamų kartotuvų masyvas (iš REPEATERS_URL prieš kiekvieną ciklą)
+RepeaterTarget monitoredRepeaters[16];
+size_t monitoredRepeatersCount = 0;
+
 // Konsoliduotas telemetrijos dokumentas (sujungia visų užklausų atsakymus į 1 ataskaitą)
 #if ARDUINOJSON_VERSION_MAJOR >= 7
 JsonDocument currentRepDoc;
@@ -144,6 +148,8 @@ uint32_t getNextTimestamp() {
 void connectToWiFi();
 void initLoRa();
 void generateSelfIdentity();
+bool fetchRepeatersFromURL();
+void initMonitoredNodeKeys();
 void requestTelemetryFromAllRepeaters();
 void requestTelemetryFromSingleRepeater(size_t repIdx);
 bool waitForReply(unsigned long timeoutMs, uint8_t expectedSenderHash = 0);
@@ -172,20 +178,14 @@ void setup() {
   Serial.println("\n========================================================");
   Serial.println("  Seeed Studio XIAO ESP32-S3 MeshCore Telemetry Bot");
   Serial.println("========================================================");
-  Serial.printf("[Info] Stebimų kartotuvų skaičius: %u\n", (unsigned int)MONITORED_REPEATERS_COUNT);
-  for (size_t i = 0; i < MONITORED_REPEATERS_COUNT; i++) {
-    Serial.printf("  [%u] %s (%s) | Slaptažodis: '%s'\n",
-                  (unsigned int)(i + 1), MONITORED_REPEATERS[i].name,
-                  MONITORED_REPEATERS[i].isDirect ? "DIRECT 0 hops" : "FLOOD multi-hop",
-                  MONITORED_REPEATERS[i].password);
-  }
+  Serial.printf("[Info] Kartotuvų sąrašas bus parsiųstas prieš kiekvieną ciklą iš: %s\n", REPEATERS_URL);
   Serial.printf("[Info] Laukimo laikas po kiekvienos užklausos: %lu ms (%.1f s)\n",
                 REPEATER_REPLY_TIMEOUT_MS, REPEATER_REPLY_TIMEOUT_MS / 1000.0f);
   Serial.printf("[Info] Tikrinimo ciklo intervalas: %lu min (%lu ms)\n",
                 TELEMETRY_REQUEST_INTERVAL_MS / 60000, TELEMETRY_REQUEST_INTERVAL_MS);
   Serial.printf("[Info] API URL: %s\n", API_URL);
 
-  // 1. Generuojame unikalų ESP32 mazgo raktą ir kartotuvų bendrus šifravimo raktus
+  // 1. Generuojame unikalų ESP32 mazgo raktą (tik save – kartotuvų raktai generuojami po JSON parsisiuntimo)
   generateSelfIdentity();
 
   // 2. Wi-Fi ryšys ir NTP laikas
@@ -232,26 +232,40 @@ void loop() {
 // ================================================================================
 void requestTelemetryFromAllRepeaters() {
   Serial.println("\n========================================================");
-  Serial.printf("[Ciklas] Pradedama %u kartotuvų apklausa paeiliui...\n", (unsigned int)MONITORED_REPEATERS_COUNT);
+  Serial.println("[Ciklas] Parsiunčiamas kartotuvų sąrašas iš interneto...");
+  Serial.println("========================================================");
+
+  if (!fetchRepeatersFromURL()) {
+    Serial.println("[Ciklas] Kartotuvų sąrašas tuščias arba nepasiekiamas. Laukiama kito periodo.");
+    radio.startReceive();
+    return;
+  }
+
+  // Apskaičiuojame ECDH bendrus raktus su ką tik parsiunčiamais kartotuvais
+  initMonitoredNodeKeys();
+
+  Serial.printf("[Ciklas] Pradedama %u kartotuvų apklausa paeiliui...\n", (unsigned int)monitoredRepeatersCount);
   Serial.printf("[Ciklas] Nustatytas laukimo laikas po kiekvienos užklausos: %.1f s\n", REPEATER_REPLY_TIMEOUT_MS / 1000.0f);
   Serial.println("========================================================");
 
-  for (size_t i = 0; i < MONITORED_REPEATERS_COUNT; i++) {
+  for (size_t i = 0; i < monitoredRepeatersCount; i++) {
     if (!monitoredNodes[i].initialized) {
-      Serial.printf("[Ciklas] Kartotuvas '%s' neinicializuotas (patikrinkite raktą). Praleidžiama.\n", MONITORED_REPEATERS[i].name);
+      Serial.printf("[Ciklas] Kartotuvas '%s' neinicializuotas (patikrinkite raktą). Praleidžiama.\n",
+                    monitoredRepeaters[i].name.c_str());
       continue;
     }
 
     Serial.printf("\n>>> [%u/%u] PRADEDAMAS DARBAS SU: %s (Hash: 0x%02X | %s) <<<\n",
-                  (unsigned int)(i + 1), (unsigned int)MONITORED_REPEATERS_COUNT,
-                  MONITORED_REPEATERS[i].name, monitoredNodes[i].hash,
-                  MONITORED_REPEATERS[i].isDirect ? "Tiesioginis DIRECT" : "Nutolęs FLOOD");
+                  (unsigned int)(i + 1), (unsigned int)monitoredRepeatersCount,
+                  monitoredRepeaters[i].name.c_str(), monitoredNodes[i].hash,
+                  monitoredRepeaters[i].isDirect ? "Tiesioginis DIRECT" : "Nutolęs FLOOD");
 
     requestTelemetryFromSingleRepeater(i);
 
-    if (i + 1 < MONITORED_REPEATERS_COUNT) {
-      Serial.println("\n[Pauzė] Baigtas darbas su šiuo kartotuvu. Trumpa 3 s pauzė prieš kreipiantis į sekantį...");
-      delay(3000);
+    if (i + 1 < monitoredRepeatersCount) {
+      Serial.printf("\n[Pauzė] Baigtas darbas su '%s'. Pauzė %.1f s prieš kreipiantis į sekantį...\n",
+                    monitoredRepeaters[i].name.c_str(), REPEATER_COOLDOWN_MS / 1000.0f);
+      delay(REPEATER_COOLDOWN_MS);
     }
   }
 
@@ -261,49 +275,54 @@ void requestTelemetryFromAllRepeaters() {
 }
 
 void requestTelemetryFromSingleRepeater(size_t repIdx) {
-  const RepeaterTarget& rep = MONITORED_REPEATERS[repIdx];
+  const RepeaterTarget& rep = monitoredRepeaters[repIdx];
   uint8_t targetHash = monitoredNodes[repIdx].hash;
 
   currentRepDoc.clear();
   currentRepHasData = false;
 
   // Žingsnis 1: Užšifruotas prisijungimas (Login) su slaptažodžiu
-  Serial.printf("[Užklausa 1/4] Siunčiamas užšifruotas Login į '%s' su slaptažodžiu '%s'...\n", rep.name, rep.password);
+  Serial.printf("[Užklausa 1/4] Siunčiamas užšifruotas Login į '%s' su slaptažodžiu '%s'...\n",
+                rep.name.c_str(), rep.password.c_str());
   sendMeshCoreLogin(repIdx);
   waitForReply(REPEATER_REPLY_TIMEOUT_MS, targetHash);
 
   // Žingsnis 2: Jei kartotuvas tiesioginis (0 hops), registruojame tiesioginį kelią
   if (rep.isDirect) {
     delay(500);
-    Serial.printf("[Užklausa 2/4] Registruojamas tiesioginis kelias į '%s' (PATH 0 hops)...\n", rep.name);
+    Serial.printf("[Užklausa 2/4] Registruojamas tiesioginis kelias į '%s' (PATH 0 hops)...\n", rep.name.c_str());
     sendMeshCorePath(repIdx);
     delay(500);
   } else {
-    Serial.printf("[Užklausa 2/4] Praleidžiamas tiesioginis PATH registravimas ('%s' yra per kelis hops / FLOOD).\n", rep.name);
+    Serial.printf("[Užklausa 2/4] Praleidžiamas tiesioginis PATH registravimas ('%s' yra per kelis hops / FLOOD).\n",
+                  rep.name.c_str());
   }
 
   // Žingsnis 3: Būsenos ir statistikos užklausa (REQ_TYPE_GET_STATUS)
   Serial.printf("[Užklausa 3/4] Siunčiama būsenos užklausa (REQ_TYPE_GET_STATUS) į '%s' (Laukiama iki %.1f s)...\n",
-                rep.name, REPEATER_REPLY_TIMEOUT_MS / 1000.0f);
+                rep.name.c_str(), REPEATER_REPLY_TIMEOUT_MS / 1000.0f);
   sendMeshCoreStatusRequest(repIdx);
   waitForReply(REPEATER_REPLY_TIMEOUT_MS, targetHash);
 
   // Žingsnis 4: Telemetrijos užklausa (REQ_TYPE_GET_TELEMETRY_DATA - Baterija ir Temp)
   delay(1000);
   Serial.printf("[Užklausa 4/4] Siunčiama telemetrijos užklausa (REQ_TYPE_GET_TELEMETRY_DATA) į '%s' (Laukiama iki %.1f s)...\n",
-                rep.name, REPEATER_REPLY_TIMEOUT_MS / 1000.0f);
+                rep.name.c_str(), REPEATER_REPLY_TIMEOUT_MS / 1000.0f);
   sendMeshCoreTelemetryRequest(repIdx);
   waitForReply(REPEATER_REPLY_TIMEOUT_MS, targetHash);
 
-  // 📡 Konsoliduotas telemetrijos siuntimas į API (viskas vienoje ataskaitoje)
-  if (currentRepHasData) {
+  // 📡 Siunčiame į API TIK jei gauti realūs telemetriniai duomenys (tarpiniai login pranešimai nesiunčiami)
+  bool hasActualTelemetry = currentRepDoc.containsKey("telemetry") && currentRepDoc["telemetry"].size() > 0;
+
+  if (hasActualTelemetry) {
     currentRepDoc["protocol"] = "MeshCore";
     currentRepDoc["node_id"] = rep.name;
     currentRepDoc["public_id"] = rep.public_id;
-    Serial.printf("\n[API] Siunčiama pilna konsoliduota kartotuvo '%s' telemetrija į serverį...\n", rep.name);
+    Serial.printf("\n[API] Siunčiami surinkti telemetrijos duomenys ('%s') į serverį...\n", rep.name.c_str());
     sendToAPI(currentRepDoc);
   } else {
-    Serial.printf("\n[API] Iš kartotuvo '%s' negauta telemetrijos duomenų, API siuntimas praleidžiamas.\n", rep.name);
+    Serial.printf("\n[API] Iš kartotuvo '%s' negauta telemetrinių duomenų, API siuntimas praleidžiamas.\n",
+                  rep.name.c_str());
   }
 }
 
@@ -386,7 +405,7 @@ void initLoRa() {
 // 🔑 ESP32 IDENTITETO GENERAVIMAS IR KRIPTOGRAFINIS RYŠYS
 // ================================================================================
 void generateSelfIdentity() {
-  // 1. Užkrauname vartotojo nurodytus ESP32 Ed25519 raktus iš config.h
+  // Užkrauname vartotojo nurodytus ESP32 Ed25519 raktus iš config.h
   uint8_t seed[SEED_SIZE];
   size_t seedLen = 0;
   if (hexStringToBytes(MY_SEED_HEX, seed, SEED_SIZE, seedLen) && seedLen == SEED_SIZE) {
@@ -397,32 +416,113 @@ void generateSelfIdentity() {
     for (int i = 0; i < 32; i++) seed[i] = (uint8_t)(mac[i % 6] ^ (i * 0x5A + 0x33));
     MeshCrypto::generateKeypair(myPublicKey, myPrivateKey, seed);
   }
-  myNodeHash = myPublicKey[0]; // 0x3B iš 3bbdf77c...
+  myNodeHash = myPublicKey[0];
 
   Serial.println("\n[MeshCore Kriptografija - Mūsų Tapatybė]");
   Serial.printf("  * Mūsų ESP32 Mazgo Hash: 0x%02X\n", myNodeHash);
   Serial.print("  * Mūsų Ed25519 Viešasis: ");
   printHexBuffer(myPublicKey, PUB_KEY_SIZE);
   Serial.println();
+  // Kartotuvų raktai bus sugeneruoti po fetchRepeatersFromURL() kiekvieną ciklą
+}
 
-  // 2. Kiekvienam stebimam kartotuvui sugeneruojame atskirą Curve25519 ECDH Shared Secret
+// Parsiunčia kartotuvų sąrašą iš REPEATERS_URL prieš kiekvieną ciklą.
+// Grąžina true jei sąraše yra bent vienas kartotuvas, false – jei nepasiekiamas arba tuščias.
+bool fetchRepeatersFromURL() {
+  monitoredRepeatersCount = 0;
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[FetchRepeaters] Wi-Fi neprisijungtas, negalima parsisiųsti sąrašo.");
+    return false;
+  }
+
+  HTTPClient http;
+  http.begin(REPEATERS_URL);
+  http.setTimeout(8000);
+  int code = http.GET();
+
+  if (code != 200) {
+    Serial.printf("[FetchRepeaters] HTTP klaida %d parsiunčiant '%s'\n", code, REPEATERS_URL);
+    http.end();
+    return false;
+  }
+
+  String body = http.getString();
+  http.end();
+
+  Serial.printf("[FetchRepeaters] Gautas atsakymas (%d baitai): %s\n", body.length(), body.substring(0, 120).c_str());
+
+#if ARDUINOJSON_VERSION_MAJOR >= 7
+  JsonDocument doc;
+#else
+  StaticJsonDocument<2048> doc;
+#endif
+
+  DeserializationError err = deserializeJson(doc, body);
+  if (err) {
+    Serial.printf("[FetchRepeaters] JSON klaida: %s\n", err.c_str());
+    return false;
+  }
+
+  // Palaikome abu formatus: tiesioginis masyvas [...] arba objektas {"repeaters": [...]}
+  JsonArray arr;
+  if (doc.is<JsonArray>()) {
+    arr = doc.as<JsonArray>();
+  } else if (doc["repeaters"].is<JsonArray>()) {
+    arr = doc["repeaters"].as<JsonArray>();
+  } else {
+    Serial.println("[FetchRepeaters] Neatpažintas JSON formatas.");
+    return false;
+  }
+
+  for (JsonObject obj : arr) {
+    if (monitoredRepeatersCount >= MAX_MONITORED_REPEATERS) break;
+    size_t idx = monitoredRepeatersCount;
+    monitoredRepeaters[idx].name      = obj["name"].as<String>();
+    monitoredRepeaters[idx].public_id  = obj["public_id"].as<String>();
+    monitoredRepeaters[idx].password   = obj["password"].as<String>();
+    monitoredRepeaters[idx].isDirect   = obj["isDirect"] | false;
+    monitoredRepeatersCount++;
+  }
+
+  if (monitoredRepeatersCount == 0) {
+    Serial.println("[FetchRepeaters] Sąrašas tuščias ([] arba nėra įrašų).");
+    return false;
+  }
+
+  Serial.printf("[FetchRepeaters] Sėkmingai įkelti %u kartotuvai:\n", (unsigned int)monitoredRepeatersCount);
+  for (size_t i = 0; i < monitoredRepeatersCount; i++) {
+    Serial.printf("  [%u] %s (%s) | pw: '%s'\n",
+                  (unsigned int)(i + 1), monitoredRepeaters[i].name.c_str(),
+                  monitoredRepeaters[i].isDirect ? "DIRECT" : "FLOOD",
+                  monitoredRepeaters[i].password.c_str());
+  }
+  return true;
+}
+
+// Apskaičiuoja ECDH bendrus raktus su visais monitoredRepeaters[] kartotuvais.
+// Kviečiama iškart po fetchRepeatersFromURL().
+void initMonitoredNodeKeys() {
   Serial.println("\n[MeshCore Kriptografija - Kartotuvų Raktai]");
-  for (size_t i = 0; i < MONITORED_REPEATERS_COUNT && i < 16; i++) {
+  for (size_t i = 0; i < monitoredRepeatersCount && i < MAX_MONITORED_REPEATERS; i++) {
     monitoredNodes[i].initialized = false;
     size_t keyLen = 0;
-    if (hexStringToBytes(MONITORED_REPEATERS[i].public_id, monitoredNodes[i].pubKey, PUB_KEY_SIZE, keyLen) && keyLen == PUB_KEY_SIZE) {
+    if (hexStringToBytes(monitoredRepeaters[i].public_id.c_str(), monitoredNodes[i].pubKey, PUB_KEY_SIZE, keyLen)
+        && keyLen == PUB_KEY_SIZE) {
       monitoredNodes[i].hash = monitoredNodes[i].pubKey[0];
       MeshCrypto::calcSharedSecret(monitoredNodes[i].sharedSecret, monitoredNodes[i].pubKey, myPrivateKey);
       monitoredNodes[i].initialized = true;
 
       Serial.printf("  * Kartotuvas [%u] '%s': Hash 0x%02X | %s\n",
-                    (unsigned int)(i + 1), MONITORED_REPEATERS[i].name,
-                    monitoredNodes[i].hash, MONITORED_REPEATERS[i].isDirect ? "DIRECT 0 hops" : "FLOOD multi-hop");
+                    (unsigned int)(i + 1), monitoredRepeaters[i].name.c_str(),
+                    monitoredNodes[i].hash,
+                    monitoredRepeaters[i].isDirect ? "DIRECT 0 hops" : "FLOOD multi-hop");
       Serial.print("    - Bendras šifravimo raktas: ");
       printHexBuffer(monitoredNodes[i].sharedSecret, 8);
       Serial.println("...");
     } else {
-      Serial.printf("  [KLAIDA] Neteisingas viešasis raktas kartotuvui '%s' config.h faile!\n", MONITORED_REPEATERS[i].name);
+      Serial.printf("  [KLAIDA] Neteisingas viešasis raktas kartotuvui '%s'!\n",
+                    monitoredRepeaters[i].name.c_str());
     }
   }
 }
@@ -481,7 +581,7 @@ void sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const
 
 // 1. Siunčiama užšifruota prisijungimo (Login) užklausa su slaptažodžiu
 void sendMeshCoreLogin(size_t repIdx) {
-  const RepeaterTarget& rep = MONITORED_REPEATERS[repIdx];
+  const RepeaterTarget& rep = monitoredRepeaters[repIdx];
   uint8_t target = monitoredNodes[repIdx].hash;
   const uint8_t* secret = monitoredNodes[repIdx].sharedSecret;
 
@@ -505,8 +605,8 @@ void sendMeshCoreLogin(size_t repIdx) {
   memcpy(&plain[plainLen], &ts, 4);
   plainLen += 4;
 
-  size_t pwdLen = strlen(rep.password);
-  memcpy(&plain[plainLen], rep.password, pwdLen + 1);
+  size_t pwdLen = rep.password.length();
+  memcpy(&plain[plainLen], rep.password.c_str(), pwdLen + 1);
   plainLen += (pwdLen + 1);
 
   int encLen = MeshCrypto::encryptThenMAC(secret, &payload[pLen], plain, plainLen);
@@ -543,7 +643,7 @@ void sendMeshCorePath(size_t repIdx) {
 
 // 3. Siunčiama užšifruota būsenos ir statistikos užklausa (REQ_TYPE_GET_STATUS = 0x01)
 void sendMeshCoreStatusRequest(size_t repIdx) {
-  const RepeaterTarget& rep = MONITORED_REPEATERS[repIdx];
+  const RepeaterTarget& rep = monitoredRepeaters[repIdx];
   uint8_t target = monitoredNodes[repIdx].hash;
   const uint8_t* secret = monitoredNodes[repIdx].sharedSecret;
 
@@ -570,7 +670,7 @@ void sendMeshCoreStatusRequest(size_t repIdx) {
 
 // 4. Siunčiama užšifruota jutiklių telemetrijos užklausa (REQ_TYPE_GET_TELEMETRY_DATA = 0x03)
 void sendMeshCoreTelemetryRequest(size_t repIdx) {
-  const RepeaterTarget& rep = MONITORED_REPEATERS[repIdx];
+  const RepeaterTarget& rep = monitoredRepeaters[repIdx];
   uint8_t target = monitoredNodes[repIdx].hash;
   const uint8_t* secret = monitoredNodes[repIdx].sharedSecret;
 
@@ -697,10 +797,10 @@ bool processIncomingPacket(uint8_t expectedSenderHash) {
     }
     Serial.printf("  * Mazgo Viešasis Raktas: %s\n", pubKeyHex);
 
-    for (size_t i = 0; i < MONITORED_REPEATERS_COUNT; i++) {
-      if (strcasecmp(MONITORED_REPEATERS[i].public_id, pubKeyHex) == 0) {
-        jsonDoc["node_id"] = MONITORED_REPEATERS[i].name;
-        jsonDoc["public_id"] = MONITORED_REPEATERS[i].public_id;
+    for (size_t i = 0; i < monitoredRepeatersCount; i++) {
+      if (monitoredRepeaters[i].public_id.equalsIgnoreCase(pubKeyHex)) {
+        jsonDoc["node_id"] = monitoredRepeaters[i].name;
+        jsonDoc["public_id"] = monitoredRepeaters[i].public_id;
         break;
       }
     }
@@ -731,7 +831,7 @@ bool processIncomingPacket(uint8_t expectedSenderHash) {
 
     // Nustatome, kuris kartotuvas atsiuntė šį atsakymą pagal jo Hash
     int repIdx = -1;
-    for (size_t i = 0; i < MONITORED_REPEATERS_COUNT; i++) {
+    for (size_t i = 0; i < monitoredRepeatersCount; i++) {
       if (monitoredNodes[i].initialized && monitoredNodes[i].hash == srcHash) {
         repIdx = (int)i;
         break;
@@ -741,16 +841,16 @@ bool processIncomingPacket(uint8_t expectedSenderHash) {
     const uint8_t* activeSecret = nullptr;
     if (repIdx >= 0) {
       activeSecret = monitoredNodes[repIdx].sharedSecret;
-      jsonDoc["node_id"] = MONITORED_REPEATERS[repIdx].name;
-      jsonDoc["public_id"] = MONITORED_REPEATERS[repIdx].public_id;
+      jsonDoc["node_id"] = monitoredRepeaters[repIdx].name;
+      jsonDoc["public_id"] = monitoredRepeaters[repIdx].public_id;
       Serial.printf(">>> [MeshCore] Gautas atsakymas iš kartotuvo '%s' (Hash: 0x%02X) <<<\n",
-                    MONITORED_REPEATERS[repIdx].name, srcHash);
+                    monitoredRepeaters[repIdx].name.c_str(), srcHash);
     } else {
-      for (size_t i = 0; i < MONITORED_REPEATERS_COUNT; i++) {
+      for (size_t i = 0; i < monitoredRepeatersCount; i++) {
         if (monitoredNodes[i].initialized) {
           activeSecret = monitoredNodes[i].sharedSecret;
-          jsonDoc["node_id"] = MONITORED_REPEATERS[i].name;
-          jsonDoc["public_id"] = MONITORED_REPEATERS[i].public_id;
+          jsonDoc["node_id"] = monitoredRepeaters[i].name;
+          jsonDoc["public_id"] = monitoredRepeaters[i].public_id;
           break;
         }
       }
@@ -789,14 +889,8 @@ bool processIncomingPacket(uint8_t expectedSenderHash) {
         uint8_t perms = (respLen >= 8) ? respPtr[7] : 0;
         Serial.println(">>> [MeshCore SĖKMĖ] Kartotuvas patvirtino prisijungimą! (LOGIN SUCCESS) <<<");
         Serial.printf("[MeshCore] Suteiktos prieigos teisės: 0x%02X\n", perms);
-        if (expectedSenderHash != 0) {
-          currentRepDoc["login_status"] = "SUCCESS";
-          currentRepDoc["permissions"] = perms;
-        } else {
-          jsonDoc["login_status"] = "SUCCESS";
-          jsonDoc["permissions"] = perms;
-        }
-        hasValidTelemetry = true;
+        // Tarpinio pranešimo į API nesiunčiame – laukiama realios telemetrijos
+        return true;
       }
 
       // 2. Tikriname ar tai RepeaterStats (52 baitų būsenos struktūra)

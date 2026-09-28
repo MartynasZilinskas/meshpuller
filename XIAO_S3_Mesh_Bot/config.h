@@ -12,38 +12,33 @@ const char *WIFI_SSID = "2.4GHz";
 const char *WIFI_PASSWORD = "37810200438";
 
 // 2. API URL (kur siųsti surinktus telemetrijos duomenis HTTP POST užklausa)
-const char *API_URL = "https://ite.lt";
+const char *API_URL = "https://telemetry.ite.lt";
 const char *API_AUTH_KEY =
     ""; // Pvz.: "Bearer TAVO_TOKENAS" (jei nereikia - palikti tuščią "")
 
-// 3. Stebimų kartotuvų (Repeaters / Nodes) Struktūra ir Sąrašas
-struct RepeaterTarget {
-  const char *name;      // Pavadinimas / prefiksas (pvz. "b9dd" arba "1bbd")
-  const char *public_id; // 32 baitų (64 hex simbolių) kartotuvo viešasis raktas
-  const char *password;  // Prisijungimo slaptažodis (pvz. "hello")
-  bool isDirect; // true = tiesioginis (0 hops), false = per kitus kartotuvus
-                 // (FLOOD / keli hops)
-};
+// 3. Stebimų kartotuvų sąrašo URL (iš kur prieš kiekvieną ciklą parsiunčiamas
+// kartotuvų JSON sąrašas)
+const char *REPEATERS_URL = "https://telemetry.ite.lt/r.json";
 
-const RepeaterTarget MONITORED_REPEATERS[] = {
-    {
-        "b9dd",
-        "b9ddd788b7a59eab40eaa49a2534fa9e7fc0ef7d920ef4811139998cddd631db",
-        "hello",
-        true // Tiesioginis kaimynas (0 hops)
-    },
-    {
-        "1bbd",
-        "1bbd45c1ae2b2241ae997f0723066461bc8b0283abeee165d67ef9b35e9afb64",
-        "hello",
-        false // Nutolęs kartotuvas (pasiekiamas per kelis hops)
-    }};
-const size_t MONITORED_REPEATERS_COUNT =
-    sizeof(MONITORED_REPEATERS) / sizeof(MONITORED_REPEATERS[0]);
+// Maksimalus stebimų kartotuvų skaičius atmintyje:
+const size_t MAX_MONITORED_REPEATERS = 16;
+
+// Stebimo kartotuvo struktūra
+struct RepeaterTarget {
+  String name;      // Pavadinimas / prefiksas (pvz. "b9dd" arba "1bbd")
+  String public_id; // 32 baitų (64 hex simbolių) kartotuvo viešasis raktas
+  String password;  // Prisijungimo slaptažodis (pvz. "hello")
+  bool isDirect;    // true = tiesioginis (0 hops), false = per kitus kartotuvus
+                    // (FLOOD / keli hops)
+};
 
 // Atsakymo laukimo laikas (milisekundėmis) po kiekvienos užklausos (pradžioje
 // 10 sekundžių):
 const unsigned long REPEATER_REPLY_TIMEOUT_MS = 10000;
+
+// Pauzė (milisekundėmis) tarp kartotuvų apklausos (po API išsiuntimo prieš
+// sekantį kartotuvą):
+const unsigned long REPEATER_COOLDOWN_MS = 3000;
 
 // ESP32 Mazgo Ed25519 Raktai (Mūsų tapatybė tinkle)
 const char *MY_SEED_HEX =
