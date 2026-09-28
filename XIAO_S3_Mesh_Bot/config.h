@@ -42,15 +42,15 @@ const unsigned long REPEATER_COOLDOWN_MS = 3000;
 
 // ESP32 Mazgo Ed25519 Raktai (Mūsų tapatybė tinkle)
 const char *MY_SEED_HEX =
-    "728b56d86e2ba90ddd1a59b835bfb269035e382b63f40fb01f98df060dbd9e4c";
+    "4a9232cb075ea937e5ff59e14eb89b595acfc82e9ccf4d7347372bff56393e09";
 const char *MY_PUBKEY_HEX =
-    "3bbdf77c5f8e323cf0b21dd85aedc48c99e4cbc0a240c550d7fd6f13f7235af8";
+    "0bbd84b028bdf755edd8f30c6f67839c3f81846c9f0079f377ea32a1e93410f3";
 const char *MY_PRVKEY_HEX =
-    "728b56d86e2ba90ddd1a59b835bfb269035e382b63f40fb01f98df060dbd9e4c3bbdf77c5f"
-    "8e323cf0b21dd85aedc48c99e4cbc0a240c550d7fd6f13f7235af8";
+    "4a9232cb075ea937e5ff59e14eb89b595acfc82e9ccf4d7347372bff56393e09"
+    "0bbd84b028bdf755edd8f30c6f67839c3f81846c9f0079f377ea32a1e93410f3";
 
 // Užklausų ciklo periodiškumas (milisekundėmis): kas 5 minutes (300000 ms)
-const unsigned long TELEMETRY_REQUEST_INTERVAL_MS = 300000;
+const unsigned long TELEMETRY_REQUEST_INTERVAL_MS = 60000 * 60;
 
 // 4. Telemetrijos Duomenų Filtrai (Įjungti/Išjungti duomenų laukus iš siunčiamo
 // JSON)
