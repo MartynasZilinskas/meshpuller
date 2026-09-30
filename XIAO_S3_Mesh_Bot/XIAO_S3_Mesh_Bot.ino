@@ -787,31 +787,173 @@ bool processIncomingPacket(uint8_t expectedSenderHash) {
   bool hasValidTelemetry = false;
 
   // --------------------------------------------------------------------------
-  // A) ADVERT paketas (Kartotuvas pats skelbia savo buvimą ir telemetriją)
+  // A) ADVERT paketas – pilnas dekodavimas ir momentinis siuntimas į API
+  //
+  // FORMATAS A (su 64B parašu, payloadLen >= 101):
+  //   [0..31]  pubKey
+  //   [32..35] timestamp
+  //   [36..99] signature (64B)
+  //   [100]    appFlags
+  //   [101..104] lat (float LE), [105..108] lon (float LE)
+  //   [109..]  name
+  //
+  // FORMATAS B (be parašo, payloadLen < 101):
+  //   [0..31]  pubKey
+  //   [32..35] timestamp
+  //   [36]     appFlags
+  //   [37..40] lat (float LE), [41..44] lon (float LE)
+  //   [45..]   name
   // --------------------------------------------------------------------------
   if (payloadType == PAYLOAD_TYPE_ADVERT && payloadLen >= 36) {
-    Serial.println(">>> [MeshCore SĖKMĖ] Gautas kartotuvo periodinis skelbimas (ADVERT)! <<<");
-    char pubKeyHex[65];
-    for (int i = 0; i < 32; i++) {
-      snprintf(&pubKeyHex[i * 2], 3, "%02x", payload[i]);
-    }
-    Serial.printf("  * Mazgo Viešasis Raktas: %s\n", pubKeyHex);
+    Serial.println(">>> [MeshCore SĖKMĖ] Gautas ADVERT skelbimas! <<<");
+    Serial.printf("  * Payload dydis:   %u baitai\n", (unsigned int)payloadLen);
 
+    // Spausdiname visą payload hex diagnostikai
+    Serial.print("  * Payload HEX:     ");
+    printHexBuffer(payload, payloadLen);
+    Serial.println();
+
+    // --- pubKey (baitai 0..31) ---
+    char pubKeyHex[65];
+    for (int i = 0; i < 32; i++) snprintf(&pubKeyHex[i * 2], 3, "%02x", payload[i]);
+    Serial.printf("  * Viešasis Raktas: %s\n", pubKeyHex);
+
+    // --- timestamp (baitai 32..35, uint32 LE) ---
+    uint32_t adTimestamp = 0;
+    memcpy(&adTimestamp, &payload[32], 4);
+    Serial.printf("  * Timestamp:       %lu\n", (unsigned long)adTimestamp);
+
+    // --- Formato nustatymas ---
+    // Formatas A: payloadLen >= 101 → parašas yra, appFlags ties [100]
+    // Formatas B: payloadLen <  101 → parašo nėra,  appFlags ties [36]
+    size_t flagsOffset = (payloadLen >= 101) ? 100 : 36;
+    size_t latOffset   = flagsOffset + 1;
+    size_t lonOffset   = flagsOffset + 5;
+    size_t nameOffset  = flagsOffset + 9;
+    bool formatA       = (payloadLen >= 101);
+    Serial.printf("  * Formatas:        %s (appFlags @ [%u])\n",
+                  formatA ? "A (su paraßu)" : "B (be parašo)", (unsigned int)flagsOffset);
+
+    // --- appFlags ---
+    // bits[0-1] = type: 0=generic, 1=chat, 2=repeater, 3=room
+    // bit[2]  = sensor, bit[3] = hasFeat1, bit[4] = hasLocation
+    // bit[5]  = hasFeat2, bit[6] = rezervuotas, bit[7] = hasName
+    uint8_t appFlags = 0;
+    bool adHasLocation = false;
+    bool adHasName     = false;
+    if (payloadLen > flagsOffset) {
+      appFlags = payload[flagsOffset];
+      uint8_t appType = appFlags & 0x03;
+      adHasLocation = (appFlags >> 4) & 1;
+      adHasName     = (appFlags >> 7) & 1;
+      const char* apStr = appType == 0 ? "generic" : appType == 1 ? "chat"
+                         : appType == 2 ? "repeater" : "room";
+      Serial.printf("  * AppFlags:        0x%02X | type=%s sensor=%d hasLoc=%d hasName=%d\n",
+                    appFlags, apStr, (int)((appFlags >> 2) & 1),
+                    (int)adHasLocation, (int)adHasName);
+    } else {
+      Serial.printf("  * AppFlags:        nepasiekiami (payloadLen=%u, reikia >%u)\n",
+                    (unsigned int)payloadLen, (unsigned int)flagsOffset);
+    }
+
+    // --- lat / lon (int32_t × 1e-7, GPS fixed-point formatas) ---
+    // Saugomos kaip int32_t padaugintos iš 1e7 (pvz. 55705207 = 55.705207°)
+    char latStr[16] = "", lonStr[16] = "";
+    bool adHasValidCoords = false;
+    if (adHasLocation && payloadLen >= lonOffset + 4) {
+      int32_t latRaw = 0, lonRaw = 0;
+      memcpy(&latRaw, &payload[latOffset], 4);
+      memcpy(&lonRaw, &payload[lonOffset], 4);
+      if (latRaw != 0 || lonRaw != 0) {
+        snprintf(latStr, sizeof(latStr), "%.6f", latRaw / 10000000.0);
+        snprintf(lonStr, sizeof(lonStr), "%.6f", lonRaw / 10000000.0);
+        adHasValidCoords = true;
+        Serial.printf("  * Lat: %s  Lon: %s\n", latStr, lonStr);
+      }
+    }
+
+    // --- name (nuo nameOffset iki paketo pabaigos) ---
+    char adName[64] = "";
+    if (adHasName && payloadLen > nameOffset) {
+      size_t nameLen = payloadLen - nameOffset;
+      if (nameLen >= sizeof(adName)) nameLen = sizeof(adName) - 1;
+      memcpy(adName, &payload[nameOffset], nameLen);
+      adName[nameLen] = '\0';
+      // Valome ne-ASCII baitus (pvz. UTF-8 per Serial gali rodyti šiukšles)
+      Serial.printf("  * Pavadinimas:     %s\n", adName);
+    }
+
+    // --- ADVERT JSON statymas ir siuntimas į API ---
+#if ARDUINOJSON_VERSION_MAJOR >= 7
+    JsonDocument advertDoc;
+#else
+    StaticJsonDocument<768> advertDoc;
+#endif
+
+    advertDoc["protocol"]      = "MeshCore";
+    advertDoc["type"]          = "ADVERT";
+    advertDoc["advert_format"] = formatA ? "A" : "B";
+    advertDoc["public_key"]    = pubKeyHex;
+    if (adTimestamp > 0) advertDoc["timestamp"] = adTimestamp;
+    if (strlen(adName) > 0) advertDoc["node_name"] = adName;
+
+    if (settings.includeSignalMetrics) {
+      JsonObject sig = advertDoc["signal"].to<JsonObject>();
+      sig["rssi"] = rssi;
+      sig["snr"]  = snr;
+    }
+
+    if (payloadLen > flagsOffset) {
+      uint8_t appType  = appFlags & 0x03;
+      JsonObject flObj = advertDoc["flags"].to<JsonObject>();
+      flObj["raw"]         = appFlags;
+      flObj["type"]        = appType;
+      flObj["type_str"]    = (appType == 0 ? "generic" : appType == 1 ? "chat"
+                              : appType == 2 ? "repeater" : "room");
+      flObj["chat"]        = (appType == 1);
+      flObj["repeater"]    = (appType == 2);
+      flObj["room"]        = (appType == 3);
+      flObj["sensor"]      = (bool)((appFlags >> 2) & 1);
+      flObj["hasFeat1"]    = (bool)((appFlags >> 3) & 1);
+      flObj["hasLocation"] = adHasLocation;
+      flObj["hasFeat2"]    = (bool)((appFlags >> 5) & 1);
+      flObj["hasName"]     = adHasName;
+    }
+
+    if (adHasValidCoords) {
+      advertDoc["lat"] = latStr;
+      advertDoc["lon"] = lonStr;
+    }
+
+    // Raw payload diagnostikai (jei įjungtas includeRawPayload)
+    if (settings.includeRawPayload) {
+      String rawHex = "";
+      for (size_t i = 0; i < payloadLen; i++) {
+        char b[3]; snprintf(b, sizeof(b), "%02X", payload[i]);
+        rawHex += b;
+      }
+      advertDoc["payload_hex"]    = rawHex;
+      advertDoc["payload_len"]    = (int)payloadLen;
+      advertDoc["flags_offset"]   = (int)flagsOffset;
+    }
+
+    // Patikriname ar tai stebimas kartotuvas
     for (size_t i = 0; i < monitoredRepeatersCount; i++) {
       if (monitoredRepeaters[i].public_id.equalsIgnoreCase(pubKeyHex)) {
-        jsonDoc["node_id"] = monitoredRepeaters[i].name;
-        jsonDoc["public_id"] = monitoredRepeaters[i].public_id;
+        advertDoc["node_id"] = monitoredRepeaters[i].name;
         break;
       }
     }
 
-    if (payloadLen > 100) {
-      uint8_t appFlags = payload[100];
-      Serial.printf("  * AppData Vėliavėlės: 0x%02X\n", appFlags);
-    }
-    jsonDoc["advert_received"] = true;
-    hasValidTelemetry = true;
+    Serial.println("[ADVERT] Siunčiami duomenys į API...");
+    sendToAPI(advertDoc);
+
+    // Grąžiname false – ADVERT NĖRA tikėtas atsakymas aktyvios apklausos metu,
+    // todėl waitForReply() nenustoja laukti tikro kartotuvo atsakymo.
+    return false;
   }
+
+
 
   // --------------------------------------------------------------------------
   // B) ŠIFRUOTO ATSAKO DEŠIFRAVIMAS IR APDOROJIMAS (RESPONSE arba PATH)
