@@ -159,22 +159,27 @@ bool processIncomingPacket(uint8_t expectedSenderHash = 0, WaitTarget waitTarget
 void sendMeshCoreLogin(size_t repIdx);
 void sendMeshCorePath(size_t repIdx);
 void sendMeshCoreStatusRequest(size_t repIdx);
-void sendMeshCoreTelemetryRequest(size_t repIdx);
-void sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const uint8_t* payload, size_t payloadLen);
+void sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const uint8_t* payload, size_t payloadLen,
+                     const char* targetName = nullptr, const char* targetPubKey = nullptr, const uint8_t* sharedSecret = nullptr);
 bool hexStringToBytes(const char* hexStr, uint8_t* outBytes, size_t maxLen, size_t &outLen);
 void printHexBuffer(const uint8_t* buf, size_t len);
 void yieldDelay(unsigned long ms);
 
 // Foninės API siuntimo eilės ir užduoties kintamieji (Core 0):
+struct QueuedApiMessage {
+  ApiEndpointTarget target;
+  char* payload;
+};
+
 QueueHandle_t apiQueue = nullptr;
 TaskHandle_t apiTaskHandle = nullptr;
 SemaphoreHandle_t wifiHttpMutex = nullptr;
 void apiWorkerTask(void* pvParameters);
 
 #if ARDUINOJSON_VERSION_MAJOR >= 7
-void sendToAPI(const JsonDocument& doc);
+void sendToAPI(const JsonDocument& doc, ApiEndpointTarget target);
 #else
-void sendToAPI(const JsonDocument& doc);
+void sendToAPI(const JsonDocument& doc, ApiEndpointTarget target);
 #endif
 
 // ================================================================================
@@ -192,7 +197,10 @@ void setup() {
                 REPEATER_REPLY_TIMEOUT_MS, REPEATER_REPLY_TIMEOUT_MS / 1000.0f);
   Serial.printf("[Info] Tikrinimo ciklo intervalas: %lu min (%lu ms)\n",
                 TELEMETRY_REQUEST_INTERVAL_MS / 60000, TELEMETRY_REQUEST_INTERVAL_MS);
-  Serial.printf("[Info] API URL: %s\n", API_URL);
+  Serial.printf("[Info] API Bazinis URL: %s\n", API_BASE_URL);
+  Serial.printf("  * Skelbimų endpoint:   %s%s\n", API_BASE_URL, API_ENDPOINT_ADVERTS);
+  Serial.printf("  * Telemetrijos endpoint: %s%s\n", API_BASE_URL, API_ENDPOINT_TELEMETRY);
+  Serial.printf("  * RAW trafiko endpoint:  %s%s\n", API_BASE_URL, API_ENDPOINT_RAW);
 
   // 1. Generuojame unikalų ESP32 mazgo raktą (tik save – kartotuvų raktai generuojami po JSON parsisiuntimo)
   generateSelfIdentity();
@@ -204,7 +212,7 @@ void setup() {
   // 3. Inicijuojame foninę API siuntimo eilę ir užduotį (Core 0),
   // kad išsiuntus duomenis į API NIEKADA nebūtų laukiama serverio atsakymo,
   // o pagrindinis branduolys (Core 1) netrukdomas klausytųsi LoRa radijo eterio!
-  apiQueue = xQueueCreate(16, sizeof(char*));
+  apiQueue = xQueueCreate(32, sizeof(QueuedApiMessage));
   wifiHttpMutex = xSemaphoreCreateMutex();
   xTaskCreatePinnedToCore(
     apiWorkerTask,
@@ -367,9 +375,9 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
   if (hasActualTelemetry) {
     currentRepDoc["protocol"] = "MeshCore";
     currentRepDoc["node_id"] = rep.name;
-    currentRepDoc["public_id"] = rep.public_id;
-    Serial.printf("\n[API] Siunčiami surinkti duomenys ('%s') į serverį...\n", rep.name.c_str());
-    sendToAPI(currentRepDoc);
+    Serial.printf("\n[API] Siunčiami surinkti duomenys ('%s') į serverį (%s%s)...\n",
+                  rep.name.c_str(), API_BASE_URL, API_ENDPOINT_TELEMETRY);
+    sendToAPI(currentRepDoc, API_TARGET_TELEMETRY);
   } else {
     Serial.printf("\n[API] Iš kartotuvo '%s' negauta jokių duomenų, API siuntimas praleidžiamas.\n",
                   rep.name.c_str());
@@ -592,7 +600,8 @@ void initMonitoredNodeKeys() {
 // 📤 MESHCORE PAKETŲ SIUNTIMAS
 // ================================================================================
 
-void sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const uint8_t* payload, size_t payloadLen) {
+void sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const uint8_t* payload, size_t payloadLen,
+                     const char* targetName, const char* targetPubKey, const uint8_t* sharedSecret) {
   uint8_t packet[256];
   size_t idx = 0;
 
@@ -616,6 +625,44 @@ void sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const
                 (unsigned int)idx, header, pType, rType);
   printHexBuffer(packet, idx);
   Serial.println();
+
+  // Neapdoroto TX srauto siuntimas į /api/raw
+  #if ARDUINOJSON_VERSION_MAJOR >= 7
+  JsonDocument rawTxDoc;
+  #else
+  StaticJsonDocument<1024> rawTxDoc;
+  #endif
+
+  rawTxDoc["direction"] = "TX";
+  time_t now = time(nullptr);
+  rawTxDoc["timestamp"] = (now >= 1700000000UL) ? (uint32_t)now : lastTxTimestamp;
+  rawTxDoc["length"] = idx;
+
+  String rawHex = "";
+  for (size_t i = 0; i < idx; i++) {
+    char b[3]; snprintf(b, sizeof(b), "%02X", packet[i]);
+    rawHex += b;
+  }
+  rawTxDoc["raw_hex"] = rawHex;
+
+  if (targetName != nullptr && strlen(targetName) > 0) {
+    rawTxDoc["target_name"] = targetName;
+  }
+  if (targetPubKey != nullptr && strlen(targetPubKey) > 0) {
+    rawTxDoc["target_public_key"] = targetPubKey;
+  }
+  rawTxDoc["my_public_key"] = MY_PUBKEY_HEX;
+
+  if (sharedSecret != nullptr) {
+    char secretHex[65];
+    for (int i = 0; i < 32; i++) snprintf(&secretHex[i * 2], 3, "%02x", sharedSecret[i]);
+    rawTxDoc["shared_secret_hex"] = secretHex;
+    rawTxDoc["is_encrypted"] = true;
+  } else {
+    rawTxDoc["is_encrypted"] = false;
+  }
+
+  sendToAPI(rawTxDoc, API_TARGET_RAW);
 
   // Siuntimo metu atjungiame RX vėliavėlę, kad TXDone pertrauktis nesukeltų klaidingo RX
   receivedFlag = false;
@@ -673,11 +720,12 @@ void sendMeshCoreLogin(size_t repIdx) {
   int encLen = MeshCrypto::encryptThenMAC(secret, &payload[pLen], plain, plainLen);
   pLen += encLen;
 
-  sendMeshCoreRaw(header, 0, nullptr, payload, pLen);
+  sendMeshCoreRaw(header, 0, nullptr, payload, pLen, rep.name.c_str(), rep.public_id.c_str(), secret);
 }
 
 // 2. Siunčiamas tiesioginio kelio registravimas (PAYLOAD_TYPE_PATH) su 0 apynių
 void sendMeshCorePath(size_t repIdx) {
+  const RepeaterTarget& rep = monitoredRepeaters[repIdx];
   uint8_t target = monitoredNodes[repIdx].hash;
   const uint8_t* secret = monitoredNodes[repIdx].sharedSecret;
 
@@ -699,7 +747,7 @@ void sendMeshCorePath(size_t repIdx) {
   int encLen = MeshCrypto::encryptThenMAC(secret, &payload[pLen], plain, 6);
   pLen += encLen;
 
-  sendMeshCoreRaw(header, 0, nullptr, payload, pLen);
+  sendMeshCoreRaw(header, 0, nullptr, payload, pLen, rep.name.c_str(), rep.public_id.c_str(), secret);
 }
 
 // 3. Siunčiama užšifruota būsenos ir statistikos užklausa (REQ_TYPE_GET_STATUS = 0x01)
@@ -729,7 +777,7 @@ void sendMeshCoreStatusRequest(size_t repIdx) {
   int encLen = MeshCrypto::encryptThenMAC(secret, &payload[pLen], plain, 13);
   pLen += encLen;
 
-  sendMeshCoreRaw(header, 0, nullptr, payload, pLen);
+  sendMeshCoreRaw(header, 0, nullptr, payload, pLen, rep.name.c_str(), rep.public_id.c_str(), secret);
 }
 
 // 4. Siunčiama užšifruota jutiklių telemetrijos užklausa (REQ_TYPE_GET_TELEMETRY_DATA = 0x03)
@@ -759,7 +807,7 @@ void sendMeshCoreTelemetryRequest(size_t repIdx) {
   int encLen = MeshCrypto::encryptThenMAC(secret, &payload[pLen], plain, 13);
   pLen += encLen;
 
-  sendMeshCoreRaw(header, 0, nullptr, payload, pLen);
+  sendMeshCoreRaw(header, 0, nullptr, payload, pLen, rep.name.c_str(), rep.public_id.c_str(), secret);
 }
 
 // ================================================================================
@@ -840,6 +888,53 @@ bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
 
   uint8_t* payload = &packetBuffer[payloadOffset];
   size_t payloadLen = length - payloadOffset;
+
+  // --------------------------------------------------------------------------
+  // 1. RAW TRAFIKO SIUNTIMAS Į /api/raw (VISAS PAGAUTAS SRAUTAS BE DEKODAVIMO)
+  // --------------------------------------------------------------------------
+  #if ARDUINOJSON_VERSION_MAJOR >= 7
+  JsonDocument rawRxDoc;
+  #else
+  StaticJsonDocument<1024> rawRxDoc;
+  #endif
+
+  rawRxDoc["direction"] = "RX";
+  time_t now = time(nullptr);
+  rawRxDoc["timestamp"] = (now >= 1700000000UL) ? (uint32_t)now : lastTxTimestamp;
+  rawRxDoc["length"] = length;
+  rawRxDoc["rssi"] = rssi;
+  rawRxDoc["snr"] = snr;
+
+  String rawHex = "";
+  for (int i = 0; i < length; i++) {
+    char b[3]; snprintf(b, sizeof(b), "%02X", packetBuffer[i]);
+    rawHex += b;
+  }
+  rawRxDoc["raw_hex"] = rawHex;
+
+  bool attachedKey = false;
+  if ((payloadType == PAYLOAD_TYPE_RESPONSE || payloadType == PAYLOAD_TYPE_PATH) && payloadLen >= 2) {
+    uint8_t dHash = payload[0];
+    uint8_t sHash = payload[1];
+    for (size_t i = 0; i < monitoredRepeatersCount; i++) {
+      if (monitoredNodes[i].initialized && (monitoredNodes[i].hash == sHash || dHash == myNodeHash)) {
+        rawRxDoc["sender_name"] = monitoredRepeaters[i].name;
+        rawRxDoc["sender_public_key"] = monitoredRepeaters[i].public_id;
+        rawRxDoc["my_public_key"] = MY_PUBKEY_HEX;
+        char secHex[65];
+        for (int k = 0; k < 32; k++) snprintf(&secHex[k * 2], 3, "%02x", monitoredNodes[i].sharedSecret[k]);
+        rawRxDoc["shared_secret_hex"] = secHex;
+        rawRxDoc["is_encrypted"] = true;
+        attachedKey = true;
+        break;
+      }
+    }
+  }
+  if (!attachedKey) {
+    rawRxDoc["is_encrypted"] = false;
+  }
+
+  sendToAPI(rawRxDoc, API_TARGET_RAW);
 
   // 3. Filtruojame mūsų pačių arba kito mazgo pakartotus užklausų paketus (REQ arba ANON_REQ)
   if (payloadType == PAYLOAD_TYPE_REQ || payloadType == PAYLOAD_TYPE_ANON_REQ) {
@@ -1112,7 +1207,7 @@ bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
     Serial.printf("[ADVERT] Pagautas skelbimas iš %s mazgo '%s' (Public ID: %s)! Siunčiami duomenys į API...\n",
                   foundInList ? "sąrašo" : "ETERIO (ne iš sąrašo)",
                   advertDoc["node_id"].as<const char*>(), pubKeyHex);
-    sendToAPI(advertDoc);
+    sendToAPI(advertDoc, API_TARGET_ADVERTS);
 
     // Grąžiname false – ADVERT NĖRA tikėtas atsakymas aktyvios apklausos metu,
     // todėl waitForReply() tęsia laukimą tikro kartotuvo atsakymo.
@@ -1345,7 +1440,7 @@ bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
       }
       jsonDoc["raw_hex"] = rawHex;
     }
-    sendToAPI(jsonDoc);
+    sendToAPI(jsonDoc, API_TARGET_TELEMETRY);
     return true;
   }
 
@@ -1448,23 +1543,32 @@ void connectToWiFi() {
 // ================================================================================
 void apiWorkerTask(void* pvParameters) {
   while (true) {
-    char* payload = nullptr;
-    if (xQueueReceive(apiQueue, &payload, portMAX_DELAY) == pdTRUE && payload != nullptr) {
+    QueuedApiMessage msg;
+    if (xQueueReceive(apiQueue, &msg, portMAX_DELAY) == pdTRUE && msg.payload != nullptr) {
       if (WiFi.status() == WL_CONNECTED) {
         if (wifiHttpMutex == nullptr || xSemaphoreTake(wifiHttpMutex, pdMS_TO_TICKS(5000)) == pdTRUE) {
+          const char* endpointPath = API_ENDPOINT_TELEMETRY;
+          if (msg.target == API_TARGET_ADVERTS) {
+            endpointPath = API_ENDPOINT_ADVERTS;
+          } else if (msg.target == API_TARGET_RAW) {
+            endpointPath = API_ENDPOINT_RAW;
+          }
+
+          String fullUrl = String(API_BASE_URL) + endpointPath;
+
           HTTPClient http;
-          http.begin(API_URL);
+          http.begin(fullUrl);
           http.addHeader("Content-Type", "application/json");
           if (strlen(API_AUTH_KEY) > 0) {
             http.addHeader("Authorization", API_AUTH_KEY);
           }
           http.setTimeout(2500); // 2.5s apsauga nuo pakibimo
 
-          int httpCode = http.POST((uint8_t*)payload, strlen(payload));
+          int httpCode = http.POST((uint8_t*)msg.payload, strlen(msg.payload));
           if (httpCode > 0) {
-            Serial.printf("[API Foninis Siuntėjas] Serverio atsakymo kodas: %d (išsiųsta sėkmingai).\n", httpCode);
+            Serial.printf("[API Foninis Siuntėjas] %s -> Kodas: %d (išsiųsta sėkmingai).\n", endpointPath, httpCode);
           } else {
-            Serial.printf("[API Foninis Siuntėjas] Siuntimo klaida: %s\n", http.errorToString(httpCode).c_str());
+            Serial.printf("[API Foninis Siuntėjas] %s -> Siuntimo klaida: %s\n", endpointPath, http.errorToString(httpCode).c_str());
           }
           http.end();
 
@@ -1475,7 +1579,7 @@ void apiWorkerTask(void* pvParameters) {
       } else {
         Serial.println("[API Foninis Siuntėjas] Wi-Fi neprisijungtas, paketas praleistas.");
       }
-      free(payload);
+      free(msg.payload);
     }
   }
 }
@@ -1485,9 +1589,9 @@ void apiWorkerTask(void* pvParameters) {
 // Išsiunčia duomenis į foninę eilę ir IŠKART grįžta į darbą. Nelaukiama serverio!
 // ================================================================================
 #if ARDUINOJSON_VERSION_MAJOR >= 7
-void sendToAPI(const JsonDocument& doc) {
+void sendToAPI(const JsonDocument& doc, ApiEndpointTarget target) {
 #else
-void sendToAPI(const JsonDocument& doc) {
+void sendToAPI(const JsonDocument& doc, ApiEndpointTarget target) {
 #endif
   String jsonString;
   serializeJson(doc, jsonString);
@@ -1503,20 +1607,24 @@ void sendToAPI(const JsonDocument& doc) {
     return;
   }
 
-  Serial.println("\n[API] Paruošti duomenys siuntimui į serverį:");
-  serializeJsonPretty(doc, Serial);
-  Serial.println();
+  const char* targetName = "TELEMETRY";
+  if (target == API_TARGET_ADVERTS) targetName = "ADVERTS";
+  else if (target == API_TARGET_RAW) targetName = "RAW";
+
+  QueuedApiMessage msg;
+  msg.target = target;
+  msg.payload = payloadCopy;
 
   // Siunčiame į foninę eilę be jokio laukimo (0 ticks):
   // Pagrindinė gija (LoRa klausymasis) iškart tęsia darbą be jokio serverio atsakymo laukimo!
-  if (xQueueSend(apiQueue, &payloadCopy, 0) == pdTRUE) {
-    const char* nodeId = doc["node_id"] | "mazgas";
-    const char* pType = doc["type"] | "DATA";
-    Serial.printf("[API] %s mazgui '%s' (%u baitai) atiduotas siuntimui.\n",
-                  pType, nodeId, (unsigned int)jsonString.length());
+  if (xQueueSend(apiQueue, &msg, 0) == pdTRUE) {
+    const char* nodeId = doc["node_id"] | (doc["target_name"] | (doc["sender_name"] | "mazgas"));
+    const char* pType = doc["type"] | (doc["direction"] | "DATA");
+    Serial.printf("[API Eilė] [%s] %s '%s' (%u baitai) atiduotas siuntimui.\n",
+                  targetName, pType, nodeId, (unsigned int)jsonString.length());
     Serial.println("[API] >> LAIKOMA KAIP IŠSIŲSTA << Serverio atsakymo nelaukiama, LoRa radijas toliau nepertraukiamai klausosi!");
   } else {
-    Serial.println("[API Įspėjimas] Siuntimo eilė pilna. Paketas atmestas, kad neužlaikytų LoRa.");
+    Serial.printf("[API Įspėjimas] [%s] Siuntimo eilė pilna. Paketas atmestas, kad neužlaikytų LoRa.\n", targetName);
     free(payloadCopy);
   }
 }

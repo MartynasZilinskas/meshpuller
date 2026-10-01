@@ -14,10 +14,19 @@ const char *WIFI_PASSWORD = "37810200438";
 // const char *WIFI_SSID = "Nerijus’s iPhone";
 // const char *WIFI_PASSWORD = "kodas123";
 
-// 2. API URL (kur siųsti surinktus telemetrijos duomenis HTTP POST užklausa)
-const char *API_URL = "https://telemetry.ite.lt";
-const char *API_AUTH_KEY =
-    ""; // Pvz.: "Bearer TAVO_TOKENAS" (jei nereikia - palikti tuščią "")
+// 2. API Endpoints
+const char *API_BASE_URL           = "https://telemetry.ite.lt";
+const char *API_ENDPOINT_ADVERTS   = "/api/adverts";    // Mazgų skelbimams (ADVERT)
+const char *API_ENDPOINT_TELEMETRY = "/api/telemetry";  // Kartotuvų telemetrijai ir būsenai (Telemetry/Status)
+const char *API_ENDPOINT_RAW       = "/api/raw";        // Visam pagautam LoRa RAW srautui (RX/TX su raktais)
+const char *API_AUTH_KEY           = "";                // Pvz.: "Bearer TAVO_TOKENAS" (jei nereikia - palikti "")
+
+// API Siuntimo tikslas (naudojamas vidinėje FreeRTOS eilėje)
+enum ApiEndpointTarget {
+  API_TARGET_ADVERTS = 0,
+  API_TARGET_TELEMETRY = 1,
+  API_TARGET_RAW = 2
+};
 
 // 3. Stebimų kartotuvų sąrašo URL (iš kur prieš kiekvieną ciklą parsiunčiamas
 // kartotuvų JSON sąrašas)
