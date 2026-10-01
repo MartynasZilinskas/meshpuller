@@ -1023,33 +1023,34 @@ bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
     advertDoc["public_id"]     = pubKeyHex;
     if (adTimestamp > 0) advertDoc["timestamp"] = adTimestamp;
 
-    // Nustatome mazgo ID ir vardą:
-    // Jei mazgas yra mūsų stebimų kartotuvų sąraše – naudojame sąrašo vardą.
-    // Jei mazgas NE iš sąrašo – naudojame ADVERT atsiųstą vardą arba trumpą 4 simbolių ID iš viešo rakto.
+    // 1. Nustatome mazgo ID (node_id):
+    // Jei kartotuvas yra stebimų sąraše - naudojame sąrašo ID (pvz. 'b9dd').
+    // Jei ne - naudojame trumpą 4 simbolių prefiksą iš viešojo rakto (pvz. '7de9').
     bool foundInList = false;
+    char shortId[9];
+    snprintf(shortId, sizeof(shortId), "%.4s", pubKeyHex);
+    String assignedNodeId = shortId;
+
     for (size_t i = 0; i < monitoredRepeatersCount; i++) {
       if (monitoredRepeaters[i].public_id.equalsIgnoreCase(pubKeyHex)) {
-        advertDoc["node_id"]   = monitoredRepeaters[i].name;
-        advertDoc["node_name"] = monitoredRepeaters[i].name;
-        advertDoc["name"]      = monitoredRepeaters[i].name;
+        assignedNodeId = monitoredRepeaters[i].name;
         foundInList = true;
         break;
       }
     }
-    if (!foundInList) {
-      if (strlen(adName) > 0) {
-        advertDoc["node_id"]   = adName;
-        advertDoc["node_name"] = adName;
-        advertDoc["name"]      = adName;
-      } else {
-        char shortId[9];
-        snprintf(shortId, sizeof(shortId), "%.4s", pubKeyHex);
-        advertDoc["node_id"]   = shortId;
-        advertDoc["node_name"] = shortId;
-        advertDoc["name"]      = shortId;
-      }
-    }
+    advertDoc["node_id"] = assignedNodeId;
     advertDoc["in_monitored_list"] = foundInList;
+
+    // 2. Nustatome mazgo vardą (node_name ir name):
+    // PRIVALOMA: Jei ADVERT pakete yra transliuojamas tikrasis vardas (adName) - VISADA naudojame jį!
+    // Tik jei pakete vardo nėra - kaip atsarginį naudojame sąrašo ID arba trumpąjį ID.
+    if (strlen(adName) > 0) {
+      advertDoc["node_name"] = adName;
+      advertDoc["name"]      = adName;
+    } else {
+      advertDoc["node_name"] = assignedNodeId;
+      advertDoc["name"]      = assignedNodeId;
+    }
 
     if (settings.includeSignalMetrics) {
       JsonObject sig = advertDoc["signal"].to<JsonObject>();
