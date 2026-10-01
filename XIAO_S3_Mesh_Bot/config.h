@@ -11,6 +11,9 @@
 const char *WIFI_SSID = "2.4GHz";
 const char *WIFI_PASSWORD = "37810200438";
 
+// const char *WIFI_SSID = "Nerijus’s iPhone";
+// const char *WIFI_PASSWORD = "kodas123";
+
 // 2. API URL (kur siųsti surinktus telemetrijos duomenis HTTP POST užklausa)
 const char *API_URL = "https://telemetry.ite.lt";
 const char *API_AUTH_KEY =
@@ -25,20 +28,30 @@ const size_t MAX_MONITORED_REPEATERS = 16;
 
 // Stebimo kartotuvo struktūra
 struct RepeaterTarget {
-  String name;      // Pavadinimas / prefiksas (pvz. "b9dd" arba "1bbd")
-  String public_id; // 32 baitų (64 hex simbolių) kartotuvo viešasis raktas
-  String password;  // Prisijungimo slaptažodis (pvz. "hello")
-  bool isDirect;    // true = tiesioginis (0 hops), false = per kitus kartotuvus
-                    // (FLOOD / keli hops)
+  String name;        // Pavadinimas / prefiksas (pvz. "b9dd" arba "1bbd")
+  String public_id;   // 32 baitų (64 hex simbolių) kartotuvo viešasis raktas
+  String password;    // Prisijungimo slaptažodis (pvz. "hello")
+  bool isDirect;      // true = tiesioginis (0 hops), false = per kitus kartotuvus (FLOOD)
+  bool reqStatus;     // true = siųsti būsenos užklausą (REQ_TYPE_GET_STATUS)
+  bool reqTelemetry;  // true = siųsti telemetrijos užklausą (REQ_TYPE_GET_TELEMETRY_DATA)
 };
 
-// Atsakymo laukimo laikas (milisekundėmis) po kiekvienos užklausos (pradžioje
-// 10 sekundžių):
+// Atsakymo laukimo tikslo tipas (apsauga nuo ankstyvo lango užsidarymo)
+enum WaitTarget {
+  WAIT_ANY = 0,
+  WAIT_LOGIN = 1,
+  WAIT_STATUS = 2,
+  WAIT_TELEMETRY = 3
+};
+
+// Atsakymo laukimo laikas (milisekundėmis) po kiekvienos užklausos (10 sekundžių):
 const unsigned long REPEATER_REPLY_TIMEOUT_MS = 10000;
 
-// Pauzė (milisekundėmis) tarp kartotuvų apklausos (po API išsiuntimo prieš
-// sekantį kartotuvą):
-const unsigned long REPEATER_COOLDOWN_MS = 3000;
+// Pauzė (milisekundėmis) tarp atskirų užklausų laukimo (pvz. po status prieš telemetriją):
+const unsigned long INTER_REQUEST_DELAY_MS = 10000;
+
+// Pauzė (milisekundėmis) tarp kartotuvų apklausos (po API išsiuntimo prieš sekantį kartotuvą):
+const unsigned long REPEATER_COOLDOWN_MS = 10000;
 
 // ESP32 Mazgo Ed25519 Raktai (Mūsų tapatybė tinkle)
 const char *MY_SEED_HEX =
@@ -58,7 +71,7 @@ struct TelemetrySettings {
   bool includeNodeInfo = true;      // Mazgo ID
   bool includeSignalMetrics = true; // RSSI, SNR, Triukšmo lygis
   bool includeBattery = true;       // Baterijos įtampa (mV ir V)
-  bool includePowerMetrics = true;  // Radijo eterio laikas, paketų statistika
+  bool includeStatusMetrics = true; // Kartotuvo būsenos statistika (eterio laikas, paketai ir t.t.)
   bool includeTemperature = true;   // MCU temperatūra
   bool includeUptime = true;        // Veikimo laikas (uptime)
   bool includeRawPayload = true;    // Neapdoroti gauti baitai diagnostikai

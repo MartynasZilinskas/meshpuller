@@ -144,7 +144,9 @@ uint32_t getNextTimestamp() {
   return ts;
 }
 
+
 // Funkcijų prototipai
+void scanWiFiNetworks();
 void connectToWiFi();
 void initLoRa();
 void generateSelfIdentity();
@@ -152,8 +154,8 @@ bool fetchRepeatersFromURL();
 void initMonitoredNodeKeys();
 void requestTelemetryFromAllRepeaters();
 void requestTelemetryFromSingleRepeater(size_t repIdx);
-bool waitForReply(unsigned long timeoutMs, uint8_t expectedSenderHash = 0);
-bool processIncomingPacket(uint8_t expectedSenderHash = 0);
+bool waitForReply(unsigned long timeoutMs, uint8_t expectedSenderHash = 0, WaitTarget waitTarget = WAIT_ANY);
+bool processIncomingPacket(uint8_t expectedSenderHash = 0, WaitTarget waitTarget = WAIT_ANY);
 void sendMeshCoreLogin(size_t repIdx);
 void sendMeshCorePath(size_t repIdx);
 void sendMeshCoreStatusRequest(size_t repIdx);
@@ -161,6 +163,13 @@ void sendMeshCoreTelemetryRequest(size_t repIdx);
 void sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const uint8_t* payload, size_t payloadLen);
 bool hexStringToBytes(const char* hexStr, uint8_t* outBytes, size_t maxLen, size_t &outLen);
 void printHexBuffer(const uint8_t* buf, size_t len);
+void yieldDelay(unsigned long ms);
+
+// Foninės API siuntimo eilės ir užduoties kintamieji (Core 0):
+QueueHandle_t apiQueue = nullptr;
+TaskHandle_t apiTaskHandle = nullptr;
+SemaphoreHandle_t wifiHttpMutex = nullptr;
+void apiWorkerTask(void* pvParameters);
 
 #if ARDUINOJSON_VERSION_MAJOR >= 7
 void sendToAPI(const JsonDocument& doc);
@@ -192,7 +201,22 @@ void setup() {
   connectToWiFi();
   delay(200);
 
-  // 3. SX1262 LoRa radijas
+  // 3. Inicijuojame foninę API siuntimo eilę ir užduotį (Core 0),
+  // kad išsiuntus duomenis į API NIEKADA nebūtų laukiama serverio atsakymo,
+  // o pagrindinis branduolys (Core 1) netrukdomas klausytųsi LoRa radijo eterio!
+  apiQueue = xQueueCreate(16, sizeof(char*));
+  wifiHttpMutex = xSemaphoreCreateMutex();
+  xTaskCreatePinnedToCore(
+    apiWorkerTask,
+    "apiWorkerTask",
+    8192,
+    NULL,
+    1,
+    &apiTaskHandle,
+    0 // Paleidžiama ant Core 0 (Wi-Fi branduolys)
+  );
+
+  // 4. SX1262 LoRa radijas
   initLoRa();
 
   Serial.println("\n[Sistema] Paruošta darbui. Iškart inicijuojamas pirmasis duomenų gavimas...");
@@ -219,12 +243,30 @@ void loop() {
     Serial.printf("[Sistema] Ciklas baigtas. Sekantis tikrinimas po %lu min.\n", TELEMETRY_REQUEST_INTERVAL_MS / 60000);
   }
 
-  // 3. Wi-Fi ryšio palaikymas
-  if (WiFi.status() != WL_CONNECTED) {
+  // 3. Wi-Fi ryšio palaikymas (su 30 s pauze tarp bandymų, kad neperkrautų Wi-Fi posistemės)
+  static unsigned long lastWiFiRetry = 0;
+  if (WiFi.status() != WL_CONNECTED && (millis() - lastWiFiRetry >= 30000 || lastWiFiRetry == 0)) {
+    lastWiFiRetry = millis();
     connectToWiFi();
   }
 
   delay(20);
+}
+
+// ================================================================================
+// ⏳ NE-BLOKUOJANTI PAUZĖ (Pauzės metu radijas toliau aktyviai klausosi ir sugaudo
+// visus eteryje atsiradusius ADVERT skelbimus, akimirksniu išsiųsdamas juos į API)
+// ================================================================================
+void yieldDelay(unsigned long ms) {
+  unsigned long start = millis();
+  while (millis() - start < ms) {
+    if (receivedFlag) {
+      receivedFlag = false;
+      processIncomingPacket(0);
+      radio.startReceive();
+    }
+    delay(15);
+  }
 }
 
 // ================================================================================
@@ -265,7 +307,7 @@ void requestTelemetryFromAllRepeaters() {
     if (i + 1 < monitoredRepeatersCount) {
       Serial.printf("\n[Pauzė] Baigtas darbas su '%s'. Pauzė %.1f s prieš kreipiantis į sekantį...\n",
                     monitoredRepeaters[i].name.c_str(), REPEATER_COOLDOWN_MS / 1000.0f);
-      delay(REPEATER_COOLDOWN_MS);
+      yieldDelay(REPEATER_COOLDOWN_MS);
     }
   }
 
@@ -282,46 +324,54 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
   currentRepHasData = false;
 
   // Žingsnis 1: Užšifruotas prisijungimas (Login) su slaptažodžiu
-  Serial.printf("[Užklausa 1/4] Siunčiamas užšifruotas Login į '%s' su slaptažodžiu '%s'...\n",
-                rep.name.c_str(), rep.password.c_str());
-  sendMeshCoreLogin(repIdx);
-  waitForReply(REPEATER_REPLY_TIMEOUT_MS, targetHash);
-
-  // Žingsnis 2: Jei kartotuvas tiesioginis (0 hops), registruojame tiesioginį kelią
-  if (rep.isDirect) {
-    delay(500);
-    Serial.printf("[Užklausa 2/4] Registruojamas tiesioginis kelias į '%s' (PATH 0 hops)...\n", rep.name.c_str());
-    sendMeshCorePath(repIdx);
-    delay(500);
+  if (rep.password.length() > 0) {
+    Serial.printf("[Užklausa 1/3] Siunčiamas užšifruotas Login į '%s' su slaptažodžiu '%s'...\n",
+                  rep.name.c_str(), rep.password.c_str());
+    sendMeshCoreLogin(repIdx);
+    waitForReply(REPEATER_REPLY_TIMEOUT_MS, targetHash, WAIT_LOGIN);
+    // Trumpa 2.0 s pauzė eteriui nurimti po login patvirtinimo
+    yieldDelay(2000);
   } else {
-    Serial.printf("[Užklausa 2/4] Praleidžiamas tiesioginis PATH registravimas ('%s' yra per kelis hops / FLOOD).\n",
-                  rep.name.c_str());
+    Serial.printf("[Užklausa 1/3] Slaptažodis kartotuvui '%s' nenurodytas. Prisijungimas praleidžiamas.\n", rep.name.c_str());
   }
 
-  // Žingsnis 3: Būsenos ir statistikos užklausa (REQ_TYPE_GET_STATUS)
-  Serial.printf("[Užklausa 3/4] Siunčiama būsenos užklausa (REQ_TYPE_GET_STATUS) į '%s' (Laukiama iki %.1f s)...\n",
-                rep.name.c_str(), REPEATER_REPLY_TIMEOUT_MS / 1000.0f);
-  sendMeshCoreStatusRequest(repIdx);
-  waitForReply(REPEATER_REPLY_TIMEOUT_MS, targetHash);
+  // Žingsnis 2: Būsenos ir statistikos užklausa (REQ_TYPE_GET_STATUS)
+  if (rep.reqStatus) {
+    Serial.printf("[Užklausa 2/3] Siunčiama būsenos užklausa (REQ_TYPE_GET_STATUS) į '%s' (Laukiama iki %.1f s)...\n",
+                  rep.name.c_str(), REPEATER_REPLY_TIMEOUT_MS / 1000.0f);
+    sendMeshCoreStatusRequest(repIdx);
+    waitForReply(REPEATER_REPLY_TIMEOUT_MS, targetHash, WAIT_STATUS);
+  } else {
+    Serial.printf("[Užklausa 2/3] Būsenos užklausa ('status') išjungta kartotuvui '%s'. Praleidžiama.\n", rep.name.c_str());
+  }
 
-  // Žingsnis 4: Telemetrijos užklausa (REQ_TYPE_GET_TELEMETRY_DATA - Baterija ir Temp)
-  delay(1000);
-  Serial.printf("[Užklausa 4/4] Siunčiama telemetrijos užklausa (REQ_TYPE_GET_TELEMETRY_DATA) į '%s' (Laukiama iki %.1f s)...\n",
-                rep.name.c_str(), REPEATER_REPLY_TIMEOUT_MS / 1000.0f);
-  sendMeshCoreTelemetryRequest(repIdx);
-  waitForReply(REPEATER_REPLY_TIMEOUT_MS, targetHash);
+  // Tarpas tarp užklausų laukimo (10 sekundžių):
+  if (rep.reqStatus && rep.reqTelemetry) {
+    Serial.printf("[Pauzė] Laukimo tarpas tarp užklausų: %.1f s...\n", INTER_REQUEST_DELAY_MS / 1000.0f);
+    yieldDelay(INTER_REQUEST_DELAY_MS);
+  }
 
-  // 📡 Siunčiame į API TIK jei gauti realūs telemetriniai duomenys (tarpiniai login pranešimai nesiunčiami)
+  // Žingsnis 3: Telemetrijos užklausa (REQ_TYPE_GET_TELEMETRY_DATA - Baterija ir Temp)
+  if (rep.reqTelemetry) {
+    Serial.printf("[Užklausa 3/3] Siunčiama telemetrijos užklausa (REQ_TYPE_GET_TELEMETRY_DATA) į '%s' (Laukiama iki %.1f s)...\n",
+                  rep.name.c_str(), REPEATER_REPLY_TIMEOUT_MS / 1000.0f);
+    sendMeshCoreTelemetryRequest(repIdx);
+    waitForReply(REPEATER_REPLY_TIMEOUT_MS, targetHash, WAIT_TELEMETRY);
+  } else {
+    Serial.printf("[Užklausa 3/3] Telemetrijos užklausa ('telemetry') išjungta kartotuvui '%s'. Praleidžiama.\n", rep.name.c_str());
+  }
+
+  // 📡 Siunčiame į API TIK jei gauti realūs telemetriniai arba būsenos duomenys
   bool hasActualTelemetry = currentRepDoc.containsKey("telemetry") && currentRepDoc["telemetry"].size() > 0;
 
   if (hasActualTelemetry) {
     currentRepDoc["protocol"] = "MeshCore";
     currentRepDoc["node_id"] = rep.name;
     currentRepDoc["public_id"] = rep.public_id;
-    Serial.printf("\n[API] Siunčiami surinkti telemetrijos duomenys ('%s') į serverį...\n", rep.name.c_str());
+    Serial.printf("\n[API] Siunčiami surinkti duomenys ('%s') į serverį...\n", rep.name.c_str());
     sendToAPI(currentRepDoc);
   } else {
-    Serial.printf("\n[API] Iš kartotuvo '%s' negauta telemetrinių duomenų, API siuntimas praleidžiamas.\n",
+    Serial.printf("\n[API] Iš kartotuvo '%s' negauta jokių duomenų, API siuntimas praleidžiamas.\n",
                   rep.name.c_str());
   }
 }
@@ -329,7 +379,7 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
 // ================================================================================
 // ⏳ AKTYVUS ATSAKYMO LAUKIMAS (LAUKIAMA IKI TIMEOUT ARBA IKI TIKSLINIO ATSAKYMO)
 // ================================================================================
-bool waitForReply(unsigned long timeoutMs, uint8_t expectedSenderHash) {
+bool waitForReply(unsigned long timeoutMs, uint8_t expectedSenderHash, WaitTarget waitTarget) {
   unsigned long start = millis();
   int packetsCount = 0;
   bool gotTargetResponse = false;
@@ -339,12 +389,12 @@ bool waitForReply(unsigned long timeoutMs, uint8_t expectedSenderHash) {
     if (receivedFlag) {
       receivedFlag = false;
       packetsCount++;
-      bool valid = processIncomingPacket(expectedSenderHash);
+      bool valid = processIncomingPacket(expectedSenderHash, waitTarget);
       radio.startReceive(); // Grįžtame į priėmimo režimą tolesniems paketams
       if (valid) {
         gotTargetResponse = true;
-        // Trumpa 500 ms pauzė leisti atvykti galimiems papildomiems paketams
-        delay(500);
+        // Trumpa 500 ms ne-blokuojanti pauzė leisti atvykti galimiems papildomiems paketams
+        yieldDelay(500);
         break;
       }
     }
@@ -436,6 +486,11 @@ bool fetchRepeatersFromURL() {
     return false;
   }
 
+  if (wifiHttpMutex != nullptr && xSemaphoreTake(wifiHttpMutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
+    Serial.println("[FetchRepeaters] Wi-Fi kanalas šiuo metu užimtas.");
+    return false;
+  }
+
   HTTPClient http;
   http.begin(REPEATERS_URL);
   http.setTimeout(8000);
@@ -444,11 +499,13 @@ bool fetchRepeatersFromURL() {
   if (code != 200) {
     Serial.printf("[FetchRepeaters] HTTP klaida %d parsiunčiant '%s'\n", code, REPEATERS_URL);
     http.end();
+    if (wifiHttpMutex != nullptr) xSemaphoreGive(wifiHttpMutex);
     return false;
   }
 
   String body = http.getString();
   http.end();
+  if (wifiHttpMutex != nullptr) xSemaphoreGive(wifiHttpMutex);
 
   Serial.printf("[FetchRepeaters] Gautas atsakymas (%d baitai): %s\n", body.length(), body.substring(0, 120).c_str());
 
@@ -478,10 +535,12 @@ bool fetchRepeatersFromURL() {
   for (JsonObject obj : arr) {
     if (monitoredRepeatersCount >= MAX_MONITORED_REPEATERS) break;
     size_t idx = monitoredRepeatersCount;
-    monitoredRepeaters[idx].name      = obj["name"].as<String>();
-    monitoredRepeaters[idx].public_id  = obj["public_id"].as<String>();
-    monitoredRepeaters[idx].password   = obj["password"].as<String>();
-    monitoredRepeaters[idx].isDirect   = obj["isDirect"] | false;
+    monitoredRepeaters[idx].name         = obj["name"].as<String>();
+    monitoredRepeaters[idx].public_id    = obj["public_id"].as<String>();
+    monitoredRepeaters[idx].password     = obj["password"].as<String>();
+    monitoredRepeaters[idx].isDirect     = obj["isDirect"] | false;
+    monitoredRepeaters[idx].reqStatus    = obj.containsKey("status") ? (bool)obj["status"] : true;
+    monitoredRepeaters[idx].reqTelemetry = obj.containsKey("telemetry") ? (bool)obj["telemetry"] : true;
     monitoredRepeatersCount++;
   }
 
@@ -492,10 +551,12 @@ bool fetchRepeatersFromURL() {
 
   Serial.printf("[FetchRepeaters] Sėkmingai įkelti %u kartotuvai:\n", (unsigned int)monitoredRepeatersCount);
   for (size_t i = 0; i < monitoredRepeatersCount; i++) {
-    Serial.printf("  [%u] %s (%s) | pw: '%s'\n",
+    Serial.printf("  [%u] %s (%s) | pw: '%s' | status: %s | telemetry: %s\n",
                   (unsigned int)(i + 1), monitoredRepeaters[i].name.c_str(),
                   monitoredRepeaters[i].isDirect ? "DIRECT" : "FLOOD",
-                  monitoredRepeaters[i].password.c_str());
+                  monitoredRepeaters[i].password.c_str(),
+                  monitoredRepeaters[i].reqStatus ? "TAIP" : "NE",
+                  monitoredRepeaters[i].reqTelemetry ? "TAIP" : "NE");
   }
   return true;
 }
@@ -647,8 +708,8 @@ void sendMeshCoreStatusRequest(size_t repIdx) {
   uint8_t target = monitoredNodes[repIdx].hash;
   const uint8_t* secret = monitoredNodes[repIdx].sharedSecret;
 
-  uint8_t rType = rep.isDirect ? ROUTE_TYPE_DIRECT : ROUTE_TYPE_FLOOD;
-  uint8_t header = ((PAYLOAD_TYPE_REQ & 0x0F) << 2) | rType;
+  // Užklausoms visada naudojame ROUTE_TYPE_FLOOD (patikimas pristatymas tiek tiesioginiams, tiek retransliuojamiems)
+  uint8_t header = ((PAYLOAD_TYPE_REQ & 0x0F) << 2) | ROUTE_TYPE_FLOOD;
 
   uint8_t payload[64];
   size_t pLen = 0;
@@ -656,13 +717,16 @@ void sendMeshCoreStatusRequest(size_t repIdx) {
   payload[pLen++] = target;
   payload[pLen++] = myNodeHash;
 
-  // Šifruojamas krovinys: [timestamp 4B][REQ_TYPE_GET_STATUS 0x01]
-  uint8_t plain[16];
+  // Šifruojamas krovinys: oficialus MeshCore 13 baitų formatas:
+  // [timestamp 4B][REQ_TYPE_GET_STATUS 0x01][reserved 4B (0)][random blob 4B]
+  uint8_t plain[16] = {0};
   uint32_t ts = getNextTimestamp();
   memcpy(&plain[0], &ts, 4);
   plain[4] = REQ_TYPE_GET_STATUS;
+  // plain[5..8] = 0 (rezervuota 'since' / query params)
+  esp_fill_random(&plain[9], 4); // 4 atsitiktiniai baitai paketo unikalumui (apsauga nuo dubliavimo filtrų)
 
-  int encLen = MeshCrypto::encryptThenMAC(secret, &payload[pLen], plain, 5);
+  int encLen = MeshCrypto::encryptThenMAC(secret, &payload[pLen], plain, 13);
   pLen += encLen;
 
   sendMeshCoreRaw(header, 0, nullptr, payload, pLen);
@@ -674,8 +738,7 @@ void sendMeshCoreTelemetryRequest(size_t repIdx) {
   uint8_t target = monitoredNodes[repIdx].hash;
   const uint8_t* secret = monitoredNodes[repIdx].sharedSecret;
 
-  uint8_t rType = rep.isDirect ? ROUTE_TYPE_DIRECT : ROUTE_TYPE_FLOOD;
-  uint8_t header = ((PAYLOAD_TYPE_REQ & 0x0F) << 2) | rType;
+  uint8_t header = ((PAYLOAD_TYPE_REQ & 0x0F) << 2) | ROUTE_TYPE_FLOOD;
 
   uint8_t payload[64];
   size_t pLen = 0;
@@ -683,14 +746,17 @@ void sendMeshCoreTelemetryRequest(size_t repIdx) {
   payload[pLen++] = target;
   payload[pLen++] = myNodeHash;
 
-  // Šifruojamas krovinys: [timestamp 4B][REQ_TYPE_GET_TELEMETRY_DATA 0x03][perm_mask 0x00]
-  uint8_t plain[16];
+  // Šifruojamas krovinys: oficialus MeshCore 13 baitų formatas:
+  // [timestamp 4B][REQ_TYPE_GET_TELEMETRY_DATA 0x03][perm_mask 0x00][reserved 3B (0)][random blob 4B]
+  uint8_t plain[16] = {0};
   uint32_t ts = getNextTimestamp();
   memcpy(&plain[0], &ts, 4);
   plain[4] = REQ_TYPE_GET_TELEMETRY_DATA;
   plain[5] = 0x00; // visos teisės (unmasked)
+  // plain[6..8] = 0
+  esp_fill_random(&plain[9], 4); // 4 atsitiktiniai baitai paketo unikalumui
 
-  int encLen = MeshCrypto::encryptThenMAC(secret, &payload[pLen], plain, 6);
+  int encLen = MeshCrypto::encryptThenMAC(secret, &payload[pLen], plain, 13);
   pLen += encLen;
 
   sendMeshCoreRaw(header, 0, nullptr, payload, pLen);
@@ -699,13 +765,13 @@ void sendMeshCoreTelemetryRequest(size_t repIdx) {
 // ================================================================================
 // 📥 GAUTŲ PAKETŲ APDOROJIMAS IR ATSAKYMŲ PARSINIMAS
 // ================================================================================
-bool processIncomingPacket(uint8_t expectedSenderHash) {
+bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
   int length = radio.getPacketLength();
   if (length <= 0) {
     return false; // Tuščias arba klaidingas pertraukties sužadinimas
   }
 
-  uint8_t packetBuffer[256];
+  static uint8_t packetBuffer[256];
   int state = radio.readData(packetBuffer, length);
   if (state != RADIOLIB_ERR_NONE || length < 2) {
     return false;
@@ -731,8 +797,43 @@ bool processIncomingPacket(uint8_t expectedSenderHash) {
     case PAYLOAD_TYPE_CONTROL:  typeStr = "CONTROL (Valdymas)"; break;
   }
 
-  uint8_t pathLen = packetBuffer[1];
-  size_t payloadOffset = 2 + pathLen;
+  size_t offset = 1;
+
+  // 1. Transport codes (jei ROUTE_TYPE_TRANSPORT_FLOOD arba ROUTE_TYPE_TRANSPORT_DIRECT)
+  uint16_t transportCode1 = 0, transportCode2 = 0;
+  bool hasTransportCodes = (routeType == ROUTE_TYPE_TRANSPORT_FLOOD || routeType == ROUTE_TYPE_TRANSPORT_DIRECT);
+  if (hasTransportCodes) {
+    if ((size_t)length < offset + 4) return false;
+    transportCode1 = packetBuffer[offset] | (packetBuffer[offset + 1] << 8);
+    transportCode2 = packetBuffer[offset + 2] | (packetBuffer[offset + 3] << 8);
+    offset += 4;
+  }
+
+  // 2. MeshCore kelio (Path) dekodavimas pagal oficialią MeshCore specifikaciją:
+  // Baitas ties offset (path_length_byte):
+  //   Bits 7:6 = hash dydis baitais: ((pathLenByte >> 6) + 1) -> 1, 2 arba 3 baitai
+  //   Bits 5:0 = šuolių (hops) skaičius: 0..63
+  //   pathByteLength = hop_count * hash_size
+  if ((size_t)length < offset + 1) return false;
+  uint8_t pathLenByte = packetBuffer[offset];
+  offset += 1;
+
+  uint8_t pathHashSize = (pathLenByte >> 6) + 1; // 1, 2 arba 3 baitai
+  uint8_t pathHopCount = pathLenByte & 0x3F;      // 0..63 šuoliai
+  size_t pathByteLength = (size_t)pathHopCount * pathHashSize;
+
+  size_t remainingAfterHeader = (size_t)length - offset;
+  bool useLegacy = false;
+  if (pathHashSize == 4 || pathByteLength > remainingAfterHeader) {
+    useLegacy = true;
+    pathByteLength = min((size_t)pathLenByte, remainingAfterHeader);
+    if (pathByteLength > 64) pathByteLength = 64;
+    pathHopCount = (uint8_t)pathByteLength;
+    pathHashSize = 1;
+  }
+
+  size_t pathOffset = offset;
+  size_t payloadOffset = offset + pathByteLength;
   if (payloadOffset > (size_t)length) {
     return false;
   }
@@ -740,7 +841,7 @@ bool processIncomingPacket(uint8_t expectedSenderHash) {
   uint8_t* payload = &packetBuffer[payloadOffset];
   size_t payloadLen = length - payloadOffset;
 
-  // 1. Filtruojame mūsų pačių arba kito mazgo pakartotus užklausų paketus (REQ arba ANON_REQ)
+  // 3. Filtruojame mūsų pačių arba kito mazgo pakartotus užklausų paketus (REQ arba ANON_REQ)
   if (payloadType == PAYLOAD_TYPE_REQ || payloadType == PAYLOAD_TYPE_ANON_REQ) {
     Serial.println("\n--------------------------------------------------------");
     Serial.printf("[LoRa RX] Gautas %s paketas (%d baitai) iš eterio (aidas / ne atsakymas mūsų mazgui). Praleidžiama.\n",
@@ -757,10 +858,17 @@ bool processIncomingPacket(uint8_t expectedSenderHash) {
   Serial.printf("[MeshCore Header] Versija: %u | Tipas: 0x%02X (%s) | Maršrutas: 0x%02X\n",
                 version, payloadType, typeStr, routeType);
 
-  Serial.printf("[MeshCore Kelias] Ilgis: %u baitai", pathLen);
-  if (pathLen > 0 && 2 + pathLen <= (size_t)length) {
-    Serial.print(" -> ");
-    printHexBuffer(&packetBuffer[2], pathLen);
+  Serial.printf("[MeshCore Kelias] Šuoliai: %u (hash: %u B, iš viso: %u B)",
+                pathHopCount, pathHashSize, (unsigned int)pathByteLength);
+  if (pathByteLength > 0 && pathOffset + pathByteLength <= (size_t)length) {
+    Serial.print(" -> [");
+    for (size_t i = 0; i < pathByteLength; i += pathHashSize) {
+      if (i > 0) Serial.print(", ");
+      for (size_t j = 0; j < pathHashSize && (i + j) < pathByteLength; j++) {
+        Serial.printf("%02X", packetBuffer[pathOffset + i + j]);
+      }
+    }
+    Serial.print("]");
   }
   Serial.println();
 
@@ -789,23 +897,24 @@ bool processIncomingPacket(uint8_t expectedSenderHash) {
   // --------------------------------------------------------------------------
   // A) ADVERT paketas – pilnas dekodavimas ir momentinis siuntimas į API
   //
+  // VISI eterio ADVERT skelbimai (tiek esantys kartotuvų sąraše, tiek bet kokie
+  // kiti eteryje pagauti mazgai) yra iškoduojami ir akimirksniu siunčiami į API!
+  //
   // FORMATAS A (su 64B parašu, payloadLen >= 101):
-  //   [0..31]  pubKey
-  //   [32..35] timestamp
+  //   [0..31]  pubKey (32B)
+  //   [32..35] timestamp (4B LE)
   //   [36..99] signature (64B)
-  //   [100]    appFlags
-  //   [101..104] lat (float LE), [105..108] lon (float LE)
-  //   [109..]  name
+  //   [100]    appFlags (1B)
+  //   nuo [101] nuosekliai: lat/lon (8B jei hasLoc), feat1 (2B jei feat1), feat2 (2B jei feat2), name
   //
   // FORMATAS B (be parašo, payloadLen < 101):
-  //   [0..31]  pubKey
-  //   [32..35] timestamp
-  //   [36]     appFlags
-  //   [37..40] lat (float LE), [41..44] lon (float LE)
-  //   [45..]   name
+  //   [0..31]  pubKey (32B)
+  //   [32..35] timestamp (4B LE)
+  //   [36]     appFlags (1B)
+  //   nuo [37] nuosekliai: lat/lon (8B jei hasLoc), feat1 (2B jei feat1), feat2 (2B jei feat2), name
   // --------------------------------------------------------------------------
-  if (payloadType == PAYLOAD_TYPE_ADVERT && payloadLen >= 36) {
-    Serial.println(">>> [MeshCore SĖKMĖ] Gautas ADVERT skelbimas! <<<");
+  if (payloadType == PAYLOAD_TYPE_ADVERT && payloadLen >= 32) {
+    Serial.println("\n>>> [MeshCore SĖKMĖ] Gautas ADVERT skelbimas iš eterio! <<<");
     Serial.printf("  * Payload dydis:   %u baitai\n", (unsigned int)payloadLen);
 
     // Spausdiname visą payload hex diagnostikai
@@ -816,86 +925,131 @@ bool processIncomingPacket(uint8_t expectedSenderHash) {
     // --- pubKey (baitai 0..31) ---
     char pubKeyHex[65];
     for (int i = 0; i < 32; i++) snprintf(&pubKeyHex[i * 2], 3, "%02x", payload[i]);
-    Serial.printf("  * Viešasis Raktas: %s\n", pubKeyHex);
+    Serial.printf("  * Mazgo Raktas:    %s\n", pubKeyHex);
 
     // --- timestamp (baitai 32..35, uint32 LE) ---
     uint32_t adTimestamp = 0;
-    memcpy(&adTimestamp, &payload[32], 4);
-    Serial.printf("  * Timestamp:       %lu\n", (unsigned long)adTimestamp);
-
-    // --- Formato nustatymas ---
-    // Formatas A: payloadLen >= 101 → parašas yra, appFlags ties [100]
-    // Formatas B: payloadLen <  101 → parašo nėra,  appFlags ties [36]
-    size_t flagsOffset = (payloadLen >= 101) ? 100 : 36;
-    size_t latOffset   = flagsOffset + 1;
-    size_t lonOffset   = flagsOffset + 5;
-    size_t nameOffset  = flagsOffset + 9;
-    bool formatA       = (payloadLen >= 101);
-    Serial.printf("  * Formatas:        %s (appFlags @ [%u])\n",
-                  formatA ? "A (su paraßu)" : "B (be parašo)", (unsigned int)flagsOffset);
-
-    // --- appFlags ---
-    // bits[0-1] = type: 0=generic, 1=chat, 2=repeater, 3=room
-    // bit[2]  = sensor, bit[3] = hasFeat1, bit[4] = hasLocation
-    // bit[5]  = hasFeat2, bit[6] = rezervuotas, bit[7] = hasName
-    uint8_t appFlags = 0;
-    bool adHasLocation = false;
-    bool adHasName     = false;
-    if (payloadLen > flagsOffset) {
-      appFlags = payload[flagsOffset];
-      uint8_t appType = appFlags & 0x03;
-      adHasLocation = (appFlags >> 4) & 1;
-      adHasName     = (appFlags >> 7) & 1;
-      const char* apStr = appType == 0 ? "generic" : appType == 1 ? "chat"
-                         : appType == 2 ? "repeater" : "room";
-      Serial.printf("  * AppFlags:        0x%02X | type=%s sensor=%d hasLoc=%d hasName=%d\n",
-                    appFlags, apStr, (int)((appFlags >> 2) & 1),
-                    (int)adHasLocation, (int)adHasName);
-    } else {
-      Serial.printf("  * AppFlags:        nepasiekiami (payloadLen=%u, reikia >%u)\n",
-                    (unsigned int)payloadLen, (unsigned int)flagsOffset);
+    if (payloadLen >= 36) {
+      memcpy(&adTimestamp, &payload[32], 4);
+      Serial.printf("  * Timestamp:       %lu\n", (unsigned long)adTimestamp);
     }
 
-    // --- lat / lon (int32_t × 1e-7, GPS fixed-point formatas) ---
-    // Saugomos kaip int32_t padaugintos iš 1e7 (pvz. 55705207 = 55.705207°)
+    // --- Formato nustatymas ---
+    bool formatA = (payloadLen >= 101);
+    size_t flagsOffset = formatA ? 100 : 36;
+    Serial.printf("  * Formatas:        %s (appFlags @ [%u])\n",
+                  formatA ? "A (su parašu)" : "B (be parašo)", (unsigned int)flagsOffset);
+
+    uint8_t appFlags = 0;
+    uint8_t appType = 0;
+    bool adHasLocation = false;
+    bool adHasFeature1 = false;
+    bool adHasFeature2 = false;
+    bool adHasName     = false;
+
     char latStr[16] = "", lonStr[16] = "";
     bool adHasValidCoords = false;
-    if (adHasLocation && payloadLen >= lonOffset + 4) {
-      int32_t latRaw = 0, lonRaw = 0;
-      memcpy(&latRaw, &payload[latOffset], 4);
-      memcpy(&lonRaw, &payload[lonOffset], 4);
-      if (latRaw != 0 || lonRaw != 0) {
-        snprintf(latStr, sizeof(latStr), "%.6f", latRaw / 10000000.0);
-        snprintf(lonStr, sizeof(lonStr), "%.6f", lonRaw / 10000000.0);
-        adHasValidCoords = true;
-        Serial.printf("  * Lat: %s  Lon: %s\n", latStr, lonStr);
+    float batteryVoltage = 0.0f;
+    bool hasBattery = false;
+    char adName[64] = "";
+
+    if (payloadLen > flagsOffset) {
+      appFlags = payload[flagsOffset];
+      appType = appFlags & 0x03;           // 0=generic/chat, 1=chat, 2=repeater, 3=room
+      adHasLocation = (appFlags >> 4) & 1; // Bit 4: GPS koordinatės
+      adHasFeature1 = (appFlags >> 5) & 1; // Bit 5: Baterija (mV)
+      adHasFeature2 = (appFlags >> 6) & 1; // Bit 6: Rezervuota
+      adHasName     = (appFlags >> 7) & 1; // Bit 7: Mazgo pavadinimas
+
+      const char* apStr = (appType == 0 ? "generic" : appType == 1 ? "chat"
+                           : appType == 2 ? "repeater" : "room");
+      Serial.printf("  * AppFlags:        0x%02X | type=%s (%d) hasLoc=%d feat1=%d feat2=%d hasName=%d\n",
+                    appFlags, apStr, appType, (int)adHasLocation, (int)adHasFeature1,
+                    (int)adHasFeature2, (int)adHasName);
+
+      size_t currOffset = flagsOffset + 1;
+
+      // 1. Vieta (lat / lon): int32_t padalintas iš 1000000.0 (1e6) pagal MeshCore specifikaciją
+      if (adHasLocation && payloadLen >= currOffset + 8) {
+        int32_t latRaw = 0, lonRaw = 0;
+        memcpy(&latRaw, &payload[currOffset], 4);
+        memcpy(&lonRaw, &payload[currOffset + 4], 4);
+        currOffset += 8;
+
+        if (latRaw != 0 || lonRaw != 0) {
+          snprintf(latStr, sizeof(latStr), "%.6f", latRaw / 1000000.0);
+          snprintf(lonStr, sizeof(lonStr), "%.6f", lonRaw / 1000000.0);
+          adHasValidCoords = true;
+          Serial.printf("  * Koordinatės:     Lat: %s | Lon: %s\n", latStr, lonStr);
+        }
+      }
+
+      // 2. Feature1 (baterija mV, uint16 LE)
+      if (adHasFeature1 && payloadLen >= currOffset + 2) {
+        uint16_t bMv = 0;
+        memcpy(&bMv, &payload[currOffset], 2);
+        currOffset += 2;
+        batteryVoltage = bMv / 1000.0f;
+        hasBattery = true;
+        Serial.printf("  * Baterija:        %.2f V (%u mV)\n", batteryVoltage, bMv);
+      }
+
+      // 3. Feature2 (2B rezervuota)
+      if (adHasFeature2 && payloadLen >= currOffset + 2) {
+        currOffset += 2;
+      }
+
+      // 4. Pavadinimas (nuo currOffset iki paketo pabaigos)
+      if (adHasName && payloadLen > currOffset) {
+        size_t nameLen = payloadLen - currOffset;
+        if (nameLen >= sizeof(adName)) nameLen = sizeof(adName) - 1;
+        memcpy(adName, &payload[currOffset], nameLen);
+        adName[nameLen] = '\0';
+        Serial.printf("  * Pavadinimas:     %s\n", adName);
       }
     }
 
-    // --- name (nuo nameOffset iki paketo pabaigos) ---
-    char adName[64] = "";
-    if (adHasName && payloadLen > nameOffset) {
-      size_t nameLen = payloadLen - nameOffset;
-      if (nameLen >= sizeof(adName)) nameLen = sizeof(adName) - 1;
-      memcpy(adName, &payload[nameOffset], nameLen);
-      adName[nameLen] = '\0';
-      // Valome ne-ASCII baitus (pvz. UTF-8 per Serial gali rodyti šiukšles)
-      Serial.printf("  * Pavadinimas:     %s\n", adName);
-    }
-
-    // --- ADVERT JSON statymas ir siuntimas į API ---
+    // --- ADVERT JSON kūrimas ir siuntimas į API ---
 #if ARDUINOJSON_VERSION_MAJOR >= 7
     JsonDocument advertDoc;
 #else
-    StaticJsonDocument<768> advertDoc;
+    StaticJsonDocument<1536> advertDoc;
 #endif
 
     advertDoc["protocol"]      = "MeshCore";
     advertDoc["type"]          = "ADVERT";
     advertDoc["advert_format"] = formatA ? "A" : "B";
     advertDoc["public_key"]    = pubKeyHex;
+    advertDoc["public_id"]     = pubKeyHex;
     if (adTimestamp > 0) advertDoc["timestamp"] = adTimestamp;
-    if (strlen(adName) > 0) advertDoc["node_name"] = adName;
+
+    // Nustatome mazgo ID ir vardą:
+    // Jei mazgas yra mūsų stebimų kartotuvų sąraše – naudojame sąrašo vardą.
+    // Jei mazgas NE iš sąrašo – naudojame ADVERT atsiųstą vardą arba trumpą 4 simbolių ID iš viešo rakto.
+    bool foundInList = false;
+    for (size_t i = 0; i < monitoredRepeatersCount; i++) {
+      if (monitoredRepeaters[i].public_id.equalsIgnoreCase(pubKeyHex)) {
+        advertDoc["node_id"]   = monitoredRepeaters[i].name;
+        advertDoc["node_name"] = monitoredRepeaters[i].name;
+        advertDoc["name"]      = monitoredRepeaters[i].name;
+        foundInList = true;
+        break;
+      }
+    }
+    if (!foundInList) {
+      if (strlen(adName) > 0) {
+        advertDoc["node_id"]   = adName;
+        advertDoc["node_name"] = adName;
+        advertDoc["name"]      = adName;
+      } else {
+        char shortId[9];
+        snprintf(shortId, sizeof(shortId), "%.4s", pubKeyHex);
+        advertDoc["node_id"]   = shortId;
+        advertDoc["node_name"] = shortId;
+        advertDoc["name"]      = shortId;
+      }
+    }
+    advertDoc["in_monitored_list"] = foundInList;
 
     if (settings.includeSignalMetrics) {
       JsonObject sig = advertDoc["signal"].to<JsonObject>();
@@ -904,7 +1058,6 @@ bool processIncomingPacket(uint8_t expectedSenderHash) {
     }
 
     if (payloadLen > flagsOffset) {
-      uint8_t appType  = appFlags & 0x03;
       JsonObject flObj = advertDoc["flags"].to<JsonObject>();
       flObj["raw"]         = appFlags;
       flObj["type"]        = appType;
@@ -913,10 +1066,9 @@ bool processIncomingPacket(uint8_t expectedSenderHash) {
       flObj["chat"]        = (appType == 1);
       flObj["repeater"]    = (appType == 2);
       flObj["room"]        = (appType == 3);
-      flObj["sensor"]      = (bool)((appFlags >> 2) & 1);
-      flObj["hasFeat1"]    = (bool)((appFlags >> 3) & 1);
       flObj["hasLocation"] = adHasLocation;
-      flObj["hasFeat2"]    = (bool)((appFlags >> 5) & 1);
+      flObj["hasFeat1"]    = adHasFeature1;
+      flObj["hasFeat2"]    = adHasFeature2;
       flObj["hasName"]     = adHasName;
     }
 
@@ -925,31 +1077,44 @@ bool processIncomingPacket(uint8_t expectedSenderHash) {
       advertDoc["lon"] = lonStr;
     }
 
-    // Raw payload diagnostikai (jei įjungtas includeRawPayload)
+    if (hasBattery) {
+      advertDoc["battery_volts"] = batteryVoltage;
+    }
+
+    // Kelias (Path) ir šuoliai (Hops)
+    if (pathByteLength > 0) {
+      JsonArray pathArr = advertDoc["path"].to<JsonArray>();
+      for (size_t i = 0; i < pathByteLength; i += pathHashSize) {
+        char hBuf[9] = "";
+        for (size_t j = 0; j < pathHashSize && (i + j) < pathByteLength; j++) {
+          char b[3];
+          snprintf(b, sizeof(b), "%02X", packetBuffer[pathOffset + i + j]);
+          strcat(hBuf, b);
+        }
+        pathArr.add(hBuf);
+      }
+      advertDoc["hops"] = pathHopCount;
+    } else {
+      advertDoc["hops"] = 0;
+    }
+
+    // Visas gautas LoRa RAW paketas (nenukirptas, įskaitant header ir path)
     if (settings.includeRawPayload) {
       String rawHex = "";
-      for (size_t i = 0; i < payloadLen; i++) {
-        char b[3]; snprintf(b, sizeof(b), "%02X", payload[i]);
+      for (int i = 0; i < length; i++) {
+        char b[3]; snprintf(b, sizeof(b), "%02X", packetBuffer[i]);
         rawHex += b;
       }
-      advertDoc["payload_hex"]    = rawHex;
-      advertDoc["payload_len"]    = (int)payloadLen;
-      advertDoc["flags_offset"]   = (int)flagsOffset;
+      advertDoc["raw_hex"] = rawHex;
     }
 
-    // Patikriname ar tai stebimas kartotuvas
-    for (size_t i = 0; i < monitoredRepeatersCount; i++) {
-      if (monitoredRepeaters[i].public_id.equalsIgnoreCase(pubKeyHex)) {
-        advertDoc["node_id"] = monitoredRepeaters[i].name;
-        break;
-      }
-    }
-
-    Serial.println("[ADVERT] Siunčiami duomenys į API...");
+    Serial.printf("[ADVERT] Pagautas skelbimas iš %s mazgo '%s' (Public ID: %s)! Siunčiami duomenys į API...\n",
+                  foundInList ? "sąrašo" : "ETERIO (ne iš sąrašo)",
+                  advertDoc["node_id"].as<const char*>(), pubKeyHex);
     sendToAPI(advertDoc);
 
     // Grąžiname false – ADVERT NĖRA tikėtas atsakymas aktyvios apklausos metu,
-    // todėl waitForReply() nenustoja laukti tikro kartotuvo atsakymo.
+    // todėl waitForReply() tęsia laukimą tikro kartotuvo atsakymo.
     return false;
   }
 
@@ -958,7 +1123,7 @@ bool processIncomingPacket(uint8_t expectedSenderHash) {
   // --------------------------------------------------------------------------
   // B) ŠIFRUOTO ATSAKO DEŠIFRAVIMAS IR APDOROJIMAS (RESPONSE arba PATH)
   // --------------------------------------------------------------------------
-  uint8_t decData[256];
+  static uint8_t decData[256];
   int decLen = 0;
 
   if ((payloadType == PAYLOAD_TYPE_RESPONSE || payloadType == PAYLOAD_TYPE_PATH) && payloadLen > 2 + CIPHER_MAC_SIZE) {
@@ -1031,61 +1196,92 @@ bool processIncomingPacket(uint8_t expectedSenderHash) {
         uint8_t perms = (respLen >= 8) ? respPtr[7] : 0;
         Serial.println(">>> [MeshCore SĖKMĖ] Kartotuvas patvirtino prisijungimą! (LOGIN SUCCESS) <<<");
         Serial.printf("[MeshCore] Suteiktos prieigos teisės: 0x%02X\n", perms);
-        // Tarpinio pranešimo į API nesiunčiame – laukiama realios telemetrijos
-        return true;
+        return (waitTarget == WAIT_LOGIN || waitTarget == WAIT_ANY);
       }
 
-      // 2. Tikriname ar tai RepeaterStats (52 baitų būsenos struktūra)
-      if (respLen >= 4 + (int)sizeof(RepeaterStats)) {
-        const RepeaterStats* stats = (const RepeaterStats*)&respPtr[4];
-        if (stats->batt_milli_volts >= 2000 && stats->batt_milli_volts <= 6000) {
-          float battVolts = stats->batt_milli_volts / 1000.0f;
-          float snrVal = stats->last_snr / 4.0f;
+      // 2. Tikriname ar tai RepeaterStats būsenos struktūra
+      // MeshCore versijose RepeaterStats dydis svyruoja tarp 44 ir 52 baitų (v1.10 = 44B, v1.11 = 48B, v1.12+ = 52B).
+      if (respLen >= 4 + 44) {
+        RepeaterStats stats;
+        memset(&stats, 0, sizeof(stats));
+        size_t copyBytes = respLen - 4;
+        if (copyBytes > sizeof(stats)) copyBytes = sizeof(stats);
+        memcpy(&stats, &respPtr[4], copyBytes);
 
-          Serial.println(">>> [MeshCore SĖKMĖ] Sėkmingai gauta kartotuvo būsena (RepeaterStats)! <<<");
-          Serial.printf("  * Baterija:           %u mV (%.2f V)\n", stats->batt_milli_volts, battVolts);
-          Serial.printf("  * Veikimo laikas:     %u s (%.1f h)\n", stats->total_up_time_secs, stats->total_up_time_secs / 3600.0f);
-          Serial.printf("  * Triukšmo lygis:     %d dBm\n", stats->noise_floor);
-          Serial.printf("  * Gauti paketai:      %u (Direct: %u, Flood: %u)\n", stats->n_packets_recv, stats->n_recv_direct, stats->n_recv_flood);
-          Serial.printf("  * Išsiųsti paketai:   %u (Direct: %u, Flood: %u)\n", stats->n_packets_sent, stats->n_sent_direct, stats->n_sent_flood);
-          Serial.printf("  * Eterio laikas:      %u s\n", stats->total_air_time_secs);
-          Serial.printf("  * Paskutinis SNR:     %.2f dB\n", snrVal);
-          Serial.printf("  * Paskutinis RSSI:    %d dBm\n", stats->last_rssi);
-          Serial.printf("  * Priėmimo klaidos:   %u\n", stats->n_recv_errors);
+        float battVolts = stats.batt_milli_volts / 1000.0f;
+        float snrVal = stats.last_snr / 4.0f;
 
-          JsonObject docTelemetry = (expectedSenderHash != 0) ? currentRepDoc["telemetry"].to<JsonObject>() : jsonDoc["telemetry"].to<JsonObject>();
-          JsonObject docSignal    = (expectedSenderHash != 0) ? currentRepDoc["signal"].to<JsonObject>() : jsonDoc["signal"].to<JsonObject>();
+        Serial.println(">>> [MeshCore SĖKMĖ] Sėkmingai gauta kartotuvo būsena (RepeaterStats)! <<<");
+        if (stats.batt_milli_volts > 0) {
+          Serial.printf("  * Baterija:           %u mV (%.2f V)\n", stats.batt_milli_volts, battVolts);
+        }
+        Serial.printf("  * Veikimo laikas:     %u s (%.1f h)\n", stats.total_up_time_secs, stats.total_up_time_secs / 3600.0f);
+        Serial.printf("  * Triukšmo lygis:     %d dBm\n", stats.noise_floor);
+        Serial.printf("  * Gauti paketai:      %u (Direct: %u, Flood: %u)\n", stats.n_packets_recv, stats.n_recv_direct, stats.n_recv_flood);
+        Serial.printf("  * Išsiųsti paketai:   %u (Direct: %u, Flood: %u)\n", stats.n_packets_sent, stats.n_sent_direct, stats.n_sent_flood);
+        Serial.printf("  * Eterio laikas:      %u s\n", stats.total_air_time_secs);
+        Serial.printf("  * Paskutinis SNR:     %.2f dB\n", snrVal);
+        Serial.printf("  * Paskutinis RSSI:    %d dBm\n", stats.last_rssi);
+        Serial.printf("  * Priėmimo klaidos:   %u\n", stats.n_recv_errors);
 
-          docSignal["rssi"] = rssi;
-          docSignal["snr"]  = snr;
+        JsonObject docTelemetry;
+        if (expectedSenderHash != 0) {
+          docTelemetry = currentRepDoc["telemetry"].is<JsonObject>() ? currentRepDoc["telemetry"].as<JsonObject>() : currentRepDoc["telemetry"].to<JsonObject>();
+        } else {
+          docTelemetry = jsonDoc["telemetry"].is<JsonObject>() ? jsonDoc["telemetry"].as<JsonObject>() : jsonDoc["telemetry"].to<JsonObject>();
+        }
 
-          if (settings.includeBattery) {
-            JsonObject batt = docTelemetry["battery"].to<JsonObject>();
-            batt["voltage_v"] = battVolts;
-            batt["voltage_mv"] = stats->batt_milli_volts;
-          }
+        JsonObject docSignal;
+        if (expectedSenderHash != 0) {
+          docSignal = currentRepDoc["signal"].is<JsonObject>() ? currentRepDoc["signal"].as<JsonObject>() : currentRepDoc["signal"].to<JsonObject>();
+        } else {
+          docSignal = jsonDoc["signal"].is<JsonObject>() ? jsonDoc["signal"].as<JsonObject>() : jsonDoc["signal"].to<JsonObject>();
+        }
 
-          if (settings.includeUptime) {
-            docTelemetry["uptime_seconds"] = stats->total_up_time_secs;
-            docTelemetry["uptime_hours"] = stats->total_up_time_secs / 3600.0f;
-          }
+        docSignal["rssi"] = rssi;
+        docSignal["snr"]  = snr;
 
-          if (settings.includePowerMetrics) {
-            JsonObject power = docTelemetry["power"].to<JsonObject>();
-            power["air_time_secs"] = stats->total_air_time_secs;
-            power["packets_recv"]  = stats->n_packets_recv;
-            power["packets_sent"]  = stats->n_packets_sent;
-            power["noise_floor"]   = stats->noise_floor;
-            power["rx_errors"]     = stats->n_recv_errors;
-            power["tx_queue"]      = stats->curr_tx_queue_len;
-          }
-          hasValidTelemetry = true;
-          if (expectedSenderHash != 0) currentRepHasData = true;
+        if (settings.includeBattery && stats.batt_milli_volts > 0) {
+          JsonObject batt = docTelemetry["battery"].is<JsonObject>() ? docTelemetry["battery"].as<JsonObject>() : docTelemetry["battery"].to<JsonObject>();
+          batt["voltage_v"] = battVolts;
+          batt["voltage_mv"] = stats.batt_milli_volts;
+        }
+
+        if (settings.includeUptime) {
+          docTelemetry["uptime_seconds"] = stats.total_up_time_secs;
+          docTelemetry["uptime_hours"] = stats.total_up_time_secs / 3600.0f;
+        }
+
+        if (settings.includeStatusMetrics) {
+          JsonObject statObj = docTelemetry["status"].is<JsonObject>() ? docTelemetry["status"].as<JsonObject>() : docTelemetry["status"].to<JsonObject>();
+          statObj["air_time_secs"] = stats.total_air_time_secs;
+          statObj["packets_recv"]  = stats.n_packets_recv;
+          statObj["packets_sent"]  = stats.n_packets_sent;
+          statObj["noise_floor"]   = stats.noise_floor;
+          statObj["rx_errors"]     = stats.n_recv_errors;
+          statObj["tx_queue"]      = stats.curr_tx_queue_len;
+        }
+        hasValidTelemetry = true;
+        if (expectedSenderHash != 0) currentRepHasData = true;
+
+        if (waitTarget == WAIT_STATUS || waitTarget == WAIT_ANY) {
+          return true;
         }
       } else {
         // 3. Skenuojame CayenneLPP jutiklių telemetriją iš iššifruoto krovinio (TIK jei tai ne RepeaterStats!)
-        JsonObject docTelemetry = (expectedSenderHash != 0) ? currentRepDoc["telemetry"].to<JsonObject>() : jsonDoc["telemetry"].to<JsonObject>();
-        JsonObject docSignal    = (expectedSenderHash != 0) ? currentRepDoc["signal"].to<JsonObject>() : jsonDoc["signal"].to<JsonObject>();
+        JsonObject docTelemetry;
+        if (expectedSenderHash != 0) {
+          docTelemetry = currentRepDoc["telemetry"].is<JsonObject>() ? currentRepDoc["telemetry"].as<JsonObject>() : currentRepDoc["telemetry"].to<JsonObject>();
+        } else {
+          docTelemetry = jsonDoc["telemetry"].is<JsonObject>() ? jsonDoc["telemetry"].as<JsonObject>() : jsonDoc["telemetry"].to<JsonObject>();
+        }
+
+        JsonObject docSignal;
+        if (expectedSenderHash != 0) {
+          docSignal = currentRepDoc["signal"].is<JsonObject>() ? currentRepDoc["signal"].as<JsonObject>() : currentRepDoc["signal"].to<JsonObject>();
+        } else {
+          docSignal = jsonDoc["signal"].is<JsonObject>() ? jsonDoc["signal"].as<JsonObject>() : jsonDoc["signal"].to<JsonObject>();
+        }
 
         docSignal["rssi"] = rssi;
         docSignal["snr"]  = snr;
@@ -1100,7 +1296,7 @@ bool processIncomingPacket(uint8_t expectedSenderHash) {
             if (v >= 2.0f && v <= 6.0f) {
               uint8_t ch = respPtr[offset];
               Serial.printf(">>> [CayenneLPP TELEMETRIJA] Kanalo %u Baterijos Įtampa: %.2f V (%.0f mV) <<<\n", ch, v, v * 1000.0f);
-              JsonObject batt = docTelemetry["battery"].to<JsonObject>();
+              JsonObject batt = docTelemetry["battery"].is<JsonObject>() ? docTelemetry["battery"].as<JsonObject>() : docTelemetry["battery"].to<JsonObject>();
               batt["voltage_v"] = v;
               batt["voltage_mv"] = (uint16_t)(v * 1000.0f);
               hasValidTelemetry = true;
@@ -1120,6 +1316,10 @@ bool processIncomingPacket(uint8_t expectedSenderHash) {
               if (expectedSenderHash != 0) currentRepHasData = true;
             }
           }
+        }
+
+        if (hasValidTelemetry && (waitTarget == WAIT_TELEMETRY || waitTarget == WAIT_ANY)) {
+          return true;
         }
       }
     } else {
@@ -1154,16 +1354,65 @@ bool processIncomingPacket(uint8_t expectedSenderHash) {
 // ================================================================================
 // 🌐 WI-FI IR HTTP API SIUNTIMAS
 // ================================================================================
+
+// Skenuoja aplinkinius Wi-Fi tinklus ir išveda jų sąrašą į Serial Monitor
+void scanWiFiNetworks() {
+  Serial.println("\n========================================================");
+  Serial.println("[Wi-Fi Skenavimas] Ieškoma pasiekiamų Wi-Fi tinklų...");
+  Serial.println("========================================================");
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+
+  int n = WiFi.scanNetworks();
+  if (n == 0) {
+    Serial.println("[Wi-Fi Skenavimas] Nerasta jokių Wi-Fi tinklų.");
+  } else {
+    Serial.printf("[Wi-Fi Skenavimas] Rasta tinklų: %d\n", n);
+    Serial.println("  --------------------------------------------------------------------------------");
+    Serial.printf("  %-4s | %-28s | %-6s | %-4s | %-12s\n", "Nr.", "SSID", "RSSI", "Ch", "Apsauga");
+    Serial.println("  --------------------------------------------------------------------------------");
+    for (int i = 0; i < n; ++i) {
+      const char* secType = "Atviras";
+      switch (WiFi.encryptionType(i)) {
+        case WIFI_AUTH_OPEN:            secType = "Atviras"; break;
+        case WIFI_AUTH_WEP:             secType = "WEP"; break;
+        case WIFI_AUTH_WPA_PSK:         secType = "WPA"; break;
+        case WIFI_AUTH_WPA2_PSK:        secType = "WPA2"; break;
+        case WIFI_AUTH_WPA_WPA2_PSK:    secType = "WPA/WPA2"; break;
+        case WIFI_AUTH_WPA2_ENTERPRISE: secType = "Enterprise"; break;
+        case WIFI_AUTH_WPA3_PSK:        secType = "WPA3"; break;
+        case WIFI_AUTH_WPA2_WPA3_PSK:   secType = "WPA2/WPA3"; break;
+        default:                        secType = "Kita"; break;
+      }
+      Serial.printf("  [%2d] | %-28.28s | %4d | %2d   | %-12s\n",
+                    i + 1, WiFi.SSID(i).c_str(), WiFi.RSSI(i), WiFi.channel(i), secType);
+      delay(10);
+    }
+    Serial.println("  --------------------------------------------------------------------------------");
+  }
+  WiFi.scanDelete();
+}
+
 void connectToWiFi() {
   if (WiFi.status() == WL_CONNECTED) return;
 
-  Serial.printf("[Wi-Fi] Jungiamasi prie tinklo '%s'...", WIFI_SSID);
+  // Prieš jungiantis nuskaitome ir išvedame pasiekiamų Wi-Fi tinklų sąrašą
+  scanWiFiNetworks();
+
+  // Pilnai atjungiame ir išvalome ankstesnę būseną (išvengiama "wifi:sta is connecting" klaidos)
+  WiFi.disconnect(true, true);
+  delay(300);
+
+  Serial.printf("\n[Wi-Fi] Jungiamasi prie tinklo '%s'...", WIFI_SSID);
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false); // Užtikrina stabilų ryšį su iPhone Hotspot
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
+  // iPhone Hotspot gali užtrukti ilgiau išduodant IP (laukiama iki 20 sekundžių)
   int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 25) {
-    delay(400);
+  while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+    delay(500);
     Serial.print(".");
     attempts++;
   }
@@ -1191,40 +1440,84 @@ void connectToWiFi() {
   }
 }
 
+// ================================================================================
+// 🧵 FONINIS API SIUNTĖJAS (FreeRTOS Task paleistas ant Core 0)
+// Vykdo HTTP POST siuntimą fone, todėl pagrindinė gija (Core 1) su LoRa radiju
+// NIEKADA neužstringa ir nelaukia serverio atsakymo!
+// ================================================================================
+void apiWorkerTask(void* pvParameters) {
+  while (true) {
+    char* payload = nullptr;
+    if (xQueueReceive(apiQueue, &payload, portMAX_DELAY) == pdTRUE && payload != nullptr) {
+      if (WiFi.status() == WL_CONNECTED) {
+        if (wifiHttpMutex == nullptr || xSemaphoreTake(wifiHttpMutex, pdMS_TO_TICKS(5000)) == pdTRUE) {
+          HTTPClient http;
+          http.begin(API_URL);
+          http.addHeader("Content-Type", "application/json");
+          if (strlen(API_AUTH_KEY) > 0) {
+            http.addHeader("Authorization", API_AUTH_KEY);
+          }
+          http.setTimeout(2500); // 2.5s apsauga nuo pakibimo
+
+          int httpCode = http.POST((uint8_t*)payload, strlen(payload));
+          if (httpCode > 0) {
+            Serial.printf("[API Foninis Siuntėjas] Serverio atsakymo kodas: %d (išsiųsta sėkmingai).\n", httpCode);
+          } else {
+            Serial.printf("[API Foninis Siuntėjas] Siuntimo klaida: %s\n", http.errorToString(httpCode).c_str());
+          }
+          http.end();
+
+          if (wifiHttpMutex != nullptr) {
+            xSemaphoreGive(wifiHttpMutex);
+          }
+        }
+      } else {
+        Serial.println("[API Foninis Siuntėjas] Wi-Fi neprisijungtas, paketas praleistas.");
+      }
+      free(payload);
+    }
+  }
+}
+
+// ================================================================================
+// ⚡ NE-BLOKUOJANTIS DUOMENŲ PERDAVIMAS Į API
+// Išsiunčia duomenis į foninę eilę ir IŠKART grįžta į darbą. Nelaukiama serverio!
+// ================================================================================
 #if ARDUINOJSON_VERSION_MAJOR >= 7
 void sendToAPI(const JsonDocument& doc) {
 #else
 void sendToAPI(const JsonDocument& doc) {
 #endif
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[API] Wi-Fi neprisijungtas, praleidžiamas siuntimas.");
-    return;
-  }
-
   String jsonString;
   serializeJson(doc, jsonString);
 
-  HTTPClient http;
-  http.begin(API_URL);
-  http.addHeader("Content-Type", "application/json");
-
-  if (strlen(API_AUTH_KEY) > 0) {
-    http.addHeader("Authorization", API_AUTH_KEY);
+  if (apiQueue == nullptr) {
+    Serial.println("[API] Klaida: Siuntimo eilė neinicializuota!");
+    return;
   }
 
-  Serial.println("\n[API] Siunčiami telemetrijos duomenys į serverį:");
+  char* payloadCopy = strdup(jsonString.c_str());
+  if (payloadCopy == nullptr) {
+    Serial.println("[API Klaida] Trūksta atminties paketo kopijai!");
+    return;
+  }
+
+  Serial.println("\n[API] Paruošti duomenys siuntimui į serverį:");
   serializeJsonPretty(doc, Serial);
   Serial.println();
 
-  int httpCode = http.POST(jsonString);
-
-  if (httpCode > 0) {
-    Serial.printf("[API] Serverio atsakymo kodas: %d\n", httpCode);
+  // Siunčiame į foninę eilę be jokio laukimo (0 ticks):
+  // Pagrindinė gija (LoRa klausymasis) iškart tęsia darbą be jokio serverio atsakymo laukimo!
+  if (xQueueSend(apiQueue, &payloadCopy, 0) == pdTRUE) {
+    const char* nodeId = doc["node_id"] | "mazgas";
+    const char* pType = doc["type"] | "DATA";
+    Serial.printf("[API] %s mazgui '%s' (%u baitai) atiduotas siuntimui.\n",
+                  pType, nodeId, (unsigned int)jsonString.length());
+    Serial.println("[API] >> LAIKOMA KAIP IŠSIŲSTA << Serverio atsakymo nelaukiama, LoRa radijas toliau nepertraukiamai klausosi!");
   } else {
-    Serial.printf("[API KLAIDA] Nepavyko išsiųsti užklausos: %s\n", http.errorToString(httpCode).c_str());
+    Serial.println("[API Įspėjimas] Siuntimo eilė pilna. Paketas atmestas, kad neužlaikytų LoRa.");
+    free(payloadCopy);
   }
-
-  http.end();
 }
 
 // ================================================================================
