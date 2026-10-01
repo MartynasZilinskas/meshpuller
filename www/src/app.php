@@ -40,9 +40,58 @@ try {
     $dbError = $e->getMessage();
 }
 
+$requestUri = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+$path       = rtrim($requestUri, '/');
+
+// Nustatome ar kreipiamasi į /api/nodes endpointą
+$isNodesEndpoint = (
+    preg_match('#/(api/)?nodes(\.php)?$#', $path) || 
+    (isset($_GET['endpoint']) && $_GET['endpoint'] === 'nodes') ||
+    (isset($_GET['action']) && $_GET['action'] === 'nodes') ||
+    basename($_SERVER['SCRIPT_FILENAME'] ?? '') === 'nodes.php'
+);
+
+// -----------------------------------------------------------------------------
+// 📡 ENDPOINT: GET /api/nodes (Kartotuvų sąrašas su paskutine telemetrija)
+// -----------------------------------------------------------------------------
+if ($isNodesEndpoint) {
+    if ($method !== 'GET') {
+        http_response_code(405);
+        echo json_encode([
+            'success' => false,
+            'error'   => 'Metodas nepalaikomas. /api/nodes priima tik GET užklausas.'
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if (!$dbConnected || !$repository) {
+        http_response_code(500);
+        echo json_encode([
+            'success' => false,
+            'error'   => 'Duomenų bazė nepasiekiama: ' . $dbError,
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $all = isset($_GET['all']) && ($_GET['all'] === '1' || $_GET['all'] === 'true');
+    $repeaters = $repository->getRepeatersWithLatestTelemetry(!$all);
+
+    echo json_encode([
+        'success'   => true,
+        'endpoint'  => '/api/nodes',
+        'filter'    => $all ? 'all_nodes' : 'repeaters_only',
+        'count'     => count($repeaters),
+        'repeaters' => $repeaters,
+        'nodes'     => $repeaters,
+        'timestamp' => date('Y-m-d H:i:s'),
+    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 // GET užklausos atveju pateikiame endpoint informaciją, būseną ir eilių statistiką
 if ($method === 'GET') {
     $stats = ($dbConnected && $repository) ? $repository->getStats() : null;
+    $nodeStats = ($dbConnected && $repository) ? $repository->getNodeStats() : null;
 
     echo json_encode([
         'status'      => 'active',
@@ -59,9 +108,11 @@ if ($method === 'GET') {
                 'user'     => RawPacketRepository::DEFAULT_CONFIG['user'],
             ],
             'queue_stats' => $stats,
+            'node_stats'  => $nodeStats,
         ],
         'endpoints' => [
-            'POST /api/raw' => 'Visas LoRa srautas (RX/TX) siunčiamas čia. Visi paketai išsaugomi DB ir automatiškai iškoduojami serveryje.',
+            'GET /api/nodes' => 'Ištraukia visus kartotuvus (nodes) su pavadinimu, node_id, koordinatėmis, kada paskutinį kartą matytas, bei paskutine temperatūra ir baterijos įkrova V.',
+            'POST /api/raw'  => 'Visas LoRa srautas (RX/TX) išsaugomas DB eilėje (processed = false). Dekodavimas vyksta fone per process_queue.php.',
         ],
         'deprecated_endpoints' => [
             'POST /api/adverts'   => 'Panaikinta. Skelbimai apdorojami serveryje iš RAW srauto.',
@@ -142,7 +193,7 @@ if (empty($rawHex)) {
 }
 
 // -----------------------------------------------------------------------------
-// 💾 1. DUOMENŲ BAZĖ: Išsaugome atėjusį RAW įrašą su processed = false
+// 💾 1. DUOMENŲ BAZĖ: Išsaugome atėjusį RAW įrašą su processed = false ir processed_at = NULL
 // -----------------------------------------------------------------------------
 $recordId = null;
 $dbSaveError = null;
@@ -156,29 +207,37 @@ if ($dbConnected && $repository) {
 }
 
 // -----------------------------------------------------------------------------
-// ⚙️ 2. SERVERYJE: Atliekame dešifravimą ir pilną protokolo iškodavimą
+// ⚙️ 2. ASINCHRONINIS / SINCHRONINIS REŽIMAS
 // -----------------------------------------------------------------------------
-$decoded = null;
-if (is_array($payloadData) && count($payloadData) > 2) {
-    $decoded = $decoder->decodeApiPayload($payloadData);
-} else {
-    $decoded = $decoder->decodeRawPacket($rawHex, $sharedSecret);
-}
+// Pagal nutylėjimą: ASINCHRONINIS (paketas patenka į eilę su processed = false,
+// o dekodavimas vyksta fone paleidus process_queue.php).
+// Jei testavimo tikslais pateiktas ?sync=1 arba ?decode=1 – galima atlikti ir tiesioginį dekodavimą.
+$forceSync = isset($_GET['sync']) || isset($_GET['decode']) || (!empty($payloadData['sync']));
 
-// -----------------------------------------------------------------------------
-// 💾 3. DUOMENŲ BAZĖ: Užfiksuojame apdorojimą (processed_at, po to processed = true)
-// -----------------------------------------------------------------------------
-if ($dbConnected && $repository && $recordId) {
-    try {
-        if (!empty($decoded['success'])) {
-            // Pasižymi apdorojimo datą ir uždeda processed = true
-            $repository->completeProcessing($recordId, $decoded);
-        } else {
-            // Fiksuoja klaidą, palieka processed = false su veliausia processed_at
-            $repository->failProcessing($recordId, $decoded['error'] ?? 'Dekodavimo klaida');
+$decoded = null;
+if ($forceSync) {
+    if (is_array($payloadData) && count($payloadData) > 2) {
+        $decoded = $decoder->decodeApiPayload($payloadData);
+    } else {
+        $decoded = $decoder->decodeRawPacket($rawHex, $sharedSecret);
+    }
+
+    if ($dbConnected && $repository && $recordId) {
+        try {
+            if (!empty($decoded['advert']) && is_array($decoded['advert']) && !empty($decoded['advert']['public_key'])) {
+                $repository->upsertNodeFromAdvert($decoded['advert'], $payloadData);
+            }
+
+            $repository->extractAndSaveTelemetry($recordId, $decoded, $payloadData);
+
+            if (!empty($decoded['success'])) {
+                $repository->completeProcessing($recordId, $decoded);
+            } else {
+                $repository->failProcessing($recordId, $decoded['error'] ?? 'Dekodavimo klaida');
+            }
+        } catch (\Throwable $e) {
+            // DB atnaujinimo klaida
         }
-    } catch (\Throwable $e) {
-        // DB atnaujinimo klaida
     }
 }
 
@@ -191,27 +250,40 @@ if (!is_dir($logDir)) {
 $logEntry = [
     'received_at' => date('Y-m-d H:i:s'),
     'db_id'       => $recordId,
-    'raw_request' => $payloadData,
-    'decoded'     => $decoded,
+    'mode'        => $forceSync ? 'sync' : 'queued_async',
+    'raw_hex'     => $rawHex,
+    'direction'   => $payloadData['direction'] ?? null,
+    'db_error'    => $dbSaveError,
 ];
+if ($forceSync) {
+    $logEntry['decoded'] = $decoded;
+}
 @file_put_contents($logDir . '/raw.log', json_encode($logEntry, JSON_UNESCAPED_UNICODE) . PHP_EOL, FILE_APPEND);
 
-// Papildome atsakymą duomenų bazės metaduomenimis
+// Papildome atsakymą duomenų bazės metaduomenimis (atsakome žaibiškai, be blokuojančio dekodavimo)
 $response = [
-    'success'            => !empty($decoded['success']),
-    'database'           => [
+    'success'   => ($dbSaveError === null),
+    'message'   => $forceSync
+        ? 'RAW paketas išsaugotas ir sinchroniškai iškoduotas.'
+        : 'RAW paketas sėkmingai priimtas ir patalpintas į apdorojimo eilę (dekodavimas per process_queue.php).',
+    'queued'    => !$forceSync,
+    'database'  => [
         'stored'        => $recordId !== null,
         'record_id'     => $recordId,
-        'processed'     => !empty($decoded['success']),
+        'processed'     => $forceSync && !empty($decoded['success']),
         'db_error'      => $dbSaveError ?? $dbError,
     ],
-    'decoded'            => $decoded,
+    'raw_hex'   => $rawHex,
 ];
 
-if (!empty($decoded['success'])) {
+if ($forceSync) {
+    $response['decoded'] = $decoded;
+}
+
+if ($dbSaveError === null) {
     http_response_code(200);
 } else {
-    http_response_code(422); // Unprocessable Entity
+    http_response_code(500);
 }
 
 echo json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);

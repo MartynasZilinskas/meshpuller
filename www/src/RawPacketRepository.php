@@ -180,6 +180,142 @@ SQL;
         }
 
         $this->pdo->exec($sql);
+
+        // ---------------------------------------------------------------------
+        // 2. Sukuriame 'nodes' lentelę mazgų tapatybėms ir ADVERT duomenims
+        // ---------------------------------------------------------------------
+        if ($driver === 'pgsql') {
+            $nodesSql = <<<SQL
+            CREATE TABLE IF NOT EXISTS nodes (
+                id BIGSERIAL PRIMARY KEY,
+                public_key VARCHAR(64) NOT NULL UNIQUE,
+                node_name VARCHAR(128) NULL,
+                node_id VARCHAR(16) NULL,
+                advert_format VARCHAR(8) NULL,
+                advert_timestamp BIGINT NULL,
+                signature VARCHAR(128) NULL,
+                flags_raw VARCHAR(10) NULL,
+                node_type SMALLINT NULL,
+                node_type_str VARCHAR(32) NULL,
+                is_repeater BOOLEAN NOT NULL DEFAULT false,
+                is_chat BOOLEAN NOT NULL DEFAULT false,
+                is_room BOOLEAN NOT NULL DEFAULT false,
+                has_location BOOLEAN NOT NULL DEFAULT false,
+                latitude NUMERIC(10, 7) NULL,
+                longitude NUMERIC(10, 7) NULL,
+                battery_mv INT NULL,
+                battery_v NUMERIC(4, 2) NULL,
+                last_rssi NUMERIC(6, 2) NULL,
+                last_snr NUMERIC(6, 2) NULL,
+                flags_json JSONB NULL,
+                raw_advert_json JSONB NULL,
+                first_seen_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_seen_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_nodes_node_name ON nodes (node_name);
+            CREATE INDEX IF NOT EXISTS idx_nodes_node_id ON nodes (node_id);
+            CREATE INDEX IF NOT EXISTS idx_nodes_node_type ON nodes (node_type);
+            CREATE INDEX IF NOT EXISTS idx_nodes_is_repeater ON nodes (is_repeater);
+            CREATE INDEX IF NOT EXISTS idx_nodes_last_seen_at ON nodes (last_seen_at);
+SQL;
+        } else {
+            $nodesSql = <<<SQL
+            CREATE TABLE IF NOT EXISTS `nodes` (
+                `id`                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                `public_key`        VARCHAR(64) NOT NULL UNIQUE,
+                `node_name`         VARCHAR(128) NULL DEFAULT NULL,
+                `node_id`           VARCHAR(16) NULL DEFAULT NULL,
+                `advert_format`     VARCHAR(8) NULL DEFAULT NULL,
+                `advert_timestamp`  BIGINT UNSIGNED NULL DEFAULT NULL,
+                `signature`         VARCHAR(128) NULL DEFAULT NULL,
+                `flags_raw`         VARCHAR(10) NULL DEFAULT NULL,
+                `node_type`         TINYINT UNSIGNED NULL DEFAULT NULL,
+                `node_type_str`     VARCHAR(32) NULL DEFAULT NULL,
+                `is_repeater`       TINYINT(1) NOT NULL DEFAULT 0,
+                `is_chat`           TINYINT(1) NOT NULL DEFAULT 0,
+                `is_room`           TINYINT(1) NOT NULL DEFAULT 0,
+                `has_location`      TINYINT(1) NOT NULL DEFAULT 0,
+                `latitude`          DECIMAL(10, 7) NULL DEFAULT NULL,
+                `longitude`         DECIMAL(10, 7) NULL DEFAULT NULL,
+                `battery_mv`        INT UNSIGNED NULL DEFAULT NULL,
+                `battery_v`         DECIMAL(4, 2) NULL DEFAULT NULL,
+                `last_rssi`         DECIMAL(6, 2) NULL DEFAULT NULL,
+                `last_snr`          DECIMAL(6, 2) NULL DEFAULT NULL,
+                `flags_json`        JSON NULL,
+                `raw_advert_json`   JSON NULL,
+                `first_seen_at`     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `last_seen_at`      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX `idx_node_name` (`node_name`),
+                INDEX `idx_node_id` (`node_id`),
+                INDEX `idx_node_type` (`node_type`),
+                INDEX `idx_is_repeater` (`is_repeater`),
+                INDEX `idx_last_seen_at` (`last_seen_at`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+SQL;
+        }
+
+        $this->pdo->exec($nodesSql);
+
+        // ---------------------------------------------------------------------
+        // 3. Sukuriame 'telemetry' lentelę laiko eilučių metrikoms ir grafikams
+        // ---------------------------------------------------------------------
+        if ($driver === 'pgsql') {
+            $telemetrySql = <<<SQL
+            CREATE TABLE IF NOT EXISTS telemetry (
+                id BIGSERIAL PRIMARY KEY,
+                node_id VARCHAR(16) NOT NULL,
+                public_key VARCHAR(64) NULL,
+                raw_packet_id BIGINT NULL,
+                type VARCHAR(16) NOT NULL DEFAULT 'STATUS',
+                battery_mv INT NULL,
+                battery_v NUMERIC(4, 2) NULL,
+                temperature_c NUMERIC(4, 1) NULL,
+                rssi NUMERIC(6, 2) NULL,
+                snr NUMERIC(6, 2) NULL,
+                noise_floor SMALLINT NULL,
+                uptime_seconds INT NULL,
+                air_time_seconds INT NULL,
+                packets_recv INT NULL,
+                packets_sent INT NULL,
+                tx_queue_len SMALLINT NULL,
+                error_count SMALLINT NULL,
+                recorded_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_telemetry_node_time ON telemetry (node_id, recorded_at);
+            CREATE INDEX IF NOT EXISTS idx_telemetry_pubkey_time ON telemetry (public_key, recorded_at);
+            CREATE INDEX IF NOT EXISTS idx_telemetry_time ON telemetry (recorded_at);
+            CREATE INDEX IF NOT EXISTS idx_telemetry_raw_packet ON telemetry (raw_packet_id);
+SQL;
+        } else {
+            $telemetrySql = <<<SQL
+            CREATE TABLE IF NOT EXISTS `telemetry` (
+                `id`                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                `node_id`           VARCHAR(16) NOT NULL,
+                `public_key`        VARCHAR(64) NULL DEFAULT NULL,
+                `raw_packet_id`     BIGINT UNSIGNED NULL DEFAULT NULL,
+                `type`              VARCHAR(16) NOT NULL DEFAULT 'STATUS',
+                `battery_mv`        INT UNSIGNED NULL DEFAULT NULL,
+                `battery_v`         DECIMAL(4, 2) NULL DEFAULT NULL,
+                `temperature_c`     DECIMAL(4, 1) NULL DEFAULT NULL,
+                `rssi`              DECIMAL(6, 2) NULL DEFAULT NULL,
+                `snr`               DECIMAL(6, 2) NULL DEFAULT NULL,
+                `noise_floor`       SMALLINT NULL DEFAULT NULL,
+                `uptime_seconds`    INT UNSIGNED NULL DEFAULT NULL,
+                `air_time_seconds`  INT UNSIGNED NULL DEFAULT NULL,
+                `packets_recv`      INT UNSIGNED NULL DEFAULT NULL,
+                `packets_sent`      INT UNSIGNED NULL DEFAULT NULL,
+                `tx_queue_len`      SMALLINT UNSIGNED NULL DEFAULT NULL,
+                `error_count`       SMALLINT UNSIGNED NULL DEFAULT NULL,
+                `recorded_at`       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                INDEX `idx_telemetry_node_time` (`node_id`, `recorded_at`),
+                INDEX `idx_telemetry_pubkey_time` (`public_key`, `recorded_at`),
+                INDEX `idx_telemetry_time` (`recorded_at`),
+                INDEX `idx_telemetry_raw_packet` (`raw_packet_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+SQL;
+        }
+
+        $this->pdo->exec($telemetrySql);
     }
 
     /**
@@ -452,6 +588,14 @@ SQL;
                 $decoded = $decoder->decodeRawPacket($rawHex, $secret);
             }
 
+            // Jei pakete aptiktas ADVERT skelbimas – iškart atnaujiname/įrašome į 'nodes' lentelę
+            if (!empty($decoded['advert']) && is_array($decoded['advert']) && !empty($decoded['advert']['public_key'])) {
+                $this->upsertNodeFromAdvert($decoded['advert'], $record);
+            }
+
+            // Įrašome telemetrijos ir būsenos rodiklius į 'telemetry' lentelę grafikams ir statistikai
+            $this->extractAndSaveTelemetry($id, $decoded, $record);
+
             if (!empty($decoded['success'])) {
                 $this->completeProcessing($id, $decoded);
             } else {
@@ -526,5 +670,598 @@ SQL;
             $stmt = $this->pdo->query($fallback);
             return $stmt->fetch() ?: [];
         }
+    }
+
+    /**
+     * Įrašo arba atnaujina mazgo duomenis 'nodes' lentelėje iš gauto ADVERT skelbimo.
+     *
+     * @param array $advert Iškoduotas advert masyvas
+     * @param array|null $packetMeta Papildomi paketo metaduomenys (rssi, snr ir t.t.)
+     * @return bool
+     */
+    public function upsertNodeFromAdvert(array $advert, ?array $packetMeta = null): bool
+    {
+        $pubKey = strtolower(trim($advert['public_key'] ?? ''));
+        if (empty($pubKey)) {
+            return false;
+        }
+
+        $nodeName = $advert['node_name'] ?? null;
+        $nodeId = substr($pubKey, 0, 4);
+        $format = $advert['format'] ?? null;
+        $timestamp = isset($advert['timestamp']) ? (int)$advert['timestamp'] : null;
+        $signature = $advert['signature'] ?? null;
+
+        $flags = $advert['flags'] ?? [];
+        $flagsRaw = $flags['raw'] ?? null;
+        $nodeType = isset($flags['type']) ? (int)$flags['type'] : null;
+        $nodeTypeStr = $flags['type_str'] ?? null;
+        $isRepeater = !empty($flags['repeater']);
+        $isChat = !empty($flags['chat']);
+        $isRoom = !empty($flags['room']);
+        $hasLocation = !empty($flags['hasLocation']);
+
+        $lat = isset($advert['location']['latitude']) ? (float)$advert['location']['latitude'] : null;
+        $lon = isset($advert['location']['longitude']) ? (float)$advert['location']['longitude'] : null;
+
+        $batteryMv = isset($advert['battery']['voltage_mv']) ? (int)$advert['battery']['voltage_mv'] : null;
+        $batteryV = isset($advert['battery']['voltage_v']) ? (float)$advert['battery']['voltage_v'] : null;
+
+        $rssi = isset($packetMeta['rssi']) ? (float)$packetMeta['rssi'] : null;
+        $snr = isset($packetMeta['snr']) ? (float)$packetMeta['snr'] : null;
+
+        $flagsJson = !empty($flags) ? json_encode($flags, JSON_UNESCAPED_UNICODE) : null;
+        $rawAdvertJson = json_encode($advert, JSON_UNESCAPED_UNICODE);
+
+        $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+
+        if ($driver === 'pgsql') {
+            $sql = <<<SQL
+            INSERT INTO nodes (
+                public_key, node_name, node_id, advert_format, advert_timestamp, signature,
+                flags_raw, node_type, node_type_str, is_repeater, is_chat, is_room,
+                has_location, latitude, longitude, battery_mv, battery_v,
+                last_rssi, last_snr, flags_json, raw_advert_json, first_seen_at, last_seen_at
+            ) VALUES (
+                :public_key, :node_name, :node_id, :advert_format, :advert_timestamp, :signature,
+                :flags_raw, :node_type, :node_type_str, :is_repeater, :is_chat, :is_room,
+                :has_location, :latitude, :longitude, :battery_mv, :battery_v,
+                :last_rssi, :last_snr, :flags_json::jsonb, :raw_advert_json::jsonb, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            ON CONFLICT (public_key) DO UPDATE SET
+                node_name = COALESCE(EXCLUDED.node_name, nodes.node_name),
+                node_id = COALESCE(EXCLUDED.node_id, nodes.node_id),
+                advert_format = COALESCE(EXCLUDED.advert_format, nodes.advert_format),
+                advert_timestamp = COALESCE(EXCLUDED.advert_timestamp, nodes.advert_timestamp),
+                signature = COALESCE(EXCLUDED.signature, nodes.signature),
+                flags_raw = COALESCE(EXCLUDED.flags_raw, nodes.flags_raw),
+                node_type = COALESCE(EXCLUDED.node_type, nodes.node_type),
+                node_type_str = COALESCE(EXCLUDED.node_type_str, nodes.node_type_str),
+                is_repeater = EXCLUDED.is_repeater,
+                is_chat = EXCLUDED.is_chat,
+                is_room = EXCLUDED.is_room,
+                has_location = EXCLUDED.has_location,
+                latitude = COALESCE(EXCLUDED.latitude, nodes.latitude),
+                longitude = COALESCE(EXCLUDED.longitude, nodes.longitude),
+                battery_mv = COALESCE(EXCLUDED.battery_mv, nodes.battery_mv),
+                battery_v = COALESCE(EXCLUDED.battery_v, nodes.battery_v),
+                last_rssi = COALESCE(EXCLUDED.last_rssi, nodes.last_rssi),
+                last_snr = COALESCE(EXCLUDED.last_snr, nodes.last_snr),
+                flags_json = COALESCE(EXCLUDED.flags_json, nodes.flags_json),
+                raw_advert_json = EXCLUDED.raw_advert_json,
+                last_seen_at = CURRENT_TIMESTAMP
+SQL;
+        } else {
+            $sql = <<<SQL
+            INSERT INTO `nodes` (
+                `public_key`, `node_name`, `node_id`, `advert_format`, `advert_timestamp`, `signature`,
+                `flags_raw`, `node_type`, `node_type_str`, `is_repeater`, `is_chat`, `is_room`,
+                `has_location`, `latitude`, `longitude`, `battery_mv`, `battery_v`,
+                `last_rssi`, `last_snr`, `flags_json`, `raw_advert_json`, `first_seen_at`, `last_seen_at`
+            ) VALUES (
+                :public_key, :node_name, :node_id, :advert_format, :advert_timestamp, :signature,
+                :flags_raw, :node_type, :node_type_str, :is_repeater, :is_chat, :is_room,
+                :has_location, :latitude, :longitude, :battery_mv, :battery_v,
+                :last_rssi, :last_snr, :flags_json, :raw_advert_json, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            ON DUPLICATE KEY UPDATE
+                `node_name` = COALESCE(VALUES(`node_name`), `node_name`),
+                `node_id` = COALESCE(VALUES(`node_id`), `node_id`),
+                `advert_format` = COALESCE(VALUES(`advert_format`), `advert_format`),
+                `advert_timestamp` = COALESCE(VALUES(`advert_timestamp`), `advert_timestamp`),
+                `signature` = COALESCE(VALUES(`signature`), `signature`),
+                `flags_raw` = COALESCE(VALUES(`flags_raw`), `flags_raw`),
+                `node_type` = COALESCE(VALUES(`node_type`), `node_type`),
+                `node_type_str` = COALESCE(VALUES(`node_type_str`), `node_type_str`),
+                `is_repeater` = VALUES(`is_repeater`),
+                `is_chat` = VALUES(`is_chat`),
+                `is_room` = VALUES(`is_room`),
+                `has_location` = VALUES(`has_location`),
+                `latitude` = COALESCE(VALUES(`latitude`), `latitude`),
+                `longitude` = COALESCE(VALUES(`longitude`), `longitude`),
+                `battery_mv` = COALESCE(VALUES(`battery_mv`), `battery_mv`),
+                `battery_v` = COALESCE(VALUES(`battery_v`), `battery_v`),
+                `last_rssi` = COALESCE(VALUES(`last_rssi`), `last_rssi`),
+                `last_snr` = COALESCE(VALUES(`last_snr`), `last_snr`),
+                `flags_json` = COALESCE(VALUES(`flags_json`), `flags_json`),
+                `raw_advert_json` = VALUES(`raw_advert_json`),
+                `last_seen_at` = CURRENT_TIMESTAMP
+SQL;
+        }
+
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->bindValue(':public_key', $pubKey);
+        $stmt->bindValue(':node_name', $nodeName);
+        $stmt->bindValue(':node_id', $nodeId);
+        $stmt->bindValue(':advert_format', $format);
+        $stmt->bindValue(':advert_timestamp', $timestamp);
+        $stmt->bindValue(':signature', $signature);
+        $stmt->bindValue(':flags_raw', $flagsRaw);
+        $stmt->bindValue(':node_type', $nodeType);
+        $stmt->bindValue(':node_type_str', $nodeTypeStr);
+        $stmt->bindValue(':is_repeater', $isRepeater ? 1 : 0, PDO::PARAM_INT);
+        $stmt->bindValue(':is_chat', $isChat ? 1 : 0, PDO::PARAM_INT);
+        $stmt->bindValue(':is_room', $isRoom ? 1 : 0, PDO::PARAM_INT);
+        $stmt->bindValue(':has_location', $hasLocation ? 1 : 0, PDO::PARAM_INT);
+        $stmt->bindValue(':latitude', $lat);
+        $stmt->bindValue(':longitude', $lon);
+        $stmt->bindValue(':battery_mv', $batteryMv);
+        $stmt->bindValue(':battery_v', $batteryV);
+        $stmt->bindValue(':last_rssi', $rssi);
+        $stmt->bindValue(':last_snr', $snr);
+        $stmt->bindValue(':flags_json', $flagsJson);
+        $stmt->bindValue(':raw_advert_json', $rawAdvertJson);
+
+        return $stmt->execute();
+    }
+
+    /**
+     * Grąžina visų arba nurodyto tipo mazgų sąrašą iš 'nodes' lentelės.
+     */
+    public function getNodes(?string $type = null, int $limit = 100): array
+    {
+        $sql = "SELECT * FROM nodes";
+        $params = [];
+
+        if ($type === 'repeater') {
+            $sql .= " WHERE is_repeater = 1 OR is_repeater = true";
+        } elseif ($type === 'chat') {
+            $sql .= " WHERE is_chat = 1 OR is_chat = true";
+        } elseif ($type === 'room') {
+            $sql .= " WHERE is_room = 1 OR is_room = true";
+        }
+
+        $sql .= " ORDER BY last_seen_at DESC LIMIT " . (int)$limit;
+        $stmt = $this->pdo->query($sql);
+        return $stmt->fetchAll() ?: [];
+    }
+
+    /**
+     * Grąžina 'nodes' lentelės statistiką
+     */
+    public function getNodeStats(): array
+    {
+        try {
+            $sql = <<<SQL
+            SELECT 
+                COUNT(*) AS total_nodes,
+                SUM(CASE WHEN is_repeater = 1 OR is_repeater = true THEN 1 ELSE 0 END) AS repeaters_count,
+                SUM(CASE WHEN is_chat = 1 OR is_chat = true THEN 1 ELSE 0 END) AS chat_nodes_count,
+                SUM(CASE WHEN is_room = 1 OR is_room = true THEN 1 ELSE 0 END) AS rooms_count,
+                SUM(CASE WHEN has_location = 1 OR has_location = true THEN 1 ELSE 0 END) AS nodes_with_location
+            FROM nodes
+SQL;
+            $stmt = $this->pdo->query($sql);
+            return $stmt->fetch() ?: [];
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    /**
+     * Nuskenuoja jau esamus 'raw_packets' įrašus ir užpildo 'nodes' lentelę
+     */
+    public function backfillNodesFromRawPackets(MeshCoreDecoder $decoder): int
+    {
+        $stmt = $this->pdo->query("SELECT id, raw_hex, rssi, snr, decoded_json FROM {$this->table} ORDER BY id ASC");
+        $count = 0;
+
+        while ($row = $stmt->fetch()) {
+            $advert = null;
+            if (!empty($row['decoded_json'])) {
+                $dec = json_decode($row['decoded_json'], true);
+                if (!empty($dec['advert'])) {
+                    $advert = $dec['advert'];
+                }
+            }
+
+            if (!$advert && !empty($row['raw_hex'])) {
+                $dec = $decoder->decodeRawPacket($row['raw_hex']);
+                if (!empty($dec['advert'])) {
+                    $advert = $dec['advert'];
+                }
+            }
+
+            if ($advert && !empty($advert['public_key'])) {
+                if ($this->upsertNodeFromAdvert($advert, $row)) {
+                    $count++;
+                }
+            }
+        }
+
+        return $count;
+    }
+
+    /**
+     * Ištraukia telemetrijos rodiklius iš iškoduoto paketo ir įrašo į 'telemetry' lentelę.
+     * Išsaugo tik svarbius rodiklius grafikams ir statistikai (be sunkių JSON).
+     *
+     * @param int $rawPacketId Nuoroda į raw_packets įrašo ID
+     * @param array $decoded Iškoduoto paketo duomenys iš MeshCoreDecoder
+     * @param array|null $record Originalus raw_packets įrašas iš DB
+     * @return int|null Sukurto telemetrijos įrašo ID arba null
+     */
+    public function extractAndSaveTelemetry(int $rawPacketId, array $decoded, ?array $record = null): ?int
+    {
+        $nodeId = null;
+        $publicKey = null;
+        $type = null;
+
+        $batteryMv = null;
+        $batteryV = null;
+        $temperatureC = null;
+        $uptimeSeconds = null;
+        $airTimeSeconds = null;
+        $noiseFloor = null;
+        $rssi = isset($record['rssi']) ? (float)$record['rssi'] : null;
+        $snr = isset($record['snr']) ? (float)$record['snr'] : null;
+        $packetsRecv = null;
+        $packetsSent = null;
+        $txQueueLen = null;
+        $errorCount = null;
+        $recordedAt = null;
+
+        // 1. Tikriname ar yra REPEATER_STATS (Būsenos atsakas į REQ_TYPE_GET_STATUS)
+        $parsed = $decoded['encryption']['parsed_data'] ?? ($decoded['repeater_stats'] ?? null);
+        if (!empty($parsed['repeater_stats'])) {
+            $stats = $parsed['repeater_stats'];
+            $type = 'STATUS';
+            $batteryMv = isset($stats['battery_mv']) ? (int)$stats['battery_mv'] : null;
+            $batteryV = isset($stats['battery_volts']) ? (float)$stats['battery_volts'] : ($batteryMv ? round($batteryMv / 1000.0, 2) : null);
+            $uptimeSeconds = isset($stats['uptime_seconds']) ? (int)$stats['uptime_seconds'] : null;
+            $airTimeSeconds = isset($stats['air_time_seconds']) ? (int)$stats['air_time_seconds'] : null;
+            $noiseFloor = isset($stats['noise_floor_dbm']) ? (int)$stats['noise_floor_dbm'] : null;
+            $rssi = isset($stats['last_rssi_dbm']) ? (float)$stats['last_rssi_dbm'] : $rssi;
+            $snr = isset($stats['last_snr_db']) ? (float)$stats['last_snr_db'] : $snr;
+            $packetsRecv = isset($stats['packets_received']) ? (int)$stats['packets_received'] : null;
+            $packetsSent = isset($stats['packets_sent']) ? (int)$stats['packets_sent'] : null;
+            $txQueueLen = isset($stats['tx_queue_len']) ? (int)$stats['tx_queue_len'] : null;
+            $errorCount = isset($stats['error_events']) ? (int)$stats['error_events'] : null;
+        }
+        // 2. Tikriname ar yra CAYENNE_LPP_TELEMETRY (Telemetrijos jutikliai)
+        elseif (!empty($parsed['sensors'])) {
+            $type = 'TELEMETRY';
+            foreach ($parsed['sensors'] as $sensor) {
+                if (isset($sensor['temperature_c']) && $temperatureC === null) {
+                    $temperatureC = (float)$sensor['temperature_c'];
+                }
+                if (isset($sensor['voltage_mv']) && $batteryMv === null) {
+                    $batteryMv = (int)$sensor['voltage_mv'];
+                    $batteryV = (float)($sensor['voltage_v'] ?? round($batteryMv / 1000.0, 2));
+                }
+            }
+        }
+        // 3. Tikriname ar tai ADVERT (Mazgo periodinis skelbimas)
+        elseif (!empty($decoded['advert'])) {
+            $adv = $decoded['advert'];
+            $type = 'ADVERT';
+            $publicKey = strtolower($adv['public_key'] ?? '');
+            $nodeId = substr($publicKey, 0, 4);
+            if (!empty($adv['battery']['voltage_mv'])) {
+                $batteryMv = (int)$adv['battery']['voltage_mv'];
+                $batteryV = isset($adv['battery']['voltage_v']) ? (float)$adv['battery']['voltage_v'] : round($batteryMv / 1000.0, 2);
+            }
+            if (!empty($adv['timestamp'])) {
+                $recordedAt = date('Y-m-d H:i:s', $adv['timestamp']);
+            }
+        }
+
+        // Jei jokių telemetrijos ar būsenos rodiklių nėra – įrašo neformuojame
+        if ($type === null) {
+            return null;
+        }
+
+        // Mazgo tapatybės nustatymas
+        if (empty($nodeId)) {
+            if (!empty($record['sender_name'])) {
+                $nodeId = $record['sender_name'];
+            } elseif (!empty($record['sender_public_key'])) {
+                $publicKey = strtolower($record['sender_public_key']);
+                $nodeId = substr($publicKey, 0, 4);
+            } elseif (!empty($record['target_public_key'])) {
+                $publicKey = strtolower($record['target_public_key']);
+                $nodeId = substr($publicKey, 0, 4);
+            } elseif (!empty($record['target_name'])) {
+                $nodeId = $record['target_name'];
+            } else {
+                $rawHex = $record['raw_hex'] ?? ($decoded['raw_hex'] ?? '');
+                if (strlen($rawHex) >= 6) {
+                    $nodeId = strtolower(substr($rawHex, 2, 4));
+                } else {
+                    $nodeId = 'node';
+                }
+            }
+        }
+
+        // Bandome surasti pilną public_key iš 'nodes' lentelės, jei žinomas tik trumpasis ID
+        if (empty($publicKey) && !empty($nodeId) && strlen($nodeId) === 4) {
+            try {
+                $nStmt = $this->pdo->prepare("SELECT public_key FROM nodes WHERE node_id = :nid OR public_key LIKE :pref LIMIT 1");
+                $nStmt->execute([':nid' => $nodeId, ':pref' => $nodeId . '%']);
+                $nRow = $nStmt->fetch();
+                if ($nRow) {
+                    $publicKey = $nRow['public_key'];
+                }
+            } catch (\Throwable $ignored) {}
+        }
+
+        if (empty($recordedAt)) {
+            $recordedAt = !empty($record['created_at']) ? $record['created_at'] : date('Y-m-d H:i:s');
+        }
+
+        return $this->insertTelemetryRecord([
+            'node_id'          => $nodeId,
+            'public_key'       => $publicKey,
+            'raw_packet_id'    => $rawPacketId,
+            'type'             => $type,
+            'battery_mv'       => $batteryMv,
+            'battery_v'        => $batteryV,
+            'temperature_c'    => $temperatureC,
+            'rssi'             => $rssi,
+            'snr'              => $snr,
+            'noise_floor'      => $noiseFloor,
+            'uptime_seconds'   => $uptimeSeconds,
+            'air_time_seconds' => $airTimeSeconds,
+            'packets_recv'     => $packetsRecv,
+            'packets_sent'     => $packetsSent,
+            'tx_queue_len'     => $txQueueLen,
+            'error_count'      => $errorCount,
+            'recorded_at'      => $recordedAt,
+        ]);
+    }
+
+    /**
+     * Įrašo telemetrijos eilutę į 'telemetry' lentelę.
+     * Užkerta kelią dubliavimui pagal raw_packet_id.
+     */
+    public function insertTelemetryRecord(array $data): ?int
+    {
+        if (!empty($data['raw_packet_id'])) {
+            $checkStmt = $this->pdo->prepare("SELECT id FROM telemetry WHERE raw_packet_id = :rpid LIMIT 1");
+            $checkStmt->execute([':rpid' => $data['raw_packet_id']]);
+            if ($existing = $checkStmt->fetch()) {
+                return (int)$existing['id'];
+            }
+        }
+
+        $sql = <<<SQL
+        INSERT INTO telemetry (
+            node_id, public_key, raw_packet_id, type,
+            battery_mv, battery_v, temperature_c,
+            rssi, snr, noise_floor,
+            uptime_seconds, air_time_seconds,
+            packets_recv, packets_sent, tx_queue_len, error_count,
+            recorded_at
+        ) VALUES (
+            :node_id, :public_key, :raw_packet_id, :type,
+            :battery_mv, :battery_v, :temperature_c,
+            :rssi, :snr, :noise_floor,
+            :uptime_seconds, :air_time_seconds,
+            :packets_recv, :packets_sent, :tx_queue_len, :error_count,
+            :recorded_at
+        )
+SQL;
+
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->bindValue(':node_id', $data['node_id']);
+        $stmt->bindValue(':public_key', $data['public_key']);
+        $stmt->bindValue(':raw_packet_id', $data['raw_packet_id']);
+        $stmt->bindValue(':type', $data['type'] ?? 'STATUS');
+        $stmt->bindValue(':battery_mv', $data['battery_mv']);
+        $stmt->bindValue(':battery_v', $data['battery_v']);
+        $stmt->bindValue(':temperature_c', $data['temperature_c']);
+        $stmt->bindValue(':rssi', $data['rssi']);
+        $stmt->bindValue(':snr', $data['snr']);
+        $stmt->bindValue(':noise_floor', $data['noise_floor']);
+        $stmt->bindValue(':uptime_seconds', $data['uptime_seconds']);
+        $stmt->bindValue(':air_time_seconds', $data['air_time_seconds']);
+        $stmt->bindValue(':packets_recv', $data['packets_recv']);
+        $stmt->bindValue(':packets_sent', $data['packets_sent']);
+        $stmt->bindValue(':tx_queue_len', $data['tx_queue_len']);
+        $stmt->bindValue(':error_count', $data['error_count']);
+        $stmt->bindValue(':recorded_at', $data['recorded_at'] ?? date('Y-m-d H:i:s'));
+
+        $stmt->execute();
+        return (int)$this->pdo->lastInsertId();
+    }
+
+    /**
+     * Grąžina telemetrijos istoriją konkrečiam mazgui (grafikų braižymui).
+     */
+    public function getTelemetryHistory(string $nodeId, ?string $from = null, ?string $to = null, int $limit = 500): array
+    {
+        $sql = "SELECT * FROM telemetry WHERE (node_id = :nid OR public_key = :pk)";
+        $params = [':nid' => $nodeId, ':pk' => $nodeId];
+
+        if ($from !== null) {
+            $sql .= " AND recorded_at >= :from";
+            $params[':from'] = $from;
+        }
+        if ($to !== null) {
+            $sql .= " AND recorded_at <= :to";
+            $params[':to'] = $to;
+        }
+
+        $sql .= " ORDER BY recorded_at ASC LIMIT " . (int)$limit;
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll() ?: [];
+    }
+
+    /**
+     * Grąžina 'telemetry' lentelės bendrą statistiką.
+     */
+    public function getTelemetryStats(): array
+    {
+        try {
+            $sql = <<<SQL
+            SELECT 
+                COUNT(*) AS total_points,
+                COUNT(DISTINCT node_id) AS monitored_nodes,
+                MAX(recorded_at) AS last_telemetry_at
+            FROM telemetry
+SQL;
+            $stmt = $this->pdo->query($sql);
+            return $stmt->fetch() ?: [];
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    /**
+     * Nuskenuoja jau esamus 'raw_packets' įrašus ir užpildo 'telemetry' lentelę.
+     */
+    public function backfillTelemetryFromRawPackets(MeshCoreDecoder $decoder): int
+    {
+        $stmt = $this->pdo->query("SELECT * FROM {$this->table} ORDER BY id ASC");
+        $count = 0;
+
+        while ($row = $stmt->fetch()) {
+            $id = (int)$row['id'];
+            $decoded = null;
+
+            if (!empty($row['decoded_json'])) {
+                $decoded = json_decode($row['decoded_json'], true);
+            }
+
+            if (!$decoded && !empty($row['raw_hex'])) {
+                $decoded = $decoder->decodeRawPacket($row['raw_hex'], $row['shared_secret_hex'] ?? null);
+            }
+
+            if ($decoded) {
+                $savedId = $this->extractAndSaveTelemetry($id, $decoded, $row);
+                if ($savedId !== null) {
+                    $count++;
+                }
+            }
+        }
+
+        return $count;
+    }
+
+    /**
+     * Grąžina visus kartotuvus (is_repeater = true) kartu su jų koordinatėmis,
+     * paskutinio matymo laiku ir paskutine gauta telemetrija (temperatūra °C, baterijos įtampa V).
+     *
+     * @param bool $repeatersOnly Ar filtruoti tik kartotuvus (pagal nutylėjimą true)
+     * @param int $limit Maksimalus įrašų skaičius
+     * @return array Kartotuvų sąrašas
+     */
+    public function getRepeatersWithLatestTelemetry(bool $repeatersOnly = true, int $limit = 500): array
+    {
+        $whereClause = $repeatersOnly ? "WHERE (n.is_repeater = 1 OR n.is_repeater = true)" : "";
+
+        $sql = <<<SQL
+        SELECT 
+            n.id,
+            n.node_id,
+            n.node_name,
+            n.public_key,
+            n.advert_format,
+            n.is_repeater,
+            n.has_location,
+            n.latitude,
+            n.longitude,
+            n.battery_v AS advert_battery_v,
+            n.battery_mv AS advert_battery_mv,
+            n.last_rssi AS node_last_rssi,
+            n.last_snr AS node_last_snr,
+            n.first_seen_at,
+            n.last_seen_at,
+            (
+                SELECT t.battery_v 
+                FROM telemetry t 
+                WHERE (t.node_id = n.node_id OR (n.public_key IS NOT NULL AND t.public_key = n.public_key)) 
+                  AND t.battery_v IS NOT NULL 
+                ORDER BY t.recorded_at DESC, t.id DESC 
+                LIMIT 1
+            ) AS last_battery_v,
+            (
+                SELECT t.temperature_c 
+                FROM telemetry t 
+                WHERE (t.node_id = n.node_id OR (n.public_key IS NOT NULL AND t.public_key = n.public_key)) 
+                  AND t.temperature_c IS NOT NULL 
+                ORDER BY t.recorded_at DESC, t.id DESC 
+                LIMIT 1
+            ) AS last_temperature_c,
+            (
+                SELECT t.recorded_at 
+                FROM telemetry t 
+                WHERE (t.node_id = n.node_id OR (n.public_key IS NOT NULL AND t.public_key = n.public_key)) 
+                ORDER BY t.recorded_at DESC, t.id DESC 
+                LIMIT 1
+            ) AS last_telemetry_at
+        FROM nodes n
+        {$whereClause}
+        ORDER BY n.last_seen_at DESC
+        LIMIT {$limit}
+SQL;
+
+        try {
+            $stmt = $this->pdo->query($sql);
+            $rows = $stmt->fetchAll() ?: [];
+        } catch (\Throwable $e) {
+            return [];
+        }
+
+        $result = [];
+        foreach ($rows as $row) {
+            $hasLoc = !empty($row['has_location']) && ($row['latitude'] !== null || $row['longitude'] !== null);
+            $lat = ($row['latitude'] !== null) ? (float)$row['latitude'] : null;
+            $lon = ($row['longitude'] !== null) ? (float)$row['longitude'] : null;
+
+            // Baterijos įkrova V: pirmenybė iš 'telemetry' lentelės, fallback į 'nodes' (ADVERT)
+            $batteryV = ($row['last_battery_v'] !== null) 
+                ? (float)$row['last_battery_v'] 
+                : (($row['advert_battery_v'] !== null) ? (float)$row['advert_battery_v'] : null);
+
+            $tempC = ($row['last_temperature_c'] !== null) ? (float)$row['last_temperature_c'] : null;
+
+            $result[] = [
+                'name'         => !empty($row['node_name']) ? $row['node_name'] : $row['node_id'],
+                'node_id'      => $row['node_id'],
+                'public_key'   => $row['public_key'],
+                'location'     => [
+                    'latitude'     => $lat,
+                    'longitude'    => $lon,
+                    'has_location' => $hasLoc,
+                ],
+                'latitude'      => $lat,
+                'longitude'     => $lon,
+                'has_location'  => $hasLoc,
+                'last_seen_at'  => $row['last_seen_at'],
+                'temperature_c' => $tempC,
+                'battery_v'     => $batteryV,
+                'telemetry'     => [
+                    'temperature_c'     => $tempC,
+                    'battery_v'         => $batteryV,
+                    'last_telemetry_at' => $row['last_telemetry_at'],
+                ],
+                'is_repeater'   => (bool)$row['is_repeater'],
+                'first_seen_at' => $row['first_seen_at'],
+            ];
+        }
+
+        return $result;
     }
 }

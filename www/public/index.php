@@ -4,8 +4,8 @@ $requestUri = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
 $path       = rtrim($requestUri, '/');
 $method     = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
-// Nukreipiame /api/raw arba /raw tiesiai į pilną app.php su DB saugykla
-if (preg_match('#/(api/)?raw$#', $path) || $path === '' || $path === '/') {
+// Nukreipiame /api/raw, /api/nodes arba /raw tiesiai į pilną app.php su DB saugykla
+if (preg_match('#/(api/)?(raw|nodes)$#', $path) || $path === '' || $path === '/') {
     require_once __DIR__ . '/../src/app.php';
     exit;
 }

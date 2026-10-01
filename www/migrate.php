@@ -2,10 +2,11 @@
 
 /**
  * Duomenų Bazės Migracijos Skriptas (MySQL / PostgreSQL)
+ * Sukuria ir atnaujina 'raw_packets', 'nodes' bei 'telemetry' lenteles ir indeksus.
  *
  * Paleidimas:
  *   Komandinėje eilutėje: php www/migrate.php
- *   Naršyklėje:           https://telemetry.ite.lt/migrate.php (arba /api/migrate.php)
+ *   Naršyklėje:           https://telemetry.ite.lt/migrate.php
  */
 
 if (file_exists(__DIR__ . '/vendor/autoload.php')) {
@@ -15,6 +16,7 @@ if (file_exists(__DIR__ . '/vendor/autoload.php')) {
     require_once __DIR__ . '/src/RawPacketRepository.php';
 }
 
+use MeshCore\MeshCoreDecoder;
 use MeshCore\RawPacketRepository;
 
 $isCli = (php_sapi_name() === 'cli');
@@ -39,8 +41,9 @@ function output(string $msg, string $type = 'info'): void {
 }
 
 try {
-    output("Pradedama migracija...", "info");
+    output("Pradedama duomenų bazės migracija...", "info");
 
+    $decoder = new MeshCoreDecoder();
     $repo = new RawPacketRepository();
     $pdo = $repo->getPdo();
     $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
@@ -51,50 +54,76 @@ try {
     output("Vartotojas: " . RawPacketRepository::DEFAULT_CONFIG['user'], "info");
     output("Duomenų bazė: " . RawPacketRepository::DEFAULT_CONFIG['dbname'], "info");
 
-    // Sukuriame lentelę
+    // 1. Sukuriame lenteles 'raw_packets', 'nodes' ir 'telemetry' bei indeksus
     $repo->createTableIfNotExists();
-    output("Lentelė 'raw_packets' ir indeksai sėkmingai patikrinti / sukurti!", "success");
+    output("Lentelės 'raw_packets', 'nodes' ir 'telemetry' bei jų indeksai sėkmingai patikrinti / sukurti!", "success");
 
-    // Patikriname lentelės stulpelius
-    if ($driver === 'mysql') {
-        $stmt = $pdo->query("DESCRIBE raw_packets");
-        $columns = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    // 2. Patikriname visų trijų lentelių stulpelius
+    $tablesToCheck = ['raw_packets', 'nodes', 'telemetry'];
 
-        if (!$isCli) {
-            echo "<div class='card'><h3>📋 Lentelės 'raw_packets' struktūra (MySQL):</h3><table>";
-            echo "<tr><th>Field</th><th>Type</th><th>Null</th><th>Key</th><th>Default</th><th>Extra</th></tr>";
-            foreach ($columns as $col) {
-                echo "<tr><td>{$col['Field']}</td><td>{$col['Type']}</td><td>{$col['Null']}</td><td>{$col['Key']}</td><td>{$col['Default']}</td><td>{$col['Extra']}</td></tr>";
+    foreach ($tablesToCheck as $tbl) {
+        if ($driver === 'mysql') {
+            $stmt = $pdo->query("DESCRIBE {$tbl}");
+            $columns = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            if (!$isCli) {
+                echo "<div class='card'><h3>📋 Lentelės '{$tbl}' struktūra (MySQL):</h3><table>";
+                echo "<tr><th>Field</th><th>Type</th><th>Null</th><th>Key</th><th>Default</th><th>Extra</th></tr>";
+                foreach ($columns as $col) {
+                    echo "<tr><td>{$col['Field']}</td><td>{$col['Type']}</td><td>{$col['Null']}</td><td>{$col['Key']}</td><td>{$col['Default']}</td><td>{$col['Extra']}</td></tr>";
+                }
+                echo "</table></div>";
+            } else {
+                echo "\n📋 Lentelės '{$tbl}' stulpeliai:\n";
+                foreach ($columns as $col) {
+                    echo sprintf("  - %-20s %-25s Default: %s\n", $col['Field'], $col['Type'], $col['Default'] ?? 'NULL');
+                }
             }
-            echo "</table></div>";
+
+            $idxStmt = $pdo->query("SHOW INDEX FROM {$tbl}");
+            $indexes = $idxStmt->fetchAll(PDO::FETCH_ASSOC);
+            $idxNames = array_unique(array_column($indexes, 'Key_name'));
+            output("Indeksai lentelėje '{$tbl}': " . implode(', ', $idxNames), "info");
+
         } else {
-            echo "\n📋 Lentelės 'raw_packets' stulpeliai:\n";
-            foreach ($columns as $col) {
-                echo sprintf("  - %-20s %-25s Default: %s\n", $col['Field'], $col['Type'], $col['Default'] ?? 'NULL');
-            }
-        }
-
-        $idxStmt = $pdo->query("SHOW INDEX FROM raw_packets");
-        $indexes = $idxStmt->fetchAll(PDO::FETCH_ASSOC);
-        $idxNames = array_unique(array_column($indexes, 'Key_name'));
-        output("\nIndeksai: " . implode(', ', $idxNames), "info");
-
-    } else {
-        $stmt = $pdo->query("SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = 'raw_packets'");
-        $columns = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        if ($isCli) {
-            echo "\n📋 Lentelės 'raw_packets' stulpeliai (PostgreSQL):\n";
-            foreach ($columns as $col) {
-                echo sprintf("  - %-20s %-20s\n", $col['column_name'], $col['data_type']);
+            $stmt = $pdo->query("SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = '{$tbl}'");
+            $columns = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            if ($isCli) {
+                echo "\n📋 Lentelės '{$tbl}' stulpeliai (PostgreSQL):\n";
+                foreach ($columns as $col) {
+                    echo sprintf("  - %-20s %-20s\n", $col['column_name'], $col['data_type']);
+                }
             }
         }
     }
 
-    $stats = $repo->getStats();
-    output("\nEsama lentelės būsena:", "info");
-    output("  Viso įrašų: " . ($stats['total_count'] ?? 0), "info");
-    output("  Laukia apdorojimo: " . ($stats['pending_never_processed'] ?? 0), "info");
-    output("  Apdorota: " . ($stats['completed_count'] ?? 0), "info");
+    // 3. Automatinis 'nodes' užpildymas iš esamų 'raw_packets' ADVERT skelbimų (jei tokių yra)
+    $backfilledNodes = $repo->backfillNodesFromRawPackets($decoder);
+    if ($backfilledNodes > 0) {
+        output("Aptikta ir perkelta į 'nodes' lentelę esamų skelbimų: {$backfilledNodes}", "success");
+    }
+
+    // 4. Automatinis 'telemetry' užpildymas iš esamų 'raw_packets' paketų (STATUS, TELEMETRY, ADVERT)
+    $backfilledTelemetry = $repo->backfillTelemetryFromRawPackets($decoder);
+    if ($backfilledTelemetry > 0) {
+        output("Aptikta ir perkelta į 'telemetry' lentelę esamų telemetrijos taškų: {$backfilledTelemetry}", "success");
+    }
+
+    // 5. Statistikos išvedimas
+    $rawStats = $repo->getStats();
+    $nodeStats = $repo->getNodeStats();
+    $telemetryStats = $repo->getTelemetryStats();
+
+    output("\n📊 Esama sistemos būsena:", "info");
+    output("  [raw_packets] Iš viso paketų: " . ($rawStats['total_count'] ?? 0), "info");
+    output("  [raw_packets] Laukia eilėje: " . ($rawStats['pending_never_processed'] ?? 0), "info");
+    output("  [raw_packets] Apdorota: " . ($rawStats['completed_count'] ?? 0), "info");
+    output("  [nodes] Iš viso žinomų mazgų: " . ($nodeStats['total_nodes'] ?? 0), "info");
+    output("  [nodes] Kartotuvų (repeaters): " . ($nodeStats['repeaters_count'] ?? 0), "info");
+    output("  [nodes] Su GPS koordinatėmis: " . ($nodeStats['nodes_with_location'] ?? 0), "info");
+    output("  [telemetry] Iš viso telemetrijos taškų: " . ($telemetryStats['total_points'] ?? 0), "info");
+    output("  [telemetry] Stebimi unikalūs mazgai: " . ($telemetryStats['monitored_nodes'] ?? 0), "info");
+    output("  [telemetry] Paskutinis telemetrijos įrašas: " . ($telemetryStats['last_telemetry_at'] ?? 'nėra'), "info");
 
     output("\n🎉 Migracija baigta sėkmingai!", "success");
 

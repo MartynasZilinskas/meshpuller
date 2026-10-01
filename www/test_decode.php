@@ -100,6 +100,48 @@ try {
     // Pažymime sėkmingą apdorojimą
     $testRepo->completeProcessing((int)$first['id'], ['status' => 'OK']);
     echo "Įrašas #{$first['id']} apdorotas -> processed = true!\n";
+
+    // 4. Testuojame 'nodes' ir 'telemetry' bei getRepeatersWithLatestTelemetry
+    echo "\n4. Testuojame kartotuvų ir telemetrijos ištraukimą:\n";
+    $testRepo->upsertNodeFromAdvert([
+        'format'     => 'A',
+        'public_key' => 'b9ddd788b7a59eab40eaa49a2534fa9e7fc0ef7d920ef4811139998cddd631db',
+        'node_name'  => 'LT-LM Tilžė B9DD',
+        'flags'      => [
+            'raw'         => '0x92',
+            'type'        => 2,
+            'type_str'    => 'repeater',
+            'repeater'    => true,
+            'hasLocation' => true,
+        ],
+        'location'   => [
+            'latitude'  => 55.705207,
+            'longitude' => 21.145874,
+        ],
+        'battery'    => [
+            'voltage_mv' => 4120,
+            'voltage_v'  => 4.12,
+        ]
+    ], ['rssi' => -85.5, 'snr' => 9.75]);
+
+    // Įrašome telemetrijos įrašą su temperatūra
+    $testRepo->insertTelemetryRecord([
+        'node_id'       => 'b9dd',
+        'public_key'    => 'b9ddd788b7a59eab40eaa49a2534fa9e7fc0ef7d920ef4811139998cddd631db',
+        'raw_packet_id' => 999,
+        'type'          => 'TELEMETRY',
+        'battery_v'     => 4.15,
+        'battery_mv'    => 4150,
+        'temperature_c' => 22.8,
+        'rssi'          => -84.0,
+        'snr'           => 10.2,
+        'recorded_at'   => date('Y-m-d H:i:s'),
+    ]);
+
+    $repeaters = $testRepo->getRepeatersWithLatestTelemetry();
+    echo "Gauti kartotuvai iš getRepeatersWithLatestTelemetry():\n";
+    echo json_encode($repeaters, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n";
+
 } catch (\Throwable $e) {
     echo "DB testavimo klaida: " . $e->getMessage() . "\n";
 }

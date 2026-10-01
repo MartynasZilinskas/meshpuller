@@ -161,9 +161,10 @@ void sendMeshCorePath(size_t repIdx);
 void sendMeshCoreStatusRequest(size_t repIdx);
 void sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const uint8_t* payload, size_t payloadLen,
                      const char* targetName = nullptr, const char* targetPubKey = nullptr, const uint8_t* sharedSecret = nullptr);
-bool hexStringToBytes(const char* hexStr, uint8_t* outBytes, size_t maxLen, size_t &outLen);
-void printHexBuffer(const uint8_t* buf, size_t len);
 void yieldDelay(unsigned long ms);
+uint8_t getPathLengthByte(uint8_t hops = 0);
+uint16_t getScopeTransportCode1();
+uint8_t getDefaultFloodRouteType();
 
 // Foninės API siuntimo eilės ir užduoties kintamieji (Core 0):
 struct QueuedApiMessage {
@@ -198,6 +199,13 @@ void setup() {
                 TELEMETRY_REQUEST_INTERVAL_MS / 60000, TELEMETRY_REQUEST_INTERVAL_MS);
   Serial.printf("[Info] API Bazinis URL: %s\n", API_BASE_URL);
   Serial.printf("  * RAW trafiko endpoint:  %s%s (visi įrašai siunčiami čia ir apdorojami serveryje)\n", API_BASE_URL, API_ENDPOINT_RAW);
+  Serial.printf("[Info] Mazgų kelio (Path) hash: %u bitai (%u baitai)\n", PATH_HASH_BITS, (unsigned int)(PATH_HASH_BITS / 8));
+  if (ENABLE_SCOPE) {
+    Serial.printf("[Info] Regioninis Scope: ĮJUNGTAS ('%s' -> Code1: 0x%04X, Code2: 0x%04X)\n",
+                  SCOPE_NAME, getScopeTransportCode1(), SCOPE_CODE_2);
+  } else {
+    Serial.println("[Info] Regioninis Scope: IŠJUNGTAS (Unscoped flood)");
+  }
 
   // 1. Generuojame unikalų ESP32 mazgo raktą (tik save – kartotuvų raktai generuojami po JSON parsisiuntimo)
   generateSelfIdentity();
@@ -583,6 +591,40 @@ void initMonitoredNodeKeys() {
 }
 
 // ================================================================================
+// 🌐 MARŠRUTIZAVIMO IR SCOPE PAGALBINĖS FUNKCIJOS
+// ================================================================================
+
+// Apskaičiuoja oficialų MeshCore path_length_byte pagal nustatytą PATH_HASH_BITS:
+// Bits 7:6 = (hash_size_bytes - 1): 00 -> 1B (8b), 01 -> 2B (16b), 10 -> 3B (24b)
+// Bits 5:0 = šuolių skaičius (hops: 0..63)
+uint8_t getPathLengthByte(uint8_t hops) {
+  uint8_t hashSize = 1;
+  if (PATH_HASH_BITS == 16) hashSize = 2;
+  else if (PATH_HASH_BITS == 24) hashSize = 3;
+  return ((hashSize - 1) << 6) | (hops & 0x3F);
+}
+
+// Apskaičiuoja 16 bitų Transport Code 1 iš SCOPE_NAME (arba grąžina fiksuotą SCOPE_CODE_1)
+uint16_t getScopeTransportCode1() {
+  if (SCOPE_CODE_1 != 0x0000) return SCOPE_CODE_1;
+  if (SCOPE_NAME == nullptr || strlen(SCOPE_NAME) == 0) return 0x0000;
+  uint8_t hash[32];
+  const mbedtls_md_info_t* mdInfo = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+  if (mdInfo != nullptr) {
+    mbedtls_md(mdInfo, (const unsigned char*)SCOPE_NAME, strlen(SCOPE_NAME), hash);
+    return (uint16_t)(hash[0] | (hash[1] << 8));
+  }
+  return 0x0000;
+}
+
+// Grąžina numatytąjį potinklio transliacijos tipą:
+// Jei ENABLE_SCOPE įjungtas -> ROUTE_TYPE_TRANSPORT_FLOOD (0x00)
+// Jei išjungtas -> ROUTE_TYPE_FLOOD (0x01)
+uint8_t getDefaultFloodRouteType() {
+  return ENABLE_SCOPE ? ROUTE_TYPE_TRANSPORT_FLOOD : ROUTE_TYPE_FLOOD;
+}
+
+// ================================================================================
 // 📤 MESHCORE PAKETŲ SIUNTIMAS
 // ================================================================================
 
@@ -591,24 +633,45 @@ void sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const
   uint8_t packet[256];
   size_t idx = 0;
 
+  // 1. Header baitas
   packet[idx++] = header;
-  packet[idx++] = pathLen;
 
-  if (path != nullptr && pathLen > 0) {
-    memcpy(&packet[idx], path, pathLen);
-    idx += pathLen;
+  // 2. Transport kodai (Scope palaikymas, jei ROUTE_TYPE_TRANSPORT_FLOOD arba ROUTE_TYPE_TRANSPORT_DIRECT)
+  uint8_t rType = header & 0x03;
+  if (rType == ROUTE_TYPE_TRANSPORT_FLOOD || rType == ROUTE_TYPE_TRANSPORT_DIRECT) {
+    uint16_t tCode1 = getScopeTransportCode1();
+    uint16_t tCode2 = SCOPE_CODE_2;
+    packet[idx++] = (uint8_t)(tCode1 & 0xFF);
+    packet[idx++] = (uint8_t)((tCode1 >> 8) & 0xFF);
+    packet[idx++] = (uint8_t)(tCode2 & 0xFF);
+    packet[idx++] = (uint8_t)((tCode2 >> 8) & 0xFF);
   }
 
+  // 3. Kelio ilgio baitas (apima hash bitų dydį ir šuolių skaičių)
+  packet[idx++] = pathLen;
+
+  // 4. Kelio mazgų sąrašas (jei yra nurodytas kelias)
+  if (path != nullptr && (pathLen & 0x3F) > 0) {
+    uint8_t hashSize = ((pathLen >> 6) & 0x03) + 1;
+    size_t pathByteLen = (size_t)(pathLen & 0x3F) * hashSize;
+    memcpy(&packet[idx], path, pathByteLen);
+    idx += pathByteLen;
+  }
+
+  // 5. Duomenų krovinys (Payload)
   if (payload != nullptr && payloadLen > 0) {
     memcpy(&packet[idx], payload, payloadLen);
     idx += payloadLen;
   }
 
   uint8_t pType = (header >> 2) & 0x0F;
-  uint8_t rType = header & 0x03;
 
-  Serial.printf("[LoRa TX] Siunčiamas paketas (%u baitai) | Header: 0x%02X (Tipas: %u, Maršrutas: %u) | RAW HEX: ",
+  Serial.printf("[LoRa TX] Siunčiamas paketas (%u baitai) | Header: 0x%02X (Tipas: %u, Maršrutas: %u",
                 (unsigned int)idx, header, pType, rType);
+  if (rType == ROUTE_TYPE_TRANSPORT_FLOOD || rType == ROUTE_TYPE_TRANSPORT_DIRECT) {
+    Serial.printf(", Scope: 0x%04X:0x%04X", getScopeTransportCode1(), SCOPE_CODE_2);
+  }
+  Serial.printf(", PathLenByte: 0x%02X) | RAW HEX: ", pathLen);
   printHexBuffer(packet, idx);
   Serial.println();
 
@@ -679,7 +742,7 @@ void sendMeshCoreLogin(size_t repIdx) {
   uint8_t target = monitoredNodes[repIdx].hash;
   const uint8_t* secret = monitoredNodes[repIdx].sharedSecret;
 
-  uint8_t header = ((PAYLOAD_TYPE_ANON_REQ & 0x0F) << 2) | ROUTE_TYPE_FLOOD;
+  uint8_t header = ((PAYLOAD_TYPE_ANON_REQ & 0x0F) << 2) | getDefaultFloodRouteType();
 
   uint8_t payload[128];
   size_t pLen = 0;
@@ -706,7 +769,7 @@ void sendMeshCoreLogin(size_t repIdx) {
   int encLen = MeshCrypto::encryptThenMAC(secret, &payload[pLen], plain, plainLen);
   pLen += encLen;
 
-  sendMeshCoreRaw(header, 0, nullptr, payload, pLen, rep.name.c_str(), rep.public_id.c_str(), secret);
+  sendMeshCoreRaw(header, getPathLengthByte(0), nullptr, payload, pLen, rep.name.c_str(), rep.public_id.c_str(), secret);
 }
 
 // 2. Siunčiamas tiesioginio kelio registravimas (PAYLOAD_TYPE_PATH) su 0 apynių
@@ -725,7 +788,7 @@ void sendMeshCorePath(size_t repIdx) {
 
   // Plaintext: [path_len 0x00][extra_type 0xFF][timestamp 4B]
   uint8_t plain[16] = {0};
-  plain[0] = 0x00; // 0 apynių kelias
+  plain[0] = getPathLengthByte(0); // 0 apynių kelias su pasirinktu hash dydžiu
   plain[1] = 0xFF; // extra_type dummy
   uint32_t ts = getNextTimestamp();
   memcpy(&plain[2], &ts, 4);
@@ -733,7 +796,7 @@ void sendMeshCorePath(size_t repIdx) {
   int encLen = MeshCrypto::encryptThenMAC(secret, &payload[pLen], plain, 6);
   pLen += encLen;
 
-  sendMeshCoreRaw(header, 0, nullptr, payload, pLen, rep.name.c_str(), rep.public_id.c_str(), secret);
+  sendMeshCoreRaw(header, getPathLengthByte(0), nullptr, payload, pLen, rep.name.c_str(), rep.public_id.c_str(), secret);
 }
 
 // 3. Siunčiama užšifruota būsenos ir statistikos užklausa (REQ_TYPE_GET_STATUS = 0x01)
@@ -742,8 +805,8 @@ void sendMeshCoreStatusRequest(size_t repIdx) {
   uint8_t target = monitoredNodes[repIdx].hash;
   const uint8_t* secret = monitoredNodes[repIdx].sharedSecret;
 
-  // Užklausoms visada naudojame ROUTE_TYPE_FLOOD (patikimas pristatymas tiek tiesioginiams, tiek retransliuojamiems)
-  uint8_t header = ((PAYLOAD_TYPE_REQ & 0x0F) << 2) | ROUTE_TYPE_FLOOD;
+  // Užklausoms naudojamas potinklio transliacijos tipas (FLOOD arba TRANSPORT_FLOOD jei įjungtas Scope)
+  uint8_t header = ((PAYLOAD_TYPE_REQ & 0x0F) << 2) | getDefaultFloodRouteType();
 
   uint8_t payload[64];
   size_t pLen = 0;
@@ -763,7 +826,7 @@ void sendMeshCoreStatusRequest(size_t repIdx) {
   int encLen = MeshCrypto::encryptThenMAC(secret, &payload[pLen], plain, 13);
   pLen += encLen;
 
-  sendMeshCoreRaw(header, 0, nullptr, payload, pLen, rep.name.c_str(), rep.public_id.c_str(), secret);
+  sendMeshCoreRaw(header, getPathLengthByte(0), nullptr, payload, pLen, rep.name.c_str(), rep.public_id.c_str(), secret);
 }
 
 // 4. Siunčiama užšifruota jutiklių telemetrijos užklausa (REQ_TYPE_GET_TELEMETRY_DATA = 0x03)
@@ -772,7 +835,7 @@ void sendMeshCoreTelemetryRequest(size_t repIdx) {
   uint8_t target = monitoredNodes[repIdx].hash;
   const uint8_t* secret = monitoredNodes[repIdx].sharedSecret;
 
-  uint8_t header = ((PAYLOAD_TYPE_REQ & 0x0F) << 2) | ROUTE_TYPE_FLOOD;
+  uint8_t header = ((PAYLOAD_TYPE_REQ & 0x0F) << 2) | getDefaultFloodRouteType();
 
   uint8_t payload[64];
   size_t pLen = 0;
@@ -793,7 +856,7 @@ void sendMeshCoreTelemetryRequest(size_t repIdx) {
   int encLen = MeshCrypto::encryptThenMAC(secret, &payload[pLen], plain, 13);
   pLen += encLen;
 
-  sendMeshCoreRaw(header, 0, nullptr, payload, pLen, rep.name.c_str(), rep.public_id.c_str(), secret);
+  sendMeshCoreRaw(header, getPathLengthByte(0), nullptr, payload, pLen, rep.name.c_str(), rep.public_id.c_str(), secret);
 }
 
 // ================================================================================

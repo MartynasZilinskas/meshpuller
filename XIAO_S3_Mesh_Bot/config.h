@@ -15,9 +15,11 @@ const char *WIFI_PASSWORD = "37810200438";
 // const char *WIFI_PASSWORD = "kodas123";
 
 // 2. API Endpoint
-const char *API_BASE_URL           = "https://telemetry.ite.lt";
-const char *API_ENDPOINT_RAW       = "/api/raw";        // Visas pagautas LoRa RAW srautas (RX ir TX su raktais)
-const char *API_AUTH_KEY           = "";                // Pvz.: "Bearer TAVO_TOKENAS" (jei nereikia - palikti "")
+const char *API_BASE_URL = "https://telemetry.ite.lt";
+const char *API_ENDPOINT_RAW =
+    "/api/raw.php"; // Visas pagautas LoRa RAW srautas (RX ir TX su raktais)
+const char *API_AUTH_KEY =
+    ""; // Pvz.: "Bearer TAVO_TOKENAS" (jei nereikia - palikti "")
 
 // 3. Stebimų kartotuvų sąrašo URL (iš kur prieš kiekvieną ciklą parsiunčiamas
 // kartotuvų JSON sąrašas)
@@ -28,12 +30,14 @@ const size_t MAX_MONITORED_REPEATERS = 16;
 
 // Stebimo kartotuvo struktūra
 struct RepeaterTarget {
-  String name;        // Pavadinimas / prefiksas (pvz. "b9dd" arba "1bbd")
-  String public_id;   // 32 baitų (64 hex simbolių) kartotuvo viešasis raktas
-  String password;    // Prisijungimo slaptažodis (pvz. "hello")
-  bool isDirect;      // true = tiesioginis (0 hops), false = per kitus kartotuvus (FLOOD)
-  bool reqStatus;     // true = siųsti būsenos užklausą (REQ_TYPE_GET_STATUS)
-  bool reqTelemetry;  // true = siųsti telemetrijos užklausą (REQ_TYPE_GET_TELEMETRY_DATA)
+  String name;      // Pavadinimas / prefiksas (pvz. "b9dd" arba "1bbd")
+  String public_id; // 32 baitų (64 hex simbolių) kartotuvo viešasis raktas
+  String password;  // Prisijungimo slaptažodis (pvz. "hello")
+  bool isDirect;    // true = tiesioginis (0 hops), false = per kitus kartotuvus
+                    // (FLOOD)
+  bool reqStatus;   // true = siųsti būsenos užklausą (REQ_TYPE_GET_STATUS)
+  bool reqTelemetry; // true = siųsti telemetrijos užklausą
+                     // (REQ_TYPE_GET_TELEMETRY_DATA)
 };
 
 // Atsakymo laukimo tikslo tipas (apsauga nuo ankstyvo lango užsidarymo)
@@ -44,13 +48,16 @@ enum WaitTarget {
   WAIT_TELEMETRY = 3
 };
 
-// Atsakymo laukimo laikas (milisekundėmis) po kiekvienos užklausos (10 sekundžių):
+// Atsakymo laukimo laikas (milisekundėmis) po kiekvienos užklausos (10
+// sekundžių):
 const unsigned long REPEATER_REPLY_TIMEOUT_MS = 10000;
 
-// Pauzė (milisekundėmis) tarp atskirų užklausų laukimo (pvz. po status prieš telemetriją):
+// Pauzė (milisekundėmis) tarp atskirų užklausų laukimo (pvz. po status prieš
+// telemetriją):
 const unsigned long INTER_REQUEST_DELAY_MS = 10000;
 
-// Pauzė (milisekundėmis) tarp kartotuvų apklausos (po API išsiuntimo prieš sekantį kartotuvą):
+// Pauzė (milisekundėmis) tarp kartotuvų apklausos (po API išsiuntimo prieš
+// sekantį kartotuvą):
 const unsigned long REPEATER_COOLDOWN_MS = 10000;
 
 // ESP32 Mazgo Ed25519 Raktai (Mūsų tapatybė tinkle)
@@ -62,8 +69,39 @@ const char *MY_PRVKEY_HEX =
     "4a9232cb075ea937e5ff59e14eb89b595acfc82e9ccf4d7347372bff56393e09"
     "0bbd84b028bdf755edd8f30c6f67839c3f81846c9f0079f377ea32a1e93410f3";
 
-// Užklausų ciklo periodiškumas (milisekundėmis): kas 5 minutes (300000 ms)
+// Užklausų ciklo periodiškumas (milisekundėmis): kas 1 valandą (3600000 ms)
 const unsigned long TELEMETRY_REQUEST_INTERVAL_MS = 60000 * 60;
+
+// ================================================================================
+// 🌐 MESHCORE MARŠRUTIZAVIMO IR KELIO NUSTATYMAI (ROUTING, PATH & SCOPE)
+// ================================================================================
+
+// 1. Mazgų kelio (Path) hash ilgis bitais:
+// Nurodo, kelių bitų (baitų) mazgo identifikatoriaus hash naudojamas paketo
+// maršrute:
+//   8  -> 1 baitas (8 bitai)  – MeshCore standartas (iki 254 unikalių ID)
+//   16 -> 2 baitai (16 bitų) – Rekomenduojama didesniuose tinkluose (mažiau
+//   kolizijų, 65536 ID) 24 -> 3 baitai (24 bitai) – Maksimalus tikslumas (16
+//   mln. ID)
+const uint8_t PATH_HASH_BITS = 16; // Pasirinkite: 8, 16 arba 24 bitai
+
+// 2. Regioninio Scope (potinklio / Scoped Flood) nustatymai:
+// Jei ENABLE_SCOPE = true:
+//   - Užklausų paketams naudojamas ROUTE_TYPE_TRANSPORT_FLOOD (vietoj FLOOD).
+//   - Prie paketo pridedami 4 baitų Transport kodai, todėl paketus
+//   retransliuoja TIK tie
+//     kartotuvai, kurie sukonfigūruoti tam pačiam Scope / Regionui (pvz.
+//     #Europe, vilnius ir t.t.).
+// Jei ENABLE_SCOPE = false:
+//   - Siunčiami įprasti unscoped paketai (visi pasiekiami kartotuvai).
+const bool ENABLE_SCOPE = false;
+const char *SCOPE_NAME = "lt"; // Scope/regiono tekstinis vardas (pvz.
+                               // "vilnius", "lithuania", "#Europe")
+const uint16_t SCOPE_CODE_1 =
+    0x0000; // Pasirinktinis transport kodas 1 (jei 0x0000 - apskaičiuojamas
+            // automatiškai iš SCOPE_NAME)
+const uint16_t SCOPE_CODE_2 =
+    0x0000; // Transport kodas 2 (rezervuotas / papildomas)
 
 // 4. Telemetrijos Duomenų Filtrai (Įjungti/Išjungti duomenų laukus iš siunčiamo
 // JSON)
@@ -71,10 +109,11 @@ struct TelemetrySettings {
   bool includeNodeInfo = true;      // Mazgo ID
   bool includeSignalMetrics = true; // RSSI, SNR, Triukšmo lygis
   bool includeBattery = true;       // Baterijos įtampa (mV ir V)
-  bool includeStatusMetrics = true; // Kartotuvo būsenos statistika (eterio laikas, paketai ir t.t.)
-  bool includeTemperature = true;   // MCU temperatūra
-  bool includeUptime = true;        // Veikimo laikas (uptime)
-  bool includeRawPayload = true;    // Neapdoroti gauti baitai diagnostikai
+  bool includeStatusMetrics =
+      true; // Kartotuvo būsenos statistika (eterio laikas, paketai ir t.t.)
+  bool includeTemperature = true; // MCU temperatūra
+  bool includeUptime = true;      // Veikimo laikas (uptime)
+  bool includeRawPayload = true;  // Neapdoroti gauti baitai diagnostikai
 };
 
 extern TelemetrySettings settings; // Nustatymų objektas
