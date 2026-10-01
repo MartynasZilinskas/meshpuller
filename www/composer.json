@@ -1,0 +1,16 @@
+{
+    "name": "meshcore/lora-decoder",
+    "description": "MeshCore LoRa RAW Packet and Telemetry Decoder in PHP",
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "php": ">=7.4 || >=8.0",
+        "ext-openssl": "*",
+        "ext-json": "*"
+    },
+    "autoload": {
+        "psr-4": {
+            "MeshCore\\": "src/"
+        }
+    }
+}
