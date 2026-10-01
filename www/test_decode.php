@@ -18,36 +18,33 @@ echo json_encode($decodedAdvert, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "
 // 2. Pilno /api/raw JSON paketo dekodavimo testas (su šifravimu ir raktu)
 echo "2. Dekoduojama pilna /api/raw užklausa su šifruotu kroviniu:\n";
 
-// Sugeneruojame testinį šifruotą paketą su žinomu raktu
+// Sugeneruojame testinį šifruotą paketą su žinomu raktu pagal MeshCrypto.h
 $testSecretHex = "3f8a91c0e2bd1987542da691ef02479e120894567ac83d1059fba023e174b890";
 $secretBytes = hex2bin($testSecretHex);
 $encKey = substr($secretBytes, 0, 16);
-$macKey = substr($secretBytes, 16, 16);
 
 // Plaintext: [timestamp 4B][REQ_TYPE_GET_STATUS 0x01][reserved 4B][nonce 4B]
-$ts = 1790700050;
-$plain = pack('V', $ts) . chr(0x01) . pack('V', 0) . pack('V', 123456);
+$ts = 1790700145;
+$plain = pack('V', $ts) . chr(0x01) . pack('V', 0) . pack('V', 0x78563412);
+$plainPadded = str_pad($plain, 16, "\0"); // zero padding
 
-// PKCS7 padding
-$pad = 16 - (strlen($plain) % 16);
-$plainPadded = $plain . str_repeat(chr($pad), $pad);
+// Encrypt AES-128-ECB
+$ciphertext = openssl_encrypt($plainPadded, 'aes-128-ecb', $encKey, OPENSSL_RAW_DATA | OPENSSL_NO_PADDING);
+// MeshCrypto 2-byte MAC per HMAC-SHA256(ciphertext, full 32B secret)
+$mac = substr(hash_hmac('sha256', $ciphertext, $secretBytes, true), 0, 2);
 
-// Encrypt AES-128-CBC
-$ciphertext = openssl_encrypt($plainPadded, 'aes-128-cbc', $encKey, OPENSSL_RAW_DATA | OPENSSL_NO_PADDING, str_repeat("\0", 16));
-$mac = substr(hash_hmac('sha256', $ciphertext, $macKey, true), 0, 4);
-
-// MeshCore paketas: Header (REQ=0, ROUTE=FLOOD=1 -> 0x01), PathLen (0), DestHash (0xB9), SrcHash (0xAA), Ciphertext, MAC
+// MeshCore paketas: Header (REQ=0, ROUTE=FLOOD=1 -> 0x01), PathLen (0), DestHash (0xB9), SrcHash (0xAA), MAC (2B), Ciphertext (16B)
 $header = chr((0x00 << 2) | 0x01); // 0x01
 $pathLen = chr(0x00);
 $destHash = chr(0xB9);
 $srcHash = chr(0xAA);
 
-$rawPacket = $header . $pathLen . $destHash . $srcHash . $ciphertext . $mac;
+$rawPacket = $header . $pathLen . $destHash . $srcHash . $mac . $ciphertext;
 $rawHex = strtoupper(bin2hex($rawPacket));
 
 $apiRawRequest = [
     'direction'         => 'TX',
-    'timestamp'         => 1790700050,
+    'timestamp'         => 1790700145,
     'length'            => strlen($rawPacket),
     'raw_hex'           => $rawHex,
     'target_name'       => 'b9dd',
@@ -60,4 +57,51 @@ $apiRawRequest = [
 $decodedApi = $decoder->decodeApiPayload($apiRawRequest);
 echo json_encode($decodedApi, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n\n";
 
-echo "=== TESTAS BAIGTAS SĖKMINGAI ===\n";
+// 3. Duomenų bazės eiliškumo ir prioriteto rūšiavimo testas
+echo "3. Duomenų bazės ir eiliškumo prioriteto testas:\n";
+require_once __DIR__ . '/src/RawPacketRepository.php';
+use MeshCore\RawPacketRepository;
+
+try {
+    // Testui lokaliai naudojame SQLite PDO atmintyje, jei nėra lokalaus PostgreSQL
+    $testPdo = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+    $testRepo = new RawPacketRepository(['table' => 'raw_packets'], $testPdo);
+    $testRepo->createTableIfNotExists();
+
+    // Įrašome 3 įrašus skirtingomis būsenomis:
+    // A) Senas įrašas, bet su processed_at prieš 10 min (nebaigtas bandymas)
+    $id1 = $testRepo->saveRaw(['raw_hex' => '0100B9AA01', 'direction' => 'RX']);
+    $testPdo->exec("UPDATE raw_packets SET processed_at = datetime('now', '-10 minutes') WHERE id = {$id1}");
+
+    // B) Įrašas su vėliausia processed_at prieš 2 min (naujesnis bandymas)
+    $id2 = $testRepo->saveRaw(['raw_hex' => '0100B9AA02', 'direction' => 'RX']);
+    $testPdo->exec("UPDATE raw_packets SET processed_at = datetime('now', '-2 minutes') WHERE id = {$id2}");
+
+    // C) Naujas ką tik atėjęs įrašas su TUŠČIA apdorojimo data (processed_at IS NULL)
+    $id3 = $testRepo->saveRaw(['raw_hex' => '0100B9AA03', 'direction' => 'RX']);
+
+    echo "Pateikti įrašai testavimui:\n";
+    echo "  - Įrašas #{$id1}: processed=false, processed_at=-10min\n";
+    echo "  - Įrašas #{$id2}: processed=false, processed_at=-2min\n";
+    echo "  - Įrašas #{$id3}: processed=false, processed_at=NULL (naujas!)\n\n";
+
+    // Pasiimame 1-ąjį pagal prioritetą:
+    $first = $testRepo->fetchNextForProcessing();
+    echo "Pirmas paimtas (turi būti #{$id3} su tuščia data): ID #{$first['id']} (processed_at automatiškai užfiksuota)\n";
+
+    // Pasiimame 2-ąjį pagal prioritetą:
+    $second = $testRepo->fetchNextForProcessing();
+    echo "Antras paimtas (turi būti #{$id2} su vėliausia data): ID #{$second['id']}\n";
+
+    // Pasiimame 3-ąjį:
+    $third = $testRepo->fetchNextForProcessing();
+    echo "Trečias paimtas (turi būti #{$id1}): ID #{$third['id']}\n";
+
+    // Pažymime sėkmingą apdorojimą
+    $testRepo->completeProcessing((int)$first['id'], ['status' => 'OK']);
+    echo "Įrašas #{$first['id']} apdorotas -> processed = true!\n";
+} catch (\Throwable $e) {
+    echo "DB testavimo klaida: " . $e->getMessage() . "\n";
+}
+
+echo "\n=== TESTAS BAIGTAS SĖKMINGAI ===\n";

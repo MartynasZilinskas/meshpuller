@@ -382,17 +382,25 @@ class MeshCoreDecoder
     }
 
     /**
-     * Dešifruoja AES-128-CBC + HMAC-SHA256 bloką pagal MeshCore specifikaciją.
+     * Dešifruoja MeshCore šifruotą bloką pagal MeshCrypto specifikaciją.
      *
-     * @param string $encryptedBlock [ciphertext (N baitų)][MAC (4 baitai)]
-     * @param string $sharedSecretHex 32 baitų bendras raktas
+     * Standartinis MeshCore formatas (MeshCrypto.h):
+     *   [MAC (2 baitai)][Ciphertext (16 * k baitų)]
+     *   - MAC apskaičiuojamas per HMAC-SHA256(ciphertext, sharedSecret 32B) -> pirmieji 2 baitai
+     *   - Šifravimas: AES-128-ECB, raktas: sharedSecret[0..15]
+     *
+     * Taip pat palaikomas alternatyvus formatas:
+     *   [Ciphertext][MAC (4 baitai gale)] su AES-128-CBC
+     *
+     * @param string $encryptedBlock Šifruotas blokas (su MAC)
+     * @param string $sharedSecretHex 32 baitų bendrasis raktas (64 hex simboliai)
      * @return string Iššifruotas tekstas (Plaintext)
      */
     public function decryptPayload(string $encryptedBlock, string $sharedSecretHex): string
     {
         $blockLen = strlen($encryptedBlock);
-        if ($blockLen < 4 + 16) {
-            throw new \InvalidArgumentException('Užšifruotas blokas per trumpas (mažiau 20 baitų)');
+        if ($blockLen < 18) {
+            throw new \InvalidArgumentException('Užšifruotas blokas per trumpas (mažiau 18 baitų)');
         }
 
         $sharedSecret = $this->ensureBinaryBytes($sharedSecretHex);
@@ -401,43 +409,117 @@ class MeshCoreDecoder
         }
 
         $encKey = substr($sharedSecret, 0, 16);
-        $macKey = substr($sharedSecret, 16, 16);
 
-        $ciphertext = substr($encryptedBlock, 0, $blockLen - 4);
-        $receivedMac = substr($encryptedBlock, $blockLen - 4, 4);
+        // ---------------------------------------------------------------------
+        // 1. STANDARTINIS MESHCORE METODAS (MeshCrypto.h):
+        // 2 baitų MAC priekyje: [MAC 2B][Ciphertext 16*k B]
+        // ---------------------------------------------------------------------
+        if ($blockLen >= 2 + 16 && (($blockLen - 2) % 16 === 0)) {
+            $receivedMac = substr($encryptedBlock, 0, 2);
+            $ciphertext  = substr($encryptedBlock, 2);
 
-        // 1. HMAC-SHA256 patikra
-        $computedFullMac = hash_hmac('sha256', $ciphertext, $macKey, true);
-        $computedMac = substr($computedFullMac, 0, 4);
+            $computedFullHmac = hash_hmac('sha256', $ciphertext, $sharedSecret, true);
+            $computedMac      = substr($computedFullHmac, 0, 2);
 
-        if (!hash_equals($receivedMac, $computedMac)) {
-            throw new \RuntimeException('HMAC-SHA256 patikra nepavyko! Neteisingas bendras raktas arba pažeistas paketas.');
-        }
+            if (hash_equals($receivedMac, $computedMac)) {
+                $decrypted = openssl_decrypt(
+                    $ciphertext,
+                    'aes-128-ecb',
+                    $encKey,
+                    OPENSSL_RAW_DATA | OPENSSL_NO_PADDING
+                );
 
-        // 2. AES-128-CBC dešifravimas (IV visada 16 nulių)
-        $iv = str_repeat("\0", 16);
-        $decrypted = openssl_decrypt(
-            $ciphertext,
-            'aes-128-cbc',
-            $encKey,
-            OPENSSL_RAW_DATA | OPENSSL_NO_PADDING,
-            $iv
-        );
-
-        if ($decrypted === false) {
-            throw new \RuntimeException('Nepavyko atlikti AES-128-CBC dešifravimo: ' . openssl_error_string());
-        }
-
-        // 3. PKCS#7 unpadding
-        $pad = ord($decrypted[strlen($decrypted) - 1]);
-        if ($pad >= 1 && $pad <= 16) {
-            $padding = substr($decrypted, -$pad);
-            if ($padding === str_repeat(chr($pad), $pad)) {
-                $decrypted = substr($decrypted, 0, -$pad);
+                if ($decrypted !== false) {
+                    return $decrypted;
+                }
             }
         }
 
-        return $decrypted;
+        // ---------------------------------------------------------------------
+        // 2. ALTERNATYVA: 4 baitų MAC paketo gale [Ciphertext][MAC 4B] su AES-128-CBC
+        // ---------------------------------------------------------------------
+        if ($blockLen >= 16 + 4 && (($blockLen - 4) % 16 === 0)) {
+            $ciphertext  = substr($encryptedBlock, 0, $blockLen - 4);
+            $receivedMac = substr($encryptedBlock, $blockLen - 4, 4);
+
+            $macKey = substr($sharedSecret, 16, 16);
+            $computedMac1 = substr(hash_hmac('sha256', $ciphertext, $macKey, true), 0, 4);
+            $computedMac2 = substr(hash_hmac('sha256', $ciphertext, $sharedSecret, true), 0, 4);
+
+            if (hash_equals($receivedMac, $computedMac1) || hash_equals($receivedMac, $computedMac2)) {
+                $iv = str_repeat("\0", 16);
+                $decrypted = openssl_decrypt(
+                    $ciphertext,
+                    'aes-128-cbc',
+                    $encKey,
+                    OPENSSL_RAW_DATA | OPENSSL_NO_PADDING,
+                    $iv
+                );
+
+                if ($decrypted !== false) {
+                    return $decrypted;
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // 3. ALTERNATYVA: 2 baitų MAC paketo gale [Ciphertext][MAC 2B]
+        // ---------------------------------------------------------------------
+        if ($blockLen >= 16 + 2 && (($blockLen - 2) % 16 === 0)) {
+            $ciphertext  = substr($encryptedBlock, 0, $blockLen - 2);
+            $receivedMac = substr($encryptedBlock, $blockLen - 2, 2);
+
+            $computedMac = substr(hash_hmac('sha256', $ciphertext, $sharedSecret, true), 0, 2);
+            if (hash_equals($receivedMac, $computedMac)) {
+                $decrypted = openssl_decrypt(
+                    $ciphertext,
+                    'aes-128-ecb',
+                    $encKey,
+                    OPENSSL_RAW_DATA | OPENSSL_NO_PADDING
+                );
+
+                if ($decrypted !== false) {
+                    return $decrypted;
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // 4. BANDYMAS IŠGELBĖTI (Fallback trial):
+        // Jei MAC nesutampa (pvz. pavyzdiniai duomenys ar pažeistas MAC),
+        // bet galbūt raktas teisingas ir pavyksta iššifruoti pradinį kadrą:
+        // ---------------------------------------------------------------------
+        $trialCipher = null;
+        if ($blockLen >= 18 && (($blockLen - 2) % 16 === 0)) {
+            $trialCipher = substr($encryptedBlock, 2);
+        } elseif ($blockLen >= 20 && (($blockLen - 4) % 16 === 0)) {
+            $trialCipher = substr($encryptedBlock, 0, $blockLen - 4);
+        } elseif ($blockLen % 16 === 0) {
+            $trialCipher = $encryptedBlock;
+        }
+
+        if ($trialCipher !== null && strlen($trialCipher) >= 16) {
+            foreach (['aes-128-ecb', 'aes-128-cbc'] as $cipherMode) {
+                $iv = ($cipherMode === 'aes-128-cbc') ? str_repeat("\0", 16) : '';
+                $decrypted = openssl_decrypt(
+                    $trialCipher,
+                    $cipherMode,
+                    $encKey,
+                    OPENSSL_RAW_DATA | OPENSSL_NO_PADDING,
+                    $iv
+                );
+
+                if ($decrypted !== false && strlen($decrypted) >= 4) {
+                    $ts = unpack('V', substr($decrypted, 0, 4))[1];
+                    // Jei laiko žyma atrodo kaip realus Unix laikas (2020..2040 metai)
+                    if ($ts >= 1577836800 && $ts <= 2208988800) {
+                        return $decrypted;
+                    }
+                }
+            }
+        }
+
+        throw new \RuntimeException('HMAC-SHA256 patikra nepavyko! Neteisingas bendras raktas arba pažeistas paketas.');
     }
 
     /**

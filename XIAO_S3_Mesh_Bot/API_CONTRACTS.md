@@ -1,9 +1,8 @@
-# MeshCore Telemetry Bot – API Kontraktai ir Specifikacija
+# MeshCore Telemetry Bot – API Kontraktas ir Architektūra
 
-Šiame dokumente pateikiami trys HTTP API endpoint'ai, į kuriuos Seeed Studio XIAO ESP32-S3 mazgas siunčia duomenis:
-1. `POST /api/adverts` – Mazgų tapatybės ir būsenos skelbimai (ADVERT).
-2. `POST /api/telemetry` – Kartotuvų telemetrijos ir veikimo būsenos duomenys (Telemetry / RepeaterStats).
-3. `POST /api/raw` – Visas eteryje užfiksuotas neapdorotas LoRa srautas (RX ir TX) kartu su dešifravimo raktais.
+Pagal atnaujintą architektūrą visi atskiri `/api/adverts` ir `/api/telemetry` endpointai yra panaikinti.
+Visos eteryje užfiksuotos užklausos (RX) bei paties mazgo siunčiami paketai (TX) siunčiami tiesiai į vienintelį RAW endpointą:
+- **`POST /api/raw`** – Visas neapdorotas LoRa srautas su raktais, kuris išsaugomas PostgreSQL duomenų bazėje (`u236217820_telemerty`) ir pilnai dešifruojamas bei iškoduojamas serveryje.
 
 Visi duomenys siunčiami JSON formatu su `Content-Type: application/json` antrašte.
 Jei `config.h` faile nurodytas `API_AUTH_KEY`, užklausose pridedama antraštė:
@@ -11,7 +10,7 @@ Jei `config.h` faile nurodytas `API_AUTH_KEY`, užklausose pridedama antraštė:
 
 ---
 
-## 1. Skelbimų Endpoint'as (`POST /api/adverts`)
+## Pagrindinis RAW Endpoint'as (`POST /api/raw`)
 
 ### Paskirtis
 Priima visus eteryje pagautus **ADVERT** tipo paketus (tiek iš stebimų kartotuvų sąrašo, tiek iš bet kokių kitų eterio mazgų).
@@ -178,8 +177,8 @@ Jei paketas yra ESP32 užklausa (TX) arba atsakymas iš žinomo kartotuvo (RX), 
 {
   "direction": "TX",
   "timestamp": 1790700145,
-  "length": 47,
-  "raw_hex": "0100B9AACC416A329F1A405021F3841D80C68E2F96E6B97148E597B08B5DE913E0C1B8",
+  "length": 22,
+  "raw_hex": "0100B9AA9A9A86F0D536F7EBE2CBE594C28FE492ACED",
   "target_name": "b9dd",
   "target_public_key": "b9ddd788b7a59eab40eaa49a2534fa9e7fc0ef7d920ef4811139998cddd631db",
   "my_public_key": "0bbd84b028bdf755edd8f30c6f67839c3f81846c9f0079f377ea32a1e93410f3",
@@ -193,10 +192,10 @@ Jei paketas yra ESP32 užklausa (TX) arba atsakymas iš žinomo kartotuvo (RX), 
 {
   "direction": "RX",
   "timestamp": 1790700146,
-  "length": 58,
+  "length": 54,
   "rssi": -84.0,
   "snr": 9.5,
-  "raw_hex": "0500AAB95E609148E597B08B5DE913E0C1B875691A0142A981745E609148E597B08B5DE913E0C1B875691A0142A981745E609148E597B08B5DE913E0",
+  "raw_hex": "0500AAB983B0E92B49A93FDFA03B984E7C07CAA90E60B0DA8BDFE522797F672BE6836073C26DACF4E2C5B8624455206B09917F39F591",
   "sender_name": "b9dd",
   "sender_public_key": "b9ddd788b7a59eab40eaa49a2534fa9e7fc0ef7d920ef4811139998cddd631db",
   "my_public_key": "0bbd84b028bdf755edd8f30c6f67839c3f81846c9f0079f377ea32a1e93410f3",
@@ -222,12 +221,10 @@ Jei paketas yra ESP32 užklausa (TX) arba atsakymas iš žinomo kartotuvo (RX), 
 
 ## 4. Kaip dešifruoti `raw_hex` serveryje (Python pavyzdys)
 
-Kai `is_encrypted: true` ir pateiktas `shared_secret_hex`, paketo krovinys dešifruojamas pagal MeshCore standartą:
-- **Algoritmas:** AES-128-CBC
-- **Autentifikavimas:** HMAC-SHA256 (paskutiniai 4 baitai)
-- **Šifro raktas:** Pirmi 16 baitų iš `shared_secret` (`shared_secret[0..15]`)
-- **MAC raktas:** Antri 16 baitų iš `shared_secret` (`shared_secret[16..31]`)
-- **IV:** Fiksuotas 16 nulių (`b'\x00' * 16`)
+Kai `is_encrypted: true` ir pateiktas `shared_secret_hex`, paketo krovinys dešifruojamas pagal oficialią MeshCrypto specifikaciją (`MeshCrypto.h`):
+- **Formatas:** `[dest_hash 1B][src_hash 1B][MAC 2B][Ciphertext 16*k B]`
+- **Autentifikavimas:** `HMAC-SHA256(ciphertext, shared_secret_32B)` -> pirmieji 2 baitai
+- **Šifras:** AES-128-ECB, raktas: pirmi 16 baitų (`shared_secret[0..15]`)
 
 ```python
 import hmac
@@ -238,9 +235,7 @@ from cryptography.hazmat.backends import default_backend
 def decrypt_meshcore_payload(raw_hex: str, shared_secret_hex: str) -> bytes:
     raw = bytes.fromhex(raw_hex)
     secret = bytes.fromhex(shared_secret_hex)
-
     enc_key = secret[:16]
-    mac_key = secret[16:32]
 
     # 1. Apeiname header ir path:
     header = raw[0]
@@ -255,29 +250,26 @@ def decrypt_meshcore_payload(raw_hex: str, shared_secret_hex: str) -> bytes:
     hop_count = path_len_byte & 0x3F
     offset += hop_count * hash_size
 
-    # 2. Payload pradžia: [dest_hash, src_hash, ciphertext..., mac (4B)]
+    # 2. Payload pradžia: [dest_hash 1B, src_hash 1B, mac 2B, ciphertext...]
     dest_hash = raw[offset]
     src_hash = raw[offset + 1]
-    encrypted_block = raw[offset + 2 :]
+    mac = raw[offset + 2 : offset + 4]
+    ciphertext = raw[offset + 4 :]
 
-    if len(encrypted_block) < 4:
-        raise ValueError("Paketas per trumpas dešifravimui")
+    if len(ciphertext) < 16 or len(ciphertext) % 16 != 0:
+        raise ValueError("Neteisingas šifruoto bloko ilgis (privalo būti 16 kartotinis)")
 
-    ciphertext = encrypted_block[:-4]
-    received_mac = encrypted_block[-4:]
-
-    # 3. Tikriname HMAC-SHA256
-    computed_mac = hmac.new(mac_key, ciphertext, hashlib.sha256).digest()[:4]
-    if received_mac != computed_mac:
+    # 3. Tikriname HMAC-SHA256 (2 baitai su 32B shared secret)
+    computed_mac = hmac.new(secret, ciphertext, hashlib.sha256).digest()[:2]
+    if mac != computed_mac:
         raise ValueError("MAC patikra nepavyko! Neteisingas raktas arba pažeistas paketas.")
 
-    # 4. Dešifruojame AES-128-CBC
-    iv = b"\x00" * 16
-    cipher = Cipher(algorithms.AES(enc_key), modes.CBC(iv), backend=default_backend())
+    # 4. Dešifruojame AES-128-ECB
+    cipher = Cipher(algorithms.AES(enc_key), modes.ECB(), backend=default_backend())
     decryptor = cipher.decryptor()
-    padded_plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+    plaintext = decryptor.update(ciphertext) + decryptor.finalize()
 
-    return padded_plaintext
+    return plaintext
 ```
 
 ---
