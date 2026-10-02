@@ -741,22 +741,484 @@
             justify-content: space-between;
         }
 
-        /* Mobiliems įrenginiams */
+        /* ==========================================================================
+           MOBILUS UX/UI PRITAIKYMAS (<= 768px)
+           Atskiria sąrašą ir žemėlapį/informaciją, kad kiekvienas rodinys turėtų 100% vietos.
+           ========================================================================== */
+
+        /* Dideliuose ekranuose slepiame mobilius elementus */
+        .mobile-view-tabs,
+        .mobile-floating-switcher,
+        .mobile-info-sheet,
+        .card-info-btn {
+            display: none;
+        }
+
         @media (max-width: 768px) {
+            body {
+                overflow: hidden;
+            }
+
+            /* Viršutinė juosta */
+            .top-navbar {
+                height: 48px;
+                padding: 0 10px;
+            }
+
+            .brand-title {
+                font-size: 0.95rem;
+            }
+
+            .brand-badge {
+                display: none;
+            }
+
+            .session-indicator span {
+                display: none;
+            }
+
+            .session-indicator {
+                padding: 6px;
+                border-radius: 50%;
+            }
+
+            .nav-btn {
+                padding: 5px 8px;
+                font-size: 0.72rem;
+                min-height: 34px;
+            }
+
+            /* Mobilus tab'ų perjungiklis viršuje */
+            .mobile-view-tabs {
+                display: flex;
+                background: #1c1c1c;
+                border-bottom: 1px solid var(--border-color);
+                padding: 5px 8px;
+                gap: 6px;
+                z-index: 600;
+                position: relative;
+                flex-shrink: 0;
+            }
+
+            .mobile-tab-btn {
+                flex: 1;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 6px;
+                background: #252525;
+                border: 1px solid var(--border-color);
+                color: var(--text-muted);
+                padding: 7px 10px;
+                border-radius: var(--radius-md);
+                font-family: var(--font-sans);
+                font-size: 0.84rem;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+                min-height: 38px;
+                touch-action: manipulation;
+            }
+
+            .mobile-tab-btn.active {
+                background: rgba(0, 210, 255, 0.15);
+                border-color: var(--accent-cyan);
+                color: #ffffff;
+                box-shadow: 0 0 12px rgba(0, 210, 255, 0.25);
+            }
+
+            .mobile-tab-count {
+                background: var(--accent-blue);
+                color: #ffffff;
+                font-size: 0.65rem;
+                font-family: var(--font-mono);
+                padding: 1px 6px;
+                border-radius: 10px;
+                font-weight: 700;
+            }
+
+            /* Pagrindinis turinys: 100% likusio ekrano aukščio */
+            .main-container {
+                height: calc(100vh - 48px - 49px);
+                max-height: calc(100vh - 48px - 49px);
+                position: relative;
+                overflow: hidden;
+            }
+
+            /* Žemėlapis ir sąrašas pakaitomis užima 100% */
+            #map {
+                position: absolute !important;
+                inset: 0 !important;
+                width: 100% !important;
+                height: 100% !important;
+                z-index: 10;
+            }
+
             aside.sidebar-panel {
+                position: absolute !important;
+                inset: 0 !important;
+                width: 100% !important;
+                height: 100% !important;
+                max-height: 100% !important;
+                z-index: 20;
+                border-left: none;
+                border-top: none;
+                background: var(--bg-sidebar);
+            }
+
+            /* Režimai valdomi per klasę ant body */
+            body.mobile-mode-map aside.sidebar-panel {
+                display: none !important;
+            }
+
+            body.mobile-mode-map #map {
+                display: block !important;
+            }
+
+            body.mobile-mode-list #map {
+                display: none !important;
+            }
+
+            body.mobile-mode-list aside.sidebar-panel {
+                display: flex !important;
+            }
+
+            /* Sąrašas mobiliame režime turi pilną erdvę slinkimui */
+            .node-list-container {
+                flex: 1;
+                height: auto !important;
+                max-height: none !important;
+                overflow-y: auto;
+                -webkit-overflow-scrolling: touch;
+                padding: 10px;
+                padding-bottom: 85px; /* Rezervuota vieta plaukiojančiam mygtukui */
+            }
+
+            .sidebar-header {
+                padding: 8px 10px;
+            }
+
+            .stats-grid {
+                gap: 5px;
+            }
+
+            .stat-card {
+                padding: 5px 3px;
+            }
+
+            .stat-val {
+                font-size: 0.88rem;
+            }
+
+            .search-input {
+                font-size: 0.85rem;
+                height: 38px;
+            }
+
+            /* Kortelės mobiliame sąraše */
+            .node-item-card {
+                padding: 10px 12px;
+                margin-bottom: 8px;
+                border-radius: var(--radius-md);
+            }
+
+            .node-name {
+                font-size: 0.92rem;
+            }
+
+            .metric-pill {
+                padding: 3px 7px;
+                font-size: 0.72rem;
+            }
+
+            /* Info mygtukas kortelėje tiesioginei peržiūrai */
+            .card-info-btn {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                width: 28px;
+                height: 28px;
+                background: rgba(255, 255, 255, 0.08);
+                border: 1px solid var(--border-light);
+                color: #ffffff;
+                border-radius: 50%;
+                font-size: 0.75rem;
+                cursor: pointer;
+                flex-shrink: 0;
+                margin-left: 6px;
+                transition: all 0.15s ease;
+            }
+
+            .card-info-btn:active {
+                background: var(--accent-cyan);
+                color: #000000;
+            }
+
+            /* Plaukiojantis mygtukas apačioje (Floating Action Pill) */
+            .mobile-floating-switcher {
+                display: block;
+                position: fixed;
+                bottom: 20px;
+                left: 50%;
+                transform: translateX(-50%);
+                z-index: 1500;
+                pointer-events: none;
+            }
+
+            .floating-switch-btn {
+                pointer-events: auto;
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                background: rgba(28, 28, 28, 0.92);
+                backdrop-filter: blur(12px);
+                -webkit-backdrop-filter: blur(12px);
+                color: #ffffff;
+                border: 1px solid var(--accent-cyan);
+                box-shadow: 0 6px 24px rgba(0, 0, 0, 0.65), 0 0 16px rgba(0, 210, 255, 0.35);
+                padding: 10px 20px;
+                border-radius: 30px;
+                font-family: var(--font-sans);
+                font-size: 0.88rem;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+                touch-action: manipulation;
+                white-space: nowrap;
+            }
+
+            .floating-switch-btn:active {
+                transform: scale(0.96);
+                background: #252525;
+            }
+
+            .floating-badge {
+                background: var(--accent-cyan);
+                color: #000000;
+                font-family: var(--font-mono);
+                font-weight: 700;
+                font-size: 0.72rem;
+                padding: 2px 7px;
+                border-radius: 12px;
+            }
+
+            /* Mobilus informacijos Bottom Sheet */
+            .mobile-info-sheet {
+                display: block;
+                position: fixed;
+                inset: 0;
+                z-index: 2000;
+                pointer-events: none;
+                transition: opacity 0.25s ease;
+                opacity: 0;
+                visibility: hidden;
+            }
+
+            .mobile-info-sheet.active {
+                opacity: 1;
+                visibility: visible;
+                pointer-events: auto;
+            }
+
+            .sheet-backdrop {
+                position: absolute;
+                inset: 0;
+                background: rgba(0, 0, 0, 0.6);
+                backdrop-filter: blur(4px);
+                -webkit-backdrop-filter: blur(4px);
+            }
+
+            .sheet-content {
                 position: absolute;
                 bottom: 0;
                 left: 0;
                 right: 0;
-                width: 100%;
-                height: 45vh;
-                max-height: 45vh;
-                border-left: none;
-                border-top: 1px solid var(--border-color);
+                background: linear-gradient(180deg, #222222 0%, #1a1a1a 100%);
+                border-top: 1px solid var(--border-light);
+                border-radius: 18px 18px 0 0;
+                padding: 14px 16px 20px 16px;
+                padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+                box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.8);
+                transform: translateY(100%);
+                transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+                max-height: 82vh;
+                overflow-y: auto;
             }
-            .node-list-container {
-                height: calc(45vh - 125px);
-                max-height: calc(45vh - 125px);
+
+            .mobile-info-sheet.active .sheet-content {
+                transform: translateY(0);
+            }
+
+            .sheet-drag-handle {
+                width: 36px;
+                height: 4px;
+                background: #555555;
+                border-radius: 2px;
+                margin: 0 auto 12px auto;
+                cursor: pointer;
+            }
+
+            .sheet-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 6px;
+                gap: 8px;
+            }
+
+            .sheet-title-group {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                flex: 1;
+                min-width: 0;
+            }
+
+            .sheet-node-name {
+                font-size: 1.15rem;
+                font-weight: 700;
+                color: #ffffff;
+                margin: 0;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                letter-spacing: -0.01em;
+            }
+
+            .sheet-close-btn {
+                width: 32px;
+                height: 32px;
+                background: #2a2a2a;
+                border: 1px solid var(--border-color);
+                color: #cccccc;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 0.95rem;
+                cursor: pointer;
+                flex-shrink: 0;
+            }
+
+            .sheet-type-pill {
+                display: inline-block;
+                font-size: 0.65rem;
+                font-weight: 700;
+                color: #c084fc;
+                background: rgba(168, 85, 247, 0.15);
+                border: 1px solid rgba(168, 85, 247, 0.4);
+                padding: 2px 7px;
+                border-radius: 4px;
+                margin-bottom: 12px;
+                font-family: var(--font-mono);
+            }
+
+            .sheet-metrics-grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 10px;
+                margin-bottom: 12px;
+            }
+
+            .sheet-metric-card {
+                background: #262626;
+                border: 1px solid var(--border-color);
+                border-radius: var(--radius-md);
+                padding: 10px 12px;
+            }
+
+            .sheet-metric-label {
+                font-size: 0.72rem;
+                color: var(--text-muted);
+                margin-bottom: 4px;
+            }
+
+            .sheet-metric-val {
+                font-family: var(--font-mono);
+                font-size: 1.3rem;
+                font-weight: 700;
+                color: #2ed573;
+                line-height: 1.2;
+            }
+
+            .sheet-metric-sub {
+                font-size: 0.65rem;
+                color: var(--text-dim);
+                margin-top: 4px;
+            }
+
+            .sheet-details-list {
+                background: #242424;
+                border: 1px solid var(--border-color);
+                border-radius: var(--radius-md);
+                padding: 4px 12px;
+                margin-bottom: 14px;
+            }
+
+            .sheet-detail-item {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 8px 0;
+                font-size: 0.78rem;
+                border-bottom: 1px solid #303030;
+                gap: 10px;
+            }
+
+            .sheet-detail-item:last-child {
+                border-bottom: none;
+            }
+
+            .detail-label {
+                color: var(--text-muted);
+                flex-shrink: 0;
+            }
+
+            .detail-value {
+                color: #ffffff;
+                font-family: var(--font-mono);
+                font-size: 0.76rem;
+                text-align: right;
+                word-break: break-all;
+            }
+
+            .detail-value.highlight {
+                color: #c084fc;
+                font-weight: 600;
+            }
+
+            .sheet-actions {
+                display: flex;
+                gap: 8px;
+            }
+
+            .sheet-action-btn {
+                flex: 1;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 6px;
+                padding: 10px 12px;
+                border-radius: var(--radius-md);
+                font-family: var(--font-sans);
+                font-size: 0.84rem;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.2s ease;
+                text-decoration: none;
+                border: none;
+                min-height: 42px;
+            }
+
+            .sheet-action-btn.primary {
+                background: var(--accent-cyan);
+                color: #000000;
+            }
+
+            .sheet-action-btn.secondary {
+                background: #2d2d2d;
+                color: #ffffff;
+                border: 1px solid var(--border-color);
             }
         }
     </style>
@@ -796,6 +1258,19 @@
         </div>
     </header>
 
+    <!-- Mobilus rodinių perjungiklis (Matomas tik mobiliuose ekranuose <= 768px) -->
+    <nav class="mobile-view-tabs" id="mobileViewTabs" aria-label="Mobilus navigacijos perjungiklis">
+        <button class="mobile-tab-btn active" id="tabMapBtn" onclick="switchMobileView('map')">
+            <span class="tab-icon">🗺️</span>
+            <span>Žemėlapis</span>
+        </button>
+        <button class="mobile-tab-btn" id="tabListBtn" onclick="switchMobileView('list')">
+            <span class="tab-icon">📋</span>
+            <span>Sąrašas</span>
+            <span class="mobile-tab-count" id="mobileTabCount">0</span>
+        </button>
+    </nav>
+
     <!-- Pagrindinis langas -->
     <div class="main-container">
         <!-- Žemėlapis -->
@@ -834,6 +1309,74 @@
                 </div>
             </div>
         </aside>
+
+        <!-- Plaukiojantis perjungimo mygtukas (Floating Action Pill) mobiliems -->
+        <div class="mobile-floating-switcher" id="mobileFloatingSwitcher">
+            <button class="floating-switch-btn" id="floatingSwitchBtn" onclick="toggleMobileView()">
+                <span class="floating-icon" id="floatingIcon">📋</span>
+                <span id="floatingText">Rodyti sąrašą</span>
+                <span class="floating-badge" id="floatingBadge">0</span>
+            </button>
+        </div>
+
+        <!-- Mobilus mazgo informacijos skydelis (Bottom Sheet) -->
+        <div class="mobile-info-sheet" id="mobileInfoSheet">
+            <div class="sheet-backdrop" onclick="closeMobileSheet()"></div>
+            <div class="sheet-content">
+                <div class="sheet-drag-handle" onclick="closeMobileSheet()"></div>
+                
+                <div class="sheet-header">
+                    <div class="sheet-title-group">
+                        <span class="node-badge-id" id="sheetNodeBadge">ID</span>
+                        <h2 class="sheet-node-name" id="sheetNodeName">Pavadinimas</h2>
+                        <span class="node-bot-badge" id="sheetBotBadge">🤖 KLP</span>
+                    </div>
+                    <button class="sheet-close-btn" onclick="closeMobileSheet()" aria-label="Uždaryti">✕</button>
+                </div>
+
+                <div class="sheet-type-pill" id="sheetNodeType">KARTOTUVAS</div>
+
+                <!-- Rodmenų kortelės (Baterija ir Temperatūra) -->
+                <div class="sheet-metrics-grid">
+                    <div class="sheet-metric-card" id="sheetBatteryCard">
+                        <div class="sheet-metric-label">🔋 Baterijos įtampa</div>
+                        <div class="sheet-metric-val" id="sheetBatteryVal">- V</div>
+                        <div class="sheet-metric-sub" id="sheetBatterySub">Atnaujinimas: -</div>
+                    </div>
+                    <div class="sheet-metric-card" id="sheetTempCard">
+                        <div class="sheet-metric-label">🌡️ Temperatūra</div>
+                        <div class="sheet-metric-val" id="sheetTempVal">- °C</div>
+                        <div class="sheet-metric-sub" id="sheetTempSub">Atnaujinimas: -</div>
+                    </div>
+                </div>
+
+                <!-- Detalios informacijos sąrašas -->
+                <div class="sheet-details-list">
+                    <div class="sheet-detail-item">
+                        <span class="detail-label">📍 Koordinatės</span>
+                        <span class="detail-value" id="sheetCoordsVal">55.703, 21.144</span>
+                    </div>
+                    <div class="sheet-detail-item">
+                        <span class="detail-label">⏱️ Telemetrija</span>
+                        <span class="detail-value highlight" id="sheetTelemVal">prieš 2 min.</span>
+                    </div>
+                    <div class="sheet-detail-item">
+                        <span class="detail-label">📡 Paskutinį kartą matytas</span>
+                        <span class="detail-value" id="sheetLastSeenVal">prieš 5 min.</span>
+                    </div>
+                </div>
+
+                <!-- Veiksmų mygtukai -->
+                <div class="sheet-actions">
+                    <button class="sheet-action-btn primary" id="sheetFocusBtn" onclick="sheetActionFocus()">
+                        <span>🗺️ Centruoti žemėlapyje</span>
+                    </button>
+                    <button class="sheet-action-btn secondary" id="sheetNavBtn" onclick="sheetActionNavigate()">
+                        <span>🧭 Google Maps</span>
+                    </button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Leaflet JS -->
@@ -844,9 +1387,13 @@
         let map = null;
         let markersGroup = null;
         let markersMap = {}; // node_id -> leaflet marker
+        let currentMobileView = 'map'; // 'map' arba 'list'
+        let selectedMobileNode = null; // aktyvus mazgas mobiliam bottom sheet
 
         // Inicijuojame Leaflet žemėlapį
         function initMap() {
+            initMobileView();
+
             // Numatytas centras: Lietuva (55.2, 23.9)
             map = L.map('map', {
                 zoomControl: true,
@@ -912,6 +1459,128 @@
 
             // Užkrauname duomenis
             fetchNodesData(true);
+        }
+
+        // =========================================================================
+        // MOBILUS REŽIMAS: Rodinių perjungimas (Žemėlapis vs Sąrašas) ir Informacija
+        // =========================================================================
+        function initMobileView() {
+            const isMobile = window.innerWidth <= 768;
+            if (isMobile) {
+                document.body.classList.remove('mobile-mode-map', 'mobile-mode-list');
+                document.body.classList.add('mobile-mode-' + currentMobileView);
+                updateMobileSwitchersUI();
+            } else {
+                document.body.classList.remove('mobile-mode-map', 'mobile-mode-list');
+                closeMobileSheet();
+            }
+        }
+
+        function switchMobileView(view) {
+            currentMobileView = view;
+            document.body.classList.remove('mobile-mode-map', 'mobile-mode-list');
+            document.body.classList.add('mobile-mode-' + view);
+            updateMobileSwitchersUI();
+
+            if (view === 'map' && map) {
+                setTimeout(() => map.invalidateSize(), 80);
+            }
+        }
+
+        function toggleMobileView() {
+            switchMobileView(currentMobileView === 'map' ? 'list' : 'map');
+        }
+
+        function updateMobileSwitchersUI() {
+            const isMap = currentMobileView === 'map';
+            const tabMap = document.getElementById('tabMapBtn');
+            const tabList = document.getElementById('tabListBtn');
+            if (tabMap) tabMap.classList.toggle('active', isMap);
+            if (tabList) tabList.classList.toggle('active', !isMap);
+
+            const floatingIcon = document.getElementById('floatingIcon');
+            const floatingText = document.getElementById('floatingText');
+            if (floatingIcon) floatingIcon.innerText = isMap ? '📋' : '🗺️';
+            if (floatingText) floatingText.innerText = isMap ? 'Rodyti sąrašą' : 'Rodyti žemėlapį';
+        }
+
+        // Mobilus Bottom Sheet informacijos atidarymas
+        function openMobileSheet(node) {
+            if (!node) return;
+            selectedMobileNode = node;
+
+            const nodeId = node.node_id || (node.public_key ? node.public_key.substring(0, 4) : 'node');
+            const name = node.name || node.node_id || 'Kartotuvas';
+            const botId = String(node.bot_id || 'KLP').replace(/[^a-zA-Z0-9_-]/g, '');
+            const telemTime = node.telemetry_updated_at || '';
+            const lastSeen = node.last_seen_at || '';
+            const battV = node.battery_v !== null ? node.battery_v : null;
+            const tempC = node.temperature_c !== null ? node.temperature_c : null;
+            const lat = node.latitude;
+            const lon = node.longitude;
+            const hasValidCoords = (lat !== null && lon !== null && Math.abs(lat) > 0.001 && Math.abs(lon) > 0.001);
+
+            const battStyle = getBatteryStyle(battV);
+            const tempStyle = getTempStyle(tempC);
+
+            document.getElementById('sheetNodeBadge').innerText = nodeId.toUpperCase();
+            document.getElementById('sheetNodeName').innerText = name;
+            document.getElementById('sheetNodeName').title = name;
+            document.getElementById('sheetBotBadge').innerText = `🤖 ${botId}`;
+            document.getElementById('sheetNodeType').innerText = node.is_repeater ? 'KARTOTUVAS' : 'MAZGAS';
+
+            const battEl = document.getElementById('sheetBatteryVal');
+            battEl.innerText = battV !== null ? `${parseFloat(battV).toFixed(2)} V` : 'N/A';
+            battEl.style.color = battStyle.class === 'crit' ? '#ef4444' : (battStyle.class === 'warn' ? '#ffc107' : '#2ed573');
+            document.getElementById('sheetBatterySub').innerText = telemTime ? `Atnaujinta: ${formatRelativeTime(telemTime)}` : 'Nėra duomenų';
+
+            const tempEl = document.getElementById('sheetTempVal');
+            tempEl.innerText = tempC !== null ? tempStyle.text : 'N/A';
+            tempEl.style.color = 'var(--accent-cyan)';
+            document.getElementById('sheetTempSub').innerText = telemTime ? `Atnaujinta: ${formatRelativeTime(telemTime)}` : 'Nėra duomenų';
+
+            document.getElementById('sheetCoordsVal').innerText = hasValidCoords ? `${parseFloat(lat).toFixed(5)}, ${parseFloat(lon).toFixed(5)}` : 'Nėra koordinačių';
+            document.getElementById('sheetTelemVal').innerText = telemTime ? `${formatRelativeTime(telemTime)} (${formatLithuanianTime(telemTime)})` : 'Nėra telemetrijos';
+            document.getElementById('sheetLastSeenVal').innerText = lastSeen ? `${formatRelativeTime(lastSeen)} (${formatLithuanianDateTime(lastSeen)})` : 'Nematytas';
+
+            const navBtn = document.getElementById('sheetNavBtn');
+            if (navBtn) {
+                navBtn.style.display = hasValidCoords ? 'flex' : 'none';
+            }
+
+            const sheet = document.getElementById('mobileInfoSheet');
+            if (sheet) sheet.classList.add('active');
+        }
+
+        function closeMobileSheet() {
+            const sheet = document.getElementById('mobileInfoSheet');
+            if (sheet) sheet.classList.remove('active');
+        }
+
+        function sheetActionFocus() {
+            if (!selectedMobileNode) return;
+            const lat = selectedMobileNode.latitude;
+            const lon = selectedMobileNode.longitude;
+            const nodeId = selectedMobileNode.node_id;
+
+            closeMobileSheet();
+            switchMobileView('map');
+
+            const marker = markersMap[nodeId];
+            if (marker) {
+                map.flyTo(marker.getLatLng(), 15, { duration: 0.8 });
+            } else if (lat && lon) {
+                map.flyTo([lat, lon], 15, { duration: 0.8 });
+            }
+        }
+
+        function sheetActionNavigate() {
+            if (!selectedMobileNode) return;
+            const lat = selectedMobileNode.latitude;
+            const lon = selectedMobileNode.longitude;
+            if (lat && lon) {
+                window.open(`https://www.google.com/maps?q=${lat},${lon}`, '_blank');
+            }
         }
 
         // Gauna mazgų duomenis iš /api/nodes
@@ -1166,6 +1835,14 @@
                             autoPan: true
                         });
 
+                    // Mobiliame įrenginyje: paspaudus ant žymeklio atidarome erdvią Bottom Sheet kortelę
+                    marker.on('click', () => {
+                        if (window.innerWidth <= 768) {
+                            marker.closePopup();
+                            openMobileSheet(node);
+                        }
+                    });
+
                     // Kai atidaromas didelis langas (popup): paslepiame mažąjį preview burbulą
                     marker.on('popupopen', () => {
                         const el = marker.getElement();
@@ -1202,7 +1879,10 @@
                             <span class="node-badge-id">${nodeId.toUpperCase()}</span>
                             <span class="node-name" title="${name}">${name}</span>
                         </div>
-                        <span class="node-bot-badge" title="Gauta per ESP32">🤖 ${botId}</span>
+                        <div style="display:flex; align-items:center; gap:6px;">
+                            <span class="node-bot-badge" title="Gauta per ESP32">🤖 ${botId}</span>
+                            <button class="card-info-btn" onclick="event.stopPropagation(); openMobileSheet(repeaters.find(n => n.node_id === '${nodeId}'));" title="Peržiūrėti informaciją">ℹ️</button>
+                        </div>
                     </div>
 
                     <div class="node-metrics-row">
@@ -1228,10 +1908,15 @@
                 listContainer.appendChild(card);
             });
 
-            // Atnaujiname viršutinius statistikos langelius
+            // Atnaujiname viršutinius statistikos langelius ir mobilias žymas
             document.getElementById('statRepeatersCount').innerText = nodeList.length;
             document.getElementById('statAvgBattery').innerText = battCount > 0 ? (totalBattery / battCount).toFixed(2) + ' V' : '- V';
             document.getElementById('statAvgTemp').innerText = tempCount > 0 ? (totalTemp / tempCount).toFixed(1) + ' °C' : '- °C';
+
+            const mobileTabCount = document.getElementById('mobileTabCount');
+            if (mobileTabCount) mobileTabCount.innerText = nodeList.length;
+            const floatingBadge = document.getElementById('floatingBadge');
+            if (floatingBadge) floatingBadge.innerText = nodeList.length;
 
             // Jei turime žymeklių žemėlapyje - automatiškai pritraukiame kamerą
             if (hasCoordinatesCount > 0) {
@@ -1239,7 +1924,7 @@
             }
         }
 
-        // Paspaudus ant mazgo sąraše – nuskrendame į žemėlapį ir atidarome popup'ą
+        // Paspaudus ant mazgo sąraše – nuskrendame į žemėlapį ir atidarome informaciją
         function focusNode(nodeId, coords = null) {
             document.querySelectorAll('.node-item-card').forEach(c => c.classList.remove('active'));
             const card = document.getElementById(`card-${nodeId}`);
@@ -1248,12 +1933,24 @@
                 card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             }
 
+            const isMobile = window.innerWidth <= 768;
+            const nodeData = repeaters.find(n => (n.node_id === nodeId || (n.public_key && n.public_key.startsWith(nodeId))));
+
+            if (isMobile) {
+                switchMobileView('map');
+                if (nodeData) {
+                    setTimeout(() => openMobileSheet(nodeData), 350);
+                }
+            }
+
             const marker = markersMap[nodeId];
             if (marker) {
-                map.flyTo(marker.getLatLng(), 14, { duration: 1.2 });
-                setTimeout(() => marker.openPopup(), 1200);
+                map.flyTo(marker.getLatLng(), 14, { duration: 1.0 });
+                if (!isMobile) {
+                    setTimeout(() => marker.openPopup(), 1000);
+                }
             } else if (coords) {
-                map.flyTo(coords, 14, { duration: 1.2 });
+                map.flyTo(coords, 14, { duration: 1.0 });
             }
         }
 
@@ -1268,7 +1965,13 @@
             });
         }
 
-        // Paleidžiame žemėlapį užsikrovus DOM (atnaujinimas rankinis per mygtuką)
+        // Stebime ekrano dydžio pasikeitimus (portrait/landscape/desktop)
+        window.addEventListener('resize', () => {
+            initMobileView();
+            if (map) map.invalidateSize();
+        });
+
+        // Paleidžiame žemėlapį užsikrovus DOM
         document.addEventListener('DOMContentLoaded', () => {
             initMap();
         });
