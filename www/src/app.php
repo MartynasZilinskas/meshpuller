@@ -187,14 +187,40 @@ if ($isNodesEndpoint) {
     $all = isset($_GET['all']) && ($_GET['all'] === '1' || $_GET['all'] === 'true');
     $repeaters = $repository->getRepeatersWithLatestTelemetry(!$all);
 
+    // =========================================================================
+    // 🇱🇹 PAPILDOMAS SLUOKSNIS: Geolokacijos filtracija (tik Lietuvos mazgai)
+    // Atlieka filtraciją prieš formuojant galutinį JSON, jei įjungta admine.
+    // =========================================================================
+    $repeaters = $repository->filterNodesByGeolocationSettings($repeaters);
+
+    // =========================================================================
+    // 📊 PAPILDOMAS SLUOKSNIS: Telemetrijos filtracija (nerodyti be telemetrijos)
+    // Galima perduoti telemetry_only=1, has_telemetry=1 arba hide_no_telemetry=1
+    // =========================================================================
+    $telemetryOnly = false;
+    if (isset($_GET['telemetry_only']) && ($_GET['telemetry_only'] === '1' || $_GET['telemetry_only'] === 'true')) {
+        $telemetryOnly = true;
+    } elseif (isset($_GET['has_telemetry']) && ($_GET['has_telemetry'] === '1' || $_GET['has_telemetry'] === 'true')) {
+        $telemetryOnly = true;
+    } elseif (isset($_GET['hide_no_telemetry']) && ($_GET['hide_no_telemetry'] === '1' || $_GET['hide_no_telemetry'] === 'true')) {
+        $telemetryOnly = true;
+    }
+
+    if ($telemetryOnly) {
+        $repeaters = array_values(array_filter($repeaters, function ($node) {
+            return ($node['battery_v'] !== null || $node['temperature_c'] !== null);
+        }));
+    }
+
     echo json_encode([
-        'success'   => true,
-        'endpoint'  => '/api/nodes',
-        'filter'    => $all ? 'all_nodes' : 'repeaters_only',
-        'count'     => count($repeaters),
-        'repeaters' => $repeaters,
-        'nodes'     => $repeaters,
-        'timestamp' => date('Y-m-d H:i:s'),
+        'success'         => true,
+        'endpoint'        => '/api/nodes',
+        'filter'          => $all ? 'all_nodes' : 'repeaters_only',
+        'telemetry_only'  => $telemetryOnly,
+        'count'           => count($repeaters),
+        'repeaters'       => $repeaters,
+        'nodes'           => $repeaters,
+        'timestamp'       => date('Y-m-d H:i:s'),
     ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
     exit;
 }

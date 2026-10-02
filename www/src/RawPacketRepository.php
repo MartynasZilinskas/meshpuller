@@ -498,6 +498,29 @@ SQL;
             } catch (\Throwable $e) {}
         }
 
+        // ---------------------------------------------------------------------
+        // 4. Sukuriame 'system_settings' lentelę sistemos ir žemėlapio konfigūracijai
+        // ---------------------------------------------------------------------
+        try {
+            if ($driver === 'pgsql') {
+                $this->pdo->exec("
+                    CREATE TABLE IF NOT EXISTS system_settings (
+                        setting_key VARCHAR(64) PRIMARY KEY,
+                        setting_value TEXT NULL,
+                        updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    )
+                ");
+            } else {
+                $this->pdo->exec("
+                    CREATE TABLE IF NOT EXISTS `system_settings` (
+                        `setting_key`   VARCHAR(64) NOT NULL PRIMARY KEY,
+                        `setting_value` TEXT NULL,
+                        `updated_at`    TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                ");
+            }
+        } catch (\Throwable $e) {}
+
         // Automatiškai pašaliname senus iškreiptus/klaidingus telemetrijos taškus (pvz. su >15V ar triukšmu)
         $this->cleanupInvalidTelemetry();
     }
@@ -1681,6 +1704,196 @@ SQL;
         } catch (\Throwable $e) {
             return 0;
         }
+    }
+
+    // =========================================================================
+    // ⚙️ SISTEMOS NUSTATYMAI IR GEOLOKACIJOS FILTRACIJA (LIETUVOS RIBOS)
+    // =========================================================================
+
+    /**
+     * Numatytieji sistemos ir žemėlapio nustatymai
+     */
+    public const DEFAULT_SYSTEM_SETTINGS = [
+        'filter_lithuania_enabled'           => false,
+        'filter_lithuania_include_no_coords' => false,
+        'lithuania_lat_min'                  => 53.85,
+        'lithuania_lat_max'                  => 56.45,
+        'lithuania_lon_min'                  => 20.90,
+        'lithuania_lon_max'                  => 26.85,
+    ];
+
+    /**
+     * Grąžina visus sistemos nustatymus iš DB arba atsarginio failo
+     */
+    public function getAllSettings(): array
+    {
+        $settings = self::DEFAULT_SYSTEM_SETTINGS;
+
+        // 1. Nuskaitome iš DB 'system_settings' lentelės
+        try {
+            $stmt = $this->pdo->query("SELECT setting_key, setting_value FROM system_settings");
+            while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
+                $k = $row['setting_key'];
+                $v = $row['setting_value'];
+                if ($v === 'true' || $v === '1') $val = true;
+                elseif ($v === 'false' || $v === '0') $val = false;
+                elseif (is_numeric($v)) $val = (float)$v;
+                else $val = $v;
+                $settings[$k] = $val;
+            }
+        } catch (\Throwable $e) {
+            // 2. Jei DB klaida, skaitome iš settings.json failo
+            $file = __DIR__ . '/../settings.json';
+            if (file_exists($file)) {
+                $fileSettings = json_decode(file_get_contents($file), true) ?: [];
+                $settings = array_merge($settings, $fileSettings);
+            }
+        }
+
+        return $settings;
+    }
+
+    /**
+     * Grąžina vieną nustatymo reikšmę
+     */
+    public function getSetting(string $key, $default = null)
+    {
+        $all = $this->getAllSettings();
+        return $all[$key] ?? $default;
+    }
+
+    /**
+     * Išsaugo nustatymus į DB ir settings.json failą
+     */
+    public function saveSettings(array $newSettings): array
+    {
+        $driver = $this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME);
+        $current = $this->getAllSettings();
+        $updated = array_merge($current, $newSettings);
+
+        foreach ($newSettings as $k => $v) {
+            $valStr = is_bool($v) ? ($v ? '1' : '0') : (string)$v;
+            try {
+                if ($driver === 'pgsql') {
+                    $sql = "INSERT INTO system_settings (setting_key, setting_value, updated_at)
+                            VALUES (:key, :val, CURRENT_TIMESTAMP)
+                            ON CONFLICT (setting_key) 
+                            DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = CURRENT_TIMESTAMP";
+                } else {
+                    $sql = "INSERT INTO `system_settings` (`setting_key`, `setting_value`, `updated_at`)
+                            VALUES (:key, :val, CURRENT_TIMESTAMP)
+                            ON DUPLICATE KEY UPDATE `setting_value` = VALUES(`setting_value`), `updated_at` = CURRENT_TIMESTAMP";
+                }
+                $stmt = $this->pdo->prepare($sql);
+                $stmt->execute([':key' => $k, ':val' => $valStr]);
+            } catch (\Throwable $e) {}
+        }
+
+        // Taip pat išsaugome į atsarginį failą www/settings.json
+        try {
+            $file = __DIR__ . '/../settings.json';
+            file_put_contents($file, json_encode($updated, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        } catch (\Throwable $e) {}
+
+        return $updated;
+    }
+
+    /**
+     * Patikrina ar geografinis taškas patenka į nustatytas Lietuvos ribas
+     */
+    public function isPointInLithuania(?float $lat, ?float $lon, ?array $settings = null): bool
+    {
+        if ($lat === null || $lon === null) {
+            return false;
+        }
+
+        // (0, 0) koordinatės nėra reali geografinė vieta
+        if (abs($lat) < 0.001 && abs($lon) < 0.001) {
+            return false;
+        }
+
+        $cfg = $settings ?: $this->getAllSettings();
+        $latMin = (float)($cfg['lithuania_lat_min'] ?? self::DEFAULT_SYSTEM_SETTINGS['lithuania_lat_min']);
+        $latMax = (float)($cfg['lithuania_lat_max'] ?? self::DEFAULT_SYSTEM_SETTINGS['lithuania_lat_max']);
+        $lonMin = (float)($cfg['lithuania_lon_min'] ?? self::DEFAULT_SYSTEM_SETTINGS['lithuania_lon_min']);
+        $lonMax = (float)($cfg['lithuania_lon_max'] ?? self::DEFAULT_SYSTEM_SETTINGS['lithuania_lon_max']);
+
+        return ($lat >= $latMin && $lat <= $latMax && $lon >= $lonMin && $lon <= $lonMax);
+    }
+
+    /**
+     * Papildomas sluoksnis: filtruoja mazgų sąrašą pagal Lietuvos geolokaciją prieš formuojant JSON
+     *
+     * @param array $nodes Mazgų masyvas
+     * @return array Atfiltruotas mazgų masyvas
+     */
+    public function filterNodesByGeolocationSettings(array $nodes): array
+    {
+        $settings = $this->getAllSettings();
+
+        // Jei filtras išjungtas admine – grąžiname visus mazgus nepakeistus
+        if (empty($settings['filter_lithuania_enabled'])) {
+            return $nodes;
+        }
+
+        $includeNoCoords = !empty($settings['filter_lithuania_include_no_coords']);
+
+        $filtered = [];
+        foreach ($nodes as $node) {
+            $lat = isset($node['latitude']) && $node['latitude'] !== null ? (float)$node['latitude'] : null;
+            $lon = isset($node['longitude']) && $node['longitude'] !== null ? (float)$node['longitude'] : null;
+
+            if ($lat === null || $lon === null || (abs($lat) < 0.001 && abs($lon) < 0.001)) {
+                // Mazgas be koordinačių
+                if ($includeNoCoords) {
+                    $filtered[] = $node;
+                }
+                continue;
+            }
+
+            if ($this->isPointInLithuania($lat, $lon, $settings)) {
+                $filtered[] = $node;
+            }
+        }
+
+        return array_values($filtered);
+    }
+
+    /**
+     * Grąžina geolokacijos filtro statistiką administratoriaus pultui
+     */
+    public function getGeolocationFilterStats(): array
+    {
+        $settings = $this->getAllSettings();
+        $total = 0;
+        $inLt = 0;
+        $outsideLt = 0;
+        $noCoords = 0;
+
+        try {
+            $stmt = $this->pdo->query("SELECT latitude, longitude FROM nodes");
+            while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
+                $total++;
+                $lat = $row['latitude'] !== null ? (float)$row['latitude'] : null;
+                $lon = $row['longitude'] !== null ? (float)$row['longitude'] : null;
+
+                if ($lat === null || $lon === null || (abs($lat) < 0.001 && abs($lon) < 0.001)) {
+                    $noCoords++;
+                } elseif ($this->isPointInLithuania($lat, $lon, $settings)) {
+                    $inLt++;
+                } else {
+                    $outsideLt++;
+                }
+            }
+        } catch (\Throwable $e) {}
+
+        return [
+            'settings'         => $settings,
+            'total_nodes'      => $total,
+            'nodes_in_lt'      => $inLt,
+            'nodes_outside_lt' => $outsideLt,
+            'nodes_no_coords'  => $noCoords,
+        ];
     }
 
     /**

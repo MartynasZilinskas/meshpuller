@@ -136,6 +136,81 @@ if ($action === 'stats') {
     exit;
 }
 
+// -----------------------------------------------------------------------------
+// ⚙️ Sistemos ir geolokacijos nustatymų valdymas
+// -----------------------------------------------------------------------------
+if ($action === 'settings') {
+    try {
+        $geoStats = $repository->getGeolocationFilterStats();
+        echo json_encode([
+            'success'  => true,
+            'settings' => $geoStats['settings'],
+            'stats'    => [
+                'total_nodes'      => $geoStats['total_nodes'],
+                'nodes_in_lt'      => $geoStats['nodes_in_lt'],
+                'nodes_outside_lt' => $geoStats['nodes_outside_lt'],
+                'nodes_no_coords'  => $geoStats['nodes_no_coords']
+            ]
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    } catch (\Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+if ($action === 'save_settings') {
+    if ($method !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['success' => false, 'error' => 'Metodas nepalaikomas']);
+        exit;
+    }
+
+    try {
+        $rawInput = file_get_contents('php://input');
+        $data = json_decode($rawInput, true) ?: $_POST;
+
+        $newSettings = [];
+        if (isset($data['filter_lithuania_enabled'])) {
+            $newSettings['filter_lithuania_enabled'] = ($data['filter_lithuania_enabled'] === true || $data['filter_lithuania_enabled'] === '1' || $data['filter_lithuania_enabled'] === 1);
+        }
+        if (isset($data['filter_lithuania_include_no_coords'])) {
+            $newSettings['filter_lithuania_include_no_coords'] = ($data['filter_lithuania_include_no_coords'] === true || $data['filter_lithuania_include_no_coords'] === '1' || $data['filter_lithuania_include_no_coords'] === 1);
+        }
+        if (isset($data['lithuania_lat_min']) && is_numeric($data['lithuania_lat_min'])) {
+            $newSettings['lithuania_lat_min'] = (float)$data['lithuania_lat_min'];
+        }
+        if (isset($data['lithuania_lat_max']) && is_numeric($data['lithuania_lat_max'])) {
+            $newSettings['lithuania_lat_max'] = (float)$data['lithuania_lat_max'];
+        }
+        if (isset($data['lithuania_lon_min']) && is_numeric($data['lithuania_lon_min'])) {
+            $newSettings['lithuania_lon_min'] = (float)$data['lithuania_lon_min'];
+        }
+        if (isset($data['lithuania_lon_max']) && is_numeric($data['lithuania_lon_max'])) {
+            $newSettings['lithuania_lon_max'] = (float)$data['lithuania_lon_max'];
+        }
+
+        $saved = $repository->saveSettings($newSettings);
+        $geoStats = $repository->getGeolocationFilterStats();
+
+        echo json_encode([
+            'success'  => true,
+            'message'  => 'Nustatymai sėkmingai išsaugoti!',
+            'settings' => $saved,
+            'stats'    => [
+                'total_nodes'      => $geoStats['total_nodes'],
+                'nodes_in_lt'      => $geoStats['nodes_in_lt'],
+                'nodes_outside_lt' => $geoStats['nodes_outside_lt'],
+                'nodes_no_coords'  => $geoStats['nodes_no_coords']
+            ]
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    } catch (\Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
 // Mazgų sąrašas su filtrais
 if ($action === 'nodes') {
     $filters = [

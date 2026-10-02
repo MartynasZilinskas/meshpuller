@@ -199,6 +199,78 @@
             100% { transform: rotate(360deg); }
         }
 
+        /* Jungiklis: Nerodyti be telemetrijos */
+        .telemetry-filter-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: #252525;
+            border: 1px solid var(--border-color);
+            padding: 5px 11px;
+            border-radius: var(--radius-md);
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            cursor: pointer;
+            user-select: none;
+            transition: all 0.2s ease;
+            min-height: 32px;
+        }
+
+        .telemetry-filter-toggle:hover {
+            border-color: rgba(0, 210, 255, 0.4);
+            color: var(--text-main);
+            background: #2a2a2a;
+        }
+
+        .telemetry-filter-toggle.active {
+            border-color: var(--accent-cyan);
+            background: rgba(0, 210, 255, 0.12);
+            color: #ffffff;
+            box-shadow: 0 0 10px rgba(0, 210, 255, 0.2);
+        }
+
+        .telemetry-filter-toggle input[type="checkbox"] {
+            display: none;
+        }
+
+        .telemetry-filter-toggle .toggle-switch {
+            width: 28px;
+            height: 16px;
+            background: #444444;
+            border-radius: 999px;
+            position: relative;
+            transition: background 0.2s ease;
+            flex-shrink: 0;
+        }
+
+        .telemetry-filter-toggle .toggle-switch::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 12px;
+            height: 12px;
+            background: #ffffff;
+            border-radius: 50%;
+            transition: transform 0.2s ease;
+        }
+
+        .telemetry-filter-toggle input[type="checkbox"]:checked + .toggle-switch {
+            background: var(--accent-cyan);
+        }
+
+        .telemetry-filter-toggle input[type="checkbox"]:checked + .toggle-switch::after {
+            transform: translateX(12px);
+        }
+
+        .telemetry-filter-toggle .text-mobile {
+            display: none;
+        }
+
+        .telemetry-filter-toggle .text-desktop {
+            display: inline;
+        }
+
         /* Pagrindinis turinys: Žemėlapis ir Šoninė panelė */
         .main-container {
             flex: 1;
@@ -773,13 +845,19 @@
                 display: none;
             }
 
-            .session-indicator span {
+            .telemetry-filter-toggle {
+                padding: 4px 8px;
+                font-size: 0.72rem;
+                min-height: 34px;
+                gap: 6px;
+            }
+
+            .telemetry-filter-toggle .text-desktop {
                 display: none;
             }
 
-            .session-indicator {
-                padding: 6px;
-                border-radius: 50%;
+            .telemetry-filter-toggle .text-mobile {
+                display: inline;
             }
 
             .nav-btn {
@@ -1234,16 +1312,20 @@
                 </svg>
             </div>
             <div class="brand-text-container">
-                <h1 class="brand-title">MeshCore Map</h1>
+                <h1 class="brand-title">MeshCore Telemetry</h1>
                 <span class="brand-badge">869.618 MHz • ShortFast</span>
             </div>
         </div>
 
         <div class="header-meta">
-            <div class="session-indicator" id="liveStatusBadge">
-                <div class="pulse-dot"></div>
-                <span id="liveStatusText">TIESIOGIAI ETERYJE</span>
-            </div>
+            <label class="telemetry-filter-toggle" id="telemetryFilterToggle" title="Nerodyti taškų be telemetrijos">
+                <input type="checkbox" id="hideNoTelemetryInput" onchange="onTelemetryToggleChange(this.checked)">
+                <span class="toggle-switch"></span>
+                <span class="toggle-text">
+                    <span class="text-desktop">Nerodyti be telemetrijos</span>
+                    <span class="text-mobile">Tik telemetrija</span>
+                </span>
+            </label>
 
             <button class="nav-btn" id="refreshBtn" onclick="fetchNodesData(true)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1251,10 +1333,6 @@
                 </svg>
                 <span>Atnaujinti</span>
             </button>
-
-            <a href="admin/" class="nav-btn" style="text-decoration: none;" title="Administravimo pultas">
-                <span>⚙️ Admin</span>
-            </a>
         </div>
     </header>
 
@@ -1384,11 +1462,19 @@
 
     <script>
         let repeaters = [];
+        let allLoadedNodes = [];
         let map = null;
         let markersGroup = null;
         let markersMap = {}; // node_id -> leaflet marker
         let currentMobileView = 'map'; // 'map' arba 'list'
         let selectedMobileNode = null; // aktyvus mazgas mobiliam bottom sheet
+
+        // Mazgo telemetrijos tikrinimas: ar turi realius baterijos arba temperatūros rodmenis
+        function hasNodeTelemetry(node) {
+            if (!node) return false;
+            return (node.battery_v !== null && node.battery_v !== undefined) || 
+                   (node.temperature_c !== null && node.temperature_c !== undefined);
+        }
 
         // Inicijuojame Leaflet žemėlapį
         function initMap() {
@@ -1458,6 +1544,7 @@
             markersGroup = L.featureGroup().addTo(map);
 
             // Užkrauname duomenis
+            initTelemetryFilter();
             fetchNodesData(true);
         }
 
@@ -1583,19 +1670,60 @@
             }
         }
 
+        // Telemetrijos filtro būsenos valdymas (localStorage)
+        function initTelemetryFilter() {
+            const isChecked = localStorage.getItem('meshcore_hide_no_telemetry') === 'true';
+            const input = document.getElementById('hideNoTelemetryInput');
+            const wrap = document.getElementById('telemetryFilterToggle');
+            if (input) input.checked = isChecked;
+            if (wrap) {
+                if (isChecked) wrap.classList.add('active');
+                else wrap.classList.remove('active');
+            }
+        }
+
+        function onTelemetryToggleChange(checked) {
+            localStorage.setItem('meshcore_hide_no_telemetry', checked ? 'true' : 'false');
+            const wrap = document.getElementById('telemetryFilterToggle');
+            if (wrap) {
+                if (checked) wrap.classList.add('active');
+                else wrap.classList.remove('active');
+            }
+
+            // 1. Momentinis perskaičiavimas iš jau turimų duomenų (nulinė delsa)
+            if (allLoadedNodes && allLoadedNodes.length > 0) {
+                repeaters = checked ? allLoadedNodes.filter(hasNodeTelemetry) : [...allLoadedNodes];
+                renderNodes(repeaters);
+            }
+
+            // 2. Sinchroninis atnaujinimas iš serverio
+            fetchNodesData(true);
+        }
+
         // Gauna mazgų duomenis iš /api/nodes
         async function fetchNodesData(animateBtn = false) {
             const btn = document.getElementById('refreshBtn');
             if (animateBtn && btn) btn.classList.add('rotating');
 
+            const hideNoTelemetry = localStorage.getItem('meshcore_hide_no_telemetry') === 'true';
+            const queryParams = [];
+            if (hideNoTelemetry) queryParams.push('telemetry_only=1');
+            queryParams.push('_t=' + Date.now());
+            const queryString = '?' + queryParams.join('&');
+
             try {
                 // Ieškome /api/nodes arba kitų galimų adresų
-                const endpoints = ['/api/nodes', '/nodes.php', 'api/nodes', '/nodes'];
+                const endpoints = [
+                    `/api/nodes${queryString}`,
+                    `/nodes.php${queryString}`,
+                    `api/nodes${queryString}`,
+                    `/nodes${queryString}`
+                ];
                 let response = null;
 
                 for (const url of endpoints) {
                     try {
-                        const res = await fetch(url);
+                        const res = await fetch(url, { cache: 'no-store' });
                         if (res.ok) {
                             response = await res.json();
                             break;
@@ -1606,7 +1734,16 @@
                 }
 
                 if (response && (response.repeaters || response.nodes)) {
-                    repeaters = response.repeaters || response.nodes || [];
+                    const rawList = response.repeaters || response.nodes || [];
+                    if (!hideNoTelemetry) {
+                        allLoadedNodes = rawList;
+                        repeaters = rawList;
+                    } else {
+                        if (!allLoadedNodes || allLoadedNodes.length === 0) {
+                            allLoadedNodes = rawList;
+                        }
+                        repeaters = rawList.filter(hasNodeTelemetry);
+                    }
                     renderNodes(repeaters);
                 } else {
                     document.getElementById('nodeListContainer').innerHTML = `

@@ -626,7 +626,7 @@ $isLoggedIn = isAdminLoggedIn();
 
     <!-- Viršutinė antraštė -->
     <header class="admin-navbar">
-        <div class="brand-container">
+        <div class="brand-container" style="cursor: pointer;" onclick="switchTab('nodes')" title="Eiti į pagrindinį puslapį">
             <div class="brand-logo">
                 <svg viewBox="0 0 24 24">
                     <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
@@ -710,7 +710,7 @@ $isLoggedIn = isAdminLoggedIn();
             <!-- Skirtukų navigacija -->
             <div class="tab-nav">
                 <button class="tab-btn active" id="tabBtn-nodes" onclick="switchTab('nodes')">
-                    <span>🛰️ Mazgai & Nustatymai</span>
+                    <span>🛰️ Mazgai</span>
                 </button>
                 <button class="tab-btn" id="tabBtn-telemetry" onclick="switchTab('telemetry')">
                     <span>📊 Telemetrijos Įrašai</span>
@@ -721,22 +721,25 @@ $isLoggedIn = isAdminLoggedIn();
                 <button class="tab-btn" id="tabBtn-tools" onclick="switchTab('tools')">
                     <span>⚡ Eilė & Įrankiai</span>
                 </button>
+                <button class="tab-btn" id="tabBtn-settings" onclick="switchTab('settings')">
+                    <span>⚙️ Nustatymai</span>
+                </button>
             </div>
 
             <!-- SKIRTUKAS 1: MAZGAI & NUSTATYMAI -->
             <div class="tab-content active" id="tab-nodes">
                 <div class="filter-card">
                     <div class="filter-group">
-                        <input type="text" id="nodesSearch" class="form-control" style="width: 260px;" placeholder="Ieškoti pagal vardą, ID ar raktą..." oninput="debounce(loadNodes, 300)()">
+                        <input type="text" id="nodesSearch" class="form-control" style="width: 260px;" placeholder="Ieškoti pagal vardą, ID ar raktą..." oninput="onNodesSearchInput()" onkeydown="if(event.key==='Enter') onNodesSearchEnter()">
                         
-                        <select id="nodesTypeFilter" class="form-control" style="width: 170px;" onchange="loadNodes()">
+                        <select id="nodesTypeFilter" class="form-control" style="width: 170px;" onchange="onNodesFilterChange()">
                             <option value="">Visi tipai</option>
                             <option value="repeater">Tik Kartotuvai</option>
                             <option value="chat">Tik Pokalbiai</option>
                             <option value="room">Tik Kambariai</option>
                         </select>
 
-                        <select id="nodesUpdateFilter" class="form-control" style="width: 190px;" onchange="loadNodes()">
+                        <select id="nodesUpdateFilter" class="form-control" style="width: 190px;" onchange="onNodesFilterChange()">
                             <option value="">Visi (Stebimi ir kiti)</option>
                             <option value="1">Tik stebimi (update=1)</option>
                             <option value="0">Tik nestebimi (update=0)</option>
@@ -778,16 +781,16 @@ $isLoggedIn = isAdminLoggedIn();
                             <span class="close-chip" onclick="clearTelemetryNodeFilter()" title="Išvalyti mazgo filtrą">&times;</span>
                         </div>
 
-                        <input type="text" id="telemetryNodeInput" class="form-control" style="width: 180px;" placeholder="Mazgo ID (pvz. b9dd)..." onchange="loadTelemetry(0)">
+                        <input type="text" id="telemetryNodeInput" class="form-control" style="width: 180px;" placeholder="Mazgo ID (pvz. b9dd)..." onchange="onTelemetryFilterChange()" onkeydown="if(event.key==='Enter') onTelemetryFilterChange()">
                         
-                        <select id="telemetryTypeFilter" class="form-control" style="width: 160px;" onchange="loadTelemetry(0)">
+                        <select id="telemetryTypeFilter" class="form-control" style="width: 160px;" onchange="onTelemetryFilterChange()">
                             <option value="">Visi tipai</option>
                             <option value="STATUS">STATUS</option>
                             <option value="TELEMETRY">TELEMETRY</option>
                             <option value="ADVERT">ADVERT</option>
                         </select>
 
-                        <button class="btn btn-secondary btn-sm" onclick="loadTelemetry(0)">Filtruoti</button>
+                        <button class="btn btn-secondary btn-sm" onclick="onTelemetryFilterChange()">Filtruoti</button>
                     </div>
 
                     <div>
@@ -835,16 +838,16 @@ $isLoggedIn = isAdminLoggedIn();
                             <span class="close-chip" onclick="clearRawNodeFilter()" title="Išvalyti mazgo filtrą">&times;</span>
                         </div>
 
-                        <input type="text" id="rawSearchInput" class="form-control" style="width: 220px;" placeholder="Ieškoti hex, varde ar klaidoje..." oninput="debounce(loadRawPackets, 400)(0)">
+                        <input type="text" id="rawSearchInput" class="form-control" style="width: 220px;" placeholder="Ieškoti hex, varde ar klaidoje..." oninput="onRawSearchInput()" onkeydown="if(event.key==='Enter') onRawSearchEnter()">
                         
-                        <select id="rawStatusFilter" class="form-control" style="width: 170px;" onchange="loadRawPackets(0)">
+                        <select id="rawStatusFilter" class="form-control" style="width: 170px;" onchange="onRawFilterChange()">
                             <option value="">Visos būsenos</option>
                             <option value="errors">⚠️ Tik KLAIDOS</option>
                             <option value="pending">⏳ Eilėje (neapdoroti)</option>
                             <option value="processed">✅ Apdoroti</option>
                         </select>
 
-                        <select id="rawDirectionFilter" class="form-control" style="width: 140px;" onchange="loadRawPackets(0)">
+                        <select id="rawDirectionFilter" class="form-control" style="width: 140px;" onchange="onRawFilterChange()">
                             <option value="">Visos kryptys</option>
                             <option value="RX">Tik RX (gauti)</option>
                             <option value="TX">Tik TX (išsiųsti)</option>
@@ -912,6 +915,131 @@ $isLoggedIn = isAdminLoggedIn();
                         <div>• <b>/api/repyters</b>: <a href="../api/repyters" target="_blank" style="color: var(--accent-cyan);">Atidaryti ESP32 stebimų kartotuvų sąrašą (JSON)</a> (Grąžina tik tuos, kur update=true)</div>
                         <div>• <b>/process_queue.php</b>: <a href="../process_queue.php?limit=20" target="_blank" style="color: var(--accent-cyan);">Atidaryti HTTP Cron Workerį</a> (Galima įsidėti į cPanel Cron kas minutę)</div>
                     </div>
+                </div>
+            </div>
+
+            <!-- SKIRTUKAS 5: NUSTATYMAI -->
+            <div class="tab-content" id="tab-settings">
+                <div class="filter-card" style="display: block;">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 12px;">
+                        <div>
+                            <h4 style="color: #ffffff; font-size: 1.1rem; margin-bottom: 4px; display: flex; align-items: center; gap: 8px;">
+                                <span>🌍 Mazgų Geografinės Filtracijos Nustatymai</span>
+                                <span id="settingFilterStatusBadge" class="badge badge-gray">Kraunama...</span>
+                            </h4>
+                            <p style="color: var(--text-muted); font-size: 0.84rem; max-width: 800px;">
+                                Valdykite papildomą filtravimo sluoksnį (layerį), kuris prieš formuojant <code>/api/nodes</code> JSON atrinks tik tuos taškus, kurie geografiškai patenka į Lietuvos ribas.
+                            </p>
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <a href="../api/nodes" target="_blank" class="btn btn-secondary btn-sm" style="text-decoration: none;">
+                                <span>🔗 Tikrinti /api/nodes</span>
+                            </a>
+                            <button type="button" class="btn btn-sm" onclick="loadSettings(true)">
+                                <span>🔄 Atnaujinti</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Statistika apie taškų pasiskirstymą -->
+                    <div class="stats-banner" style="margin-top: 16px; margin-bottom: 16px;">
+                        <div class="stat-box">
+                            <div class="val" id="stTotalNodes">-</div>
+                            <div class="lbl">Visi Mazgai DB</div>
+                        </div>
+                        <div class="stat-box green">
+                            <div class="val" id="stLtNodes">-</div>
+                            <div class="lbl">Lietuvoje (Koordinatės)</div>
+                        </div>
+                        <div class="stat-box orange">
+                            <div class="val" id="stOutsideNodes">-</div>
+                            <div class="lbl">Už Lietuvos Ribų</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="val" id="stNoCoordsNodes">-</div>
+                            <div class="lbl">Be Koordinačių (0,0)</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="table-wrapper" style="padding: 24px; max-width: 900px;">
+                    <form id="systemSettingsForm" onsubmit="handleSaveSettings(event)">
+                        <h4 style="color: #ffffff; font-size: 1rem; margin-bottom: 16px; border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">
+                            Filtravimo Taisyklės
+                        </h4>
+
+                        <!-- Pagrindinis jungiklis -->
+                        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 16px; margin-bottom: 20px;">
+                            <label style="display: flex; align-items: flex-start; gap: 12px; cursor: pointer;">
+                                <input type="checkbox" id="settingFilterLtEnabled" style="width: 20px; height: 20px; margin-top: 2px;">
+                                <div>
+                                    <div style="font-size: 0.95rem; font-weight: 600; color: #ffffff;">
+                                        Įjungti taškų filtravimą tik Lietuvoje
+                                    </div>
+                                    <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
+                                        Kai aktyvuota, <code>/api/nodes</code> endpointas taiko geografinį filtrą ir atmeta taškus, kurie yra už nustatytų Lietuvos koordinačių rėmų.
+                                    </div>
+                                </div>
+                            </label>
+                        </div>
+
+                        <!-- Taškai be koordinačių pasirinkimas -->
+                        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 16px; margin-bottom: 20px;">
+                            <label style="display: flex; align-items: flex-start; gap: 12px; cursor: pointer;">
+                                <input type="checkbox" id="settingFilterLtIncludeNoCoords" style="width: 20px; height: 20px; margin-top: 2px;">
+                                <div>
+                                    <div style="font-size: 0.95rem; font-weight: 600; color: #ffffff;">
+                                        Įtraukti mazgus be koordinačių
+                                    </div>
+                                    <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
+                                        Jei pažymėta, mazgai, neturintys nustatytų GPS koordinačių (lat/lon yra 0 arba tušti), taip pat bus pateikiami sąraše. Jei atžymėta – bus rodomi tik patvirtinti taškai su Lietuvos koordinatėmis.
+                                    </div>
+                                </div>
+                            </label>
+                        </div>
+
+                        <!-- Lietuvos geografinės ribos -->
+                        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 16px; margin-bottom: 20px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+                                <div>
+                                    <div style="font-size: 0.95rem; font-weight: 600; color: #ffffff;">Lietuvos Geografinių Koordinačių Ribos (Bounding Box)</div>
+                                    <div style="font-size: 0.8rem; color: var(--text-muted);">Numatytosios Lietuvos ribos su minimalia tolerancija pasienyje.</div>
+                                </div>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="resetDefaultLtBounds()">Atstatyti numatytąsias</button>
+                            </div>
+
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px;">
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <label for="settingLtLatMin">Minimali Platuma (Lat Min °N)</label>
+                                    <input type="number" step="0.0001" id="settingLtLatMin" class="form-control" placeholder="53.8500" required>
+                                    <small style="color: var(--text-dim); font-size: 0.72rem;">Pietinis taškas (~53.85°)</small>
+                                </div>
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <label for="settingLtLatMax">Maksimali Platuma (Lat Max °N)</label>
+                                    <input type="number" step="0.0001" id="settingLtLatMax" class="form-control" placeholder="56.4500" required>
+                                    <small style="color: var(--text-dim); font-size: 0.72rem;">Šiaurinis taškas (~56.45°)</small>
+                                </div>
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <label for="settingLtLonMin">Minimali Ilguma (Lon Min °E)</label>
+                                    <input type="number" step="0.0001" id="settingLtLonMin" class="form-control" placeholder="20.9000" required>
+                                    <small style="color: var(--text-dim); font-size: 0.72rem;">Vakarinis taškas (~20.90°)</small>
+                                </div>
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <label for="settingLtLonMax">Maksimali Ilguma (Lon Max °E)</label>
+                                    <input type="number" step="0.0001" id="settingLtLonMax" class="form-control" placeholder="26.8500" required>
+                                    <small style="color: var(--text-dim); font-size: 0.72rem;">Rytinis taškas (~26.85°)</small>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Išsaugojimas ir pranešimas -->
+                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 24px;">
+                            <div id="settingsFeedback" style="font-size: 0.85rem; font-weight: 500;"></div>
+                            <button type="submit" class="btn" id="btnSaveSettings" style="min-width: 160px; justify-content: center;">
+                                <span>💾 Išsaugoti Nustatymus</span>
+                            </button>
+                        </div>
+                    </form>
                 </div>
             </div>
         </div>
@@ -1039,6 +1167,13 @@ $isLoggedIn = isAdminLoggedIn();
         const rawLimit = 50;
         let rawNodeFilter = '';
 
+        // Istorijos ir modalų būsenos valdymas
+        let activePacketModalId = null;
+        let activeEditNodeKey = null;
+        let pendingEditNodeKey = null;
+        let modalOpenedInSession = false;
+        let isApplyingUrlState = false;
+
         // Prisijungimo apdorojimas
         async function handleLogin(e) {
             e.preventDefault();
@@ -1071,8 +1206,216 @@ $isLoggedIn = isAdminLoggedIn();
             location.reload();
         }
 
+        // --- URL & ISTORIJOS (HISTORY) SINCHRONIZAVIMAS ---
+        function getAppUrl(overrides = {}) {
+            const params = new URLSearchParams();
+            const tab = overrides.tab !== undefined ? overrides.tab : currentTab;
+            params.set('tab', tab || 'nodes');
+
+            if (tab === 'nodes') {
+                const search = overrides.search !== undefined ? overrides.search : (document.getElementById('nodesSearch')?.value || '').trim();
+                const type = overrides.type !== undefined ? overrides.type : (document.getElementById('nodesTypeFilter')?.value || '');
+                const update = overrides.update !== undefined ? overrides.update : (document.getElementById('nodesUpdateFilter')?.value || '');
+                const editNode = overrides.edit_node !== undefined ? overrides.edit_node : activeEditNodeKey;
+
+                if (search) params.set('search', search);
+                if (type) params.set('type', type);
+                if (update) params.set('update', update);
+                if (editNode) params.set('edit_node', editNode);
+            } else if (tab === 'telemetry') {
+                const node = overrides.node !== undefined ? overrides.node : (document.getElementById('telemetryNodeInput')?.value || '').trim();
+                const type = overrides.type !== undefined ? overrides.type : (document.getElementById('telemetryTypeFilter')?.value || '');
+                const page = overrides.page !== undefined ? overrides.page : telPage;
+                const packet = overrides.packet !== undefined ? overrides.packet : activePacketModalId;
+
+                if (node) params.set('node', node);
+                if (type) params.set('type', type);
+                if (page > 0) params.set('page', page + 1);
+                if (packet) params.set('packet', packet);
+            } else if (tab === 'raw') {
+                const search = overrides.search !== undefined ? overrides.search : (document.getElementById('rawSearchInput')?.value || '').trim();
+                const status = overrides.status !== undefined ? overrides.status : (document.getElementById('rawStatusFilter')?.value || '');
+                const dir = overrides.dir !== undefined ? overrides.dir : (document.getElementById('rawDirectionFilter')?.value || '');
+                const page = overrides.page !== undefined ? overrides.page : rawPage;
+                const packet = overrides.packet !== undefined ? overrides.packet : activePacketModalId;
+
+                if (search) params.set('search', search);
+                if (status) params.set('status', status);
+                if (dir) params.set('dir', dir);
+                if (page > 0) params.set('page', page + 1);
+                if (packet) params.set('packet', packet);
+            } else if (tab === 'tools') {
+                // Eilė ir įrankiai papildomų parametrų neturi
+            }
+
+            const qs = params.toString();
+            return window.location.pathname + (qs ? '?' + qs : '');
+        }
+
+        function updateHistory(overrides = {}, mode = 'push') {
+            if (isApplyingUrlState) return;
+            const newUrl = getAppUrl(overrides);
+            const currentUrl = window.location.pathname + window.location.search;
+            if (newUrl === currentUrl && mode === 'push') return;
+
+            const state = {
+                tab: overrides.tab !== undefined ? overrides.tab : currentTab,
+                activePacketModalId: overrides.packet !== undefined ? overrides.packet : activePacketModalId,
+                activeEditNodeKey: overrides.edit_node !== undefined ? overrides.edit_node : activeEditNodeKey,
+                hasModal: !!(overrides.packet || overrides.edit_node || activePacketModalId || activeEditNodeKey)
+            };
+
+            if (mode === 'push') {
+                history.pushState(state, '', newUrl);
+            } else if (mode === 'replace') {
+                history.replaceState(state, '', newUrl);
+            }
+            updateDocumentTitle();
+        }
+
+        function updateDocumentTitle() {
+            const titles = {
+                nodes: '🛰️ Mazgai',
+                telemetry: '📊 Telemetrija',
+                raw: '📦 RAW Paketai',
+                tools: '⚡ Eilė ir Įrankiai',
+                settings: '⚙️ Nustatymai'
+            };
+            let title = titles[currentTab] || 'MeshCore Admin';
+            if (activePacketModalId) {
+                title += ` (Paketas #${activePacketModalId})`;
+            } else if (activeEditNodeKey) {
+                title += ` (Mazgo nustatymai)`;
+            }
+            document.title = `${title} — MeshCore Admin`;
+        }
+
+        function applyUrlState(isInitialLoad = false) {
+            isApplyingUrlState = true;
+            try {
+                const params = new URLSearchParams(window.location.search);
+                let tab = params.get('tab') || 'nodes';
+                if (!['nodes', 'telemetry', 'raw', 'tools', 'settings'].includes(tab)) {
+                    tab = 'nodes';
+                }
+
+                const packetId = params.get('packet');
+                const editKey = params.get('edit_node') || params.get('edit');
+
+                // 1. Modalo būsenos atstatymas
+                if (packetId) {
+                    if (activePacketModalId != packetId) {
+                        inspectPacket(packetId, false);
+                    }
+                } else {
+                    const pModal = document.getElementById('packetModal');
+                    if (pModal && pModal.classList.contains('active')) {
+                        closeModal('packetModal', false);
+                    }
+                }
+
+                if (editKey) {
+                    if (activeEditNodeKey != editKey) {
+                        if (nodesData && nodesData.length > 0) {
+                            openEditNode(editKey, false);
+                        } else {
+                            pendingEditNodeKey = editKey;
+                        }
+                    }
+                } else {
+                    const eModal = document.getElementById('editNodeModal');
+                    if (eModal && eModal.classList.contains('active')) {
+                        closeModal('editNodeModal', false);
+                    }
+                }
+
+                // 2. Aktyvus skirtukas UI
+                currentTab = tab;
+                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+                const btn = document.getElementById(`tabBtn-${tab}`);
+                const content = document.getElementById(`tab-${tab}`);
+                if (btn) btn.classList.add('active');
+                if (content) content.classList.add('active');
+
+                // 3. Skirtuko duomenų atstatymas ir užkrovimas
+                if (tab === 'nodes') {
+                    const search = params.get('search') || params.get('q') || '';
+                    const type = params.get('type') || '';
+                    const update = params.get('update') || '';
+
+                    if (document.getElementById('nodesSearch')) document.getElementById('nodesSearch').value = search;
+                    if (document.getElementById('nodesTypeFilter')) document.getElementById('nodesTypeFilter').value = type;
+                    if (document.getElementById('nodesUpdateFilter')) document.getElementById('nodesUpdateFilter').value = update;
+
+                    loadNodes();
+                } else if (tab === 'telemetry') {
+                    const node = params.get('node') || '';
+                    const type = params.get('type') || '';
+                    const pageParam = parseInt(params.get('page'), 10);
+                    telPage = (!isNaN(pageParam) && pageParam > 0) ? (pageParam - 1) : 0;
+                    telNodeFilter = node;
+
+                    if (document.getElementById('telemetryNodeInput')) document.getElementById('telemetryNodeInput').value = node;
+                    if (document.getElementById('telemetryTypeFilter')) document.getElementById('telemetryTypeFilter').value = type;
+                    const chip = document.getElementById('telemetryNodeFilterTag');
+                    if (chip) {
+                        if (node) {
+                            document.getElementById('telemetryActiveNodeText').innerText = node;
+                            chip.style.display = 'inline-flex';
+                        } else {
+                            chip.style.display = 'none';
+                        }
+                    }
+
+                    loadTelemetry(telPage);
+                } else if (tab === 'raw') {
+                    const search = params.get('search') || '';
+                    const status = params.get('status') || '';
+                    const dir = params.get('dir') || '';
+                    const pageParam = parseInt(params.get('page'), 10);
+                    rawPage = (!isNaN(pageParam) && pageParam > 0) ? (pageParam - 1) : 0;
+                    rawNodeFilter = search;
+
+                    if (document.getElementById('rawSearchInput')) document.getElementById('rawSearchInput').value = search;
+                    if (document.getElementById('rawStatusFilter')) document.getElementById('rawStatusFilter').value = status;
+                    if (document.getElementById('rawDirectionFilter')) document.getElementById('rawDirectionFilter').value = dir;
+                    const chip = document.getElementById('rawNodeFilterTag');
+                    if (chip) {
+                        if (search) {
+                            document.getElementById('rawActiveNodeText').innerText = search;
+                            chip.style.display = 'inline-flex';
+                        } else {
+                            chip.style.display = 'none';
+                        }
+                    }
+
+                    loadRawPackets(rawPage);
+                } else if (tab === 'tools') {
+                    // Eilės ir įrankių skirtukas
+                } else if (tab === 'settings') {
+                    loadSettings();
+                }
+
+                if (isInitialLoad && !params.get('tab')) {
+                    updateHistory({ tab: currentTab }, 'replace');
+                }
+                updateDocumentTitle();
+            } finally {
+                isApplyingUrlState = false;
+            }
+        }
+
         // Skirtukų perjungimas
-        function switchTab(tabName) {
+        function switchTab(tabName, pushState = true) {
+            if (!['nodes', 'telemetry', 'raw', 'tools', 'settings'].includes(tabName)) {
+                tabName = 'nodes';
+            }
+
+            if (activePacketModalId) closeModal('packetModal', false);
+            if (activeEditNodeKey) closeModal('editNodeModal', false);
+
             currentTab = tabName;
             document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -1082,9 +1425,74 @@ $isLoggedIn = isAdminLoggedIn();
             if (btn) btn.classList.add('active');
             if (content) content.classList.add('active');
 
+            if (pushState && !isApplyingUrlState) {
+                updateHistory({ tab: tabName, packet: null, edit_node: null }, 'push');
+            }
+            updateDocumentTitle();
+
             if (tabName === 'nodes') loadNodes();
-            else if (tabName === 'telemetry') loadTelemetry(0);
-            else if (tabName === 'raw') loadRawPackets(0);
+            else if (tabName === 'telemetry') loadTelemetry(telPage);
+            else if (tabName === 'raw') loadRawPackets(rawPage);
+            else if (tabName === 'settings') loadSettings();
+        }
+
+        // Filtravimo ir paieškos apdorotojai
+        const debouncedLoadNodes = debounce(() => {
+            updateHistory({ tab: 'nodes' }, 'replace');
+            loadNodes();
+        }, 300);
+
+        function onNodesSearchInput() {
+            debouncedLoadNodes();
+        }
+
+        function onNodesSearchEnter() {
+            updateHistory({ tab: 'nodes' }, 'push');
+            loadNodes();
+        }
+
+        function onNodesFilterChange() {
+            updateHistory({ tab: 'nodes' }, 'push');
+            loadNodes();
+        }
+
+        function onTelemetryFilterChange() {
+            telPage = 0;
+            const nodeVal = document.getElementById('telemetryNodeInput').value.trim();
+            telNodeFilter = nodeVal;
+            const chip = document.getElementById('telemetryNodeFilterTag');
+            if (chip) {
+                if (nodeVal) {
+                    document.getElementById('telemetryActiveNodeText').innerText = nodeVal;
+                    chip.style.display = 'inline-flex';
+                } else {
+                    chip.style.display = 'none';
+                }
+            }
+            updateHistory({ tab: 'telemetry', node: nodeVal, page: 0 }, 'push');
+            loadTelemetry(0);
+        }
+
+        const debouncedLoadRaw = debounce(() => {
+            rawPage = 0;
+            updateHistory({ tab: 'raw', page: 0 }, 'replace');
+            loadRawPackets(0);
+        }, 350);
+
+        function onRawSearchInput() {
+            debouncedLoadRaw();
+        }
+
+        function onRawSearchEnter() {
+            rawPage = 0;
+            updateHistory({ tab: 'raw', page: 0 }, 'push');
+            loadRawPackets(0);
+        }
+
+        function onRawFilterChange() {
+            rawPage = 0;
+            updateHistory({ tab: 'raw', page: 0 }, 'push');
+            loadRawPackets(0);
         }
 
         function refreshCurrentTab() {
@@ -1131,6 +1539,11 @@ $isLoggedIn = isAdminLoggedIn();
                     nodesData = data.nodes || [];
                     document.getElementById('nodesCountBadge').innerText = `${data.total} mazgų`;
                     renderNodesTable(nodesData);
+
+                    if (pendingEditNodeKey) {
+                        openEditNode(pendingEditNodeKey, false);
+                        pendingEditNodeKey = null;
+                    }
                 }
             } catch (err) {
                 console.error(err);
@@ -1194,9 +1607,19 @@ $isLoggedIn = isAdminLoggedIn();
         }
 
         // Mazgo redagavimo langas
-        function openEditNode(publicKey) {
-            const node = nodesData.find(n => n.public_key === publicKey);
+        function openEditNode(publicKey, pushHistory = true) {
+            if (!nodesData || nodesData.length === 0) {
+                pendingEditNodeKey = publicKey;
+                return;
+            }
+            const node = nodesData.find(n => n.public_key === publicKey || n.node_id === publicKey);
             if (!node) return;
+
+            activeEditNodeKey = node.public_key;
+            if (pushHistory && !isApplyingUrlState) {
+                modalOpenedInSession = true;
+                updateHistory({ tab: 'nodes', edit_node: node.public_key }, 'push');
+            }
 
             document.getElementById('editNodePublicKey').value = node.public_key;
             document.getElementById('editNodeKeyDisplay').value = node.public_key;
@@ -1209,6 +1632,7 @@ $isLoggedIn = isAdminLoggedIn();
 
             document.getElementById('editNodeTitle').innerText = `Mazgo Nustatymai: ${node.node_name || node.node_id || ''}`;
             openModal('editNodeModal');
+            updateDocumentTitle();
         }
 
         async function handleSaveNode(e) {
@@ -1247,16 +1671,27 @@ $isLoggedIn = isAdminLoggedIn();
         // 2. TELEMETRIJOS SĄRAŠAS
         function filterTelemetryByNode(nodeId) {
             telNodeFilter = nodeId;
+            telPage = 0;
             document.getElementById('telemetryNodeInput').value = nodeId;
             document.getElementById('telemetryActiveNodeText').innerText = nodeId;
             document.getElementById('telemetryNodeFilterTag').style.display = 'inline-flex';
-            switchTab('telemetry');
+            
+            currentTab = 'telemetry';
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.getElementById('tabBtn-telemetry')?.classList.add('active');
+            document.getElementById('tab-telemetry')?.classList.add('active');
+
+            updateHistory({ tab: 'telemetry', node: nodeId, page: 0, packet: null }, 'push');
+            loadTelemetry(0);
         }
 
         function clearTelemetryNodeFilter() {
             telNodeFilter = '';
+            telPage = 0;
             document.getElementById('telemetryNodeInput').value = '';
             document.getElementById('telemetryNodeFilterTag').style.display = 'none';
+            updateHistory({ tab: 'telemetry', node: '', page: 0 }, 'push');
             loadTelemetry(0);
         }
 
@@ -1283,7 +1718,12 @@ $isLoggedIn = isAdminLoggedIn();
         }
 
         function changeTelemetryPage(delta) {
-            loadTelemetry(Math.max(0, telPage + delta));
+            const newPage = Math.max(0, telPage + delta);
+            if (newPage !== telPage) {
+                telPage = newPage;
+                updateHistory({ tab: 'telemetry', page: telPage }, 'push');
+                loadTelemetry(telPage);
+            }
         }
 
         function renderTelemetryTable(records) {
@@ -1332,16 +1772,27 @@ $isLoggedIn = isAdminLoggedIn();
         // 3. RAW PAKETAI & DEBUGGER
         function filterRawByNode(nodeId) {
             rawNodeFilter = nodeId;
+            rawPage = 0;
             document.getElementById('rawSearchInput').value = nodeId;
             document.getElementById('rawActiveNodeText').innerText = nodeId;
             document.getElementById('rawNodeFilterTag').style.display = 'inline-flex';
-            switchTab('raw');
+            
+            currentTab = 'raw';
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.getElementById('tabBtn-raw')?.classList.add('active');
+            document.getElementById('tab-raw')?.classList.add('active');
+
+            updateHistory({ tab: 'raw', search: nodeId, page: 0, packet: null }, 'push');
+            loadRawPackets(0);
         }
 
         function clearRawNodeFilter() {
             rawNodeFilter = '';
+            rawPage = 0;
             document.getElementById('rawSearchInput').value = '';
             document.getElementById('rawNodeFilterTag').style.display = 'none';
+            updateHistory({ tab: 'raw', search: '', page: 0 }, 'push');
             loadRawPackets(0);
         }
 
@@ -1369,7 +1820,12 @@ $isLoggedIn = isAdminLoggedIn();
         }
 
         function changeRawPage(delta) {
-            loadRawPackets(Math.max(0, rawPage + delta));
+            const newPage = Math.max(0, rawPage + delta);
+            if (newPage !== rawPage) {
+                rawPage = newPage;
+                updateHistory({ tab: 'raw', page: rawPage }, 'push');
+                loadRawPackets(rawPage);
+            }
         }
 
         function renderRawTable(packets) {
@@ -1421,8 +1877,15 @@ $isLoggedIn = isAdminLoggedIn();
         }
 
         // RAW Paketo išsamus langas
-        async function inspectPacket(id) {
+        async function inspectPacket(id, pushHistory = true) {
             activePacketId = id;
+            activePacketModalId = id;
+            if (pushHistory && !isApplyingUrlState) {
+                modalOpenedInSession = true;
+                updateHistory({ packet: id }, 'push');
+            }
+            updateDocumentTitle();
+
             try {
                 const res = await fetch(`api.php?action=raw_packet_detail&id=${id}`);
                 const data = await res.json();
@@ -1455,9 +1918,11 @@ $isLoggedIn = isAdminLoggedIn();
                     openModal('packetModal');
                 } else {
                     alert('Nepavyko gauti paketo duomenų: ' + (data.error || 'Paketas nerastas'));
+                    closeModal('packetModal', false);
                 }
             } catch (err) {
                 alert('Nepavyko gauti paketo duomenų: ' + (err.message || err));
+                closeModal('packetModal', false);
             }
         }
 
@@ -1599,7 +2064,7 @@ $isLoggedIn = isAdminLoggedIn();
         function triggerReprocessFromModal() {
             if (activePacketId) {
                 reprocessPacket(activePacketId).then(() => {
-                    inspectPacket(activePacketId);
+                    inspectPacket(activePacketId, false);
                 });
             }
         }
@@ -1630,9 +2095,31 @@ $isLoggedIn = isAdminLoggedIn();
             if (el) el.classList.add('active');
         }
 
-        function closeModal(id) {
+        function closeModal(id, fromUserAction = true) {
             const el = document.getElementById(id);
-            if (el) el.classList.remove('active');
+            if (!el) return;
+
+            if (fromUserAction) {
+                if (modalOpenedInSession) {
+                    modalOpenedInSession = false;
+                    history.back();
+                    return;
+                } else {
+                    if (id === 'packetModal') activePacketModalId = null;
+                    if (id === 'editNodeModal') activeEditNodeKey = null;
+                    updateHistory({ packet: null, edit_node: null }, 'push');
+                }
+            }
+
+            el.classList.remove('active');
+            if (id === 'packetModal') {
+                activePacketModalId = null;
+            }
+            if (id === 'editNodeModal') {
+                activeEditNodeKey = null;
+                pendingEditNodeKey = null;
+            }
+            updateDocumentTitle();
         }
 
         function showToast(msg, type = '') {
@@ -1686,11 +2173,182 @@ $isLoggedIn = isAdminLoggedIn();
             return res;
         }
 
-        // Paleidimas užsikrovus
+        // ==========================================
+        // SISTEMOS NUSTATYMAI & GEOLOKACIJOS FILTRAS
+        // ==========================================
+        let currentSettings = null;
+
+        async function loadSettings(showFeedback = false) {
+            const statusBadge = document.getElementById('settingFilterStatusBadge');
+            const feedback = document.getElementById('settingsFeedback');
+            if (statusBadge) {
+                statusBadge.className = 'badge badge-gray';
+                statusBadge.innerText = 'Kraunama...';
+            }
+
+            try {
+                const res = await fetch('api.php?action=settings');
+                const data = await res.json();
+                if (!data.success) {
+                    throw new Error(data.error || 'Nepavyko užkrauti nustatymų');
+                }
+
+                currentSettings = data.settings || {};
+                const stats = data.stats || {};
+
+                // Užpildome formos laukus
+                const enabledEl = document.getElementById('settingFilterLtEnabled');
+                const noCoordsEl = document.getElementById('settingFilterLtIncludeNoCoords');
+                const latMinEl = document.getElementById('settingLtLatMin');
+                const latMaxEl = document.getElementById('settingLtLatMax');
+                const lonMinEl = document.getElementById('settingLtLonMin');
+                const lonMaxEl = document.getElementById('settingLtLonMax');
+
+                if (enabledEl) enabledEl.checked = !!currentSettings.filter_lithuania_enabled;
+                if (noCoordsEl) noCoordsEl.checked = !!currentSettings.filter_lithuania_include_no_coords;
+                if (latMinEl) latMinEl.value = currentSettings.lithuania_lat_min ?? 53.8500;
+                if (latMaxEl) latMaxEl.value = currentSettings.lithuania_lat_max ?? 56.4500;
+                if (lonMinEl) lonMinEl.value = currentSettings.lithuania_lon_min ?? 20.9000;
+                if (lonMaxEl) lonMaxEl.value = currentSettings.lithuania_lon_max ?? 26.8500;
+
+                // Statistika
+                const stTotal = document.getElementById('stTotalNodes');
+                const stLt = document.getElementById('stLtNodes');
+                const stOutside = document.getElementById('stOutsideNodes');
+                const stNoCoords = document.getElementById('stNoCoordsNodes');
+
+                if (stTotal) stTotal.innerText = stats.total_nodes ?? '-';
+                if (stLt) stLt.innerText = stats.nodes_in_lt ?? '-';
+                if (stOutside) stOutside.innerText = stats.nodes_outside_lt ?? '-';
+                if (stNoCoords) stNoCoords.innerText = stats.nodes_no_coords ?? '-';
+
+                if (statusBadge) {
+                    if (currentSettings.filter_lithuania_enabled) {
+                        statusBadge.className = 'badge badge-green';
+                        statusBadge.innerText = '✅ FILTRAS AKTYVUS';
+                    } else {
+                        statusBadge.className = 'badge badge-gray';
+                        statusBadge.innerText = '⚪ FILTRAS IŠJUNGTAS';
+                    }
+                }
+
+                if (showFeedback && feedback) {
+                    feedback.style.color = 'var(--accent-green)';
+                    feedback.innerText = 'Nustatymai atnaujinti.';
+                    setTimeout(() => { if (feedback) feedback.innerText = ''; }, 3000);
+                }
+            } catch (err) {
+                console.error('Klaida kraunant nustatymus:', err);
+                if (statusBadge) {
+                    statusBadge.className = 'badge badge-red';
+                    statusBadge.innerText = 'Klaida';
+                }
+                if (feedback) {
+                    feedback.style.color = 'var(--accent-red)';
+                    feedback.innerText = 'Klaida: ' + err.message;
+                }
+            }
+        }
+
+        async function handleSaveSettings(e) {
+            e.preventDefault();
+            const btn = document.getElementById('btnSaveSettings');
+            const feedback = document.getElementById('settingsFeedback');
+            const originalBtnHtml = btn ? btn.innerHTML : '';
+
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<span>⏳ Saugoma...</span>';
+            }
+            if (feedback) {
+                feedback.style.color = 'var(--text-muted)';
+                feedback.innerText = 'Išsaugoma...';
+            }
+
+            try {
+                const payload = {
+                    filter_lithuania_enabled: document.getElementById('settingFilterLtEnabled').checked,
+                    filter_lithuania_include_no_coords: document.getElementById('settingFilterLtIncludeNoCoords').checked,
+                    lithuania_lat_min: parseFloat(document.getElementById('settingLtLatMin').value),
+                    lithuania_lat_max: parseFloat(document.getElementById('settingLtLatMax').value),
+                    lithuania_lon_min: parseFloat(document.getElementById('settingLtLonMin').value),
+                    lithuania_lon_max: parseFloat(document.getElementById('settingLtLonMax').value)
+                };
+
+                const res = await fetch('api.php?action=save_settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (!data.success) {
+                    throw new Error(data.error || 'Nepavyko išsaugoti');
+                }
+
+                if (feedback) {
+                    feedback.style.color = 'var(--accent-green)';
+                    feedback.innerText = '✅ Nustatymai sėkmingai išsaugoti!';
+                }
+
+                await loadSettings();
+                setTimeout(() => {
+                    if (feedback && feedback.innerText.includes('sėkmingai')) feedback.innerText = '';
+                }, 4000);
+            } catch (err) {
+                console.error('Klaida saugant nustatymus:', err);
+                if (feedback) {
+                    feedback.style.color = 'var(--accent-red)';
+                    feedback.innerText = '❌ Klaida: ' + err.message;
+                }
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = originalBtnHtml;
+                }
+            }
+        }
+
+        function resetDefaultLtBounds() {
+            document.getElementById('settingLtLatMin').value = '53.8500';
+            document.getElementById('settingLtLatMax').value = '56.4500';
+            document.getElementById('settingLtLonMin').value = '20.9000';
+            document.getElementById('settingLtLonMax').value = '26.8500';
+        }
+
+        // Uždarymas paspaudus už modal ribų arba paspaudus Escape
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                const openPacketModal = document.getElementById('packetModal')?.classList.contains('active');
+                const openEditModal = document.getElementById('editNodeModal')?.classList.contains('active');
+                if (openPacketModal) closeModal('packetModal', true);
+                else if (openEditModal) closeModal('editNodeModal', true);
+            }
+        });
+
+        ['packetModal', 'editNodeModal'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.addEventListener('click', (e) => {
+                    if (e.target === el) {
+                        closeModal(id, true);
+                    }
+                });
+            }
+        });
+
+        // Naršyklės Atgal / Pirmyn (Back / Forward) palaikymas
+        window.addEventListener('popstate', (e) => {
+            <?php if ($isLoggedIn): ?>
+                modalOpenedInSession = false;
+                applyUrlState(false);
+            <?php endif; ?>
+        });
+
+        // Paleidimas užsikrovus / atnaujinus puslapį (Refresh)
         document.addEventListener('DOMContentLoaded', () => {
             <?php if ($isLoggedIn): ?>
                 loadStats();
-                loadNodes();
+                applyUrlState(true);
             <?php endif; ?>
         });
     </script>
