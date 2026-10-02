@@ -3,13 +3,21 @@
     "name": "b9dd",
     "public_id": "b9ddd788b7a59eab40eaa49a2534fa9e7fc0ef7d920ef4811139998cddd631db",
     "password": "hello",
-    "isDirect": true,
+    "isDirect": false,
     "status": true,
     "telemetry": true
   },
   {
     "name": "1bbd",
     "public_id": "1bbd45c1ae2b2241ae997f0723066461bc8b0283abeee165d67ef9b35e9afb64",
+    "password": "hello",
+    "isDirect": false,
+    "status": true,
+    "telemetry": true
+  },
+  {
+    "name": "f9f8",
+    "public_id": "f9f86539d970c347818e4e6c8da7e9181b0fc502b9b3ee1a2f7b4358a352a38c",
     "password": "hello",
     "isDirect": false,
     "status": true,

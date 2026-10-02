@@ -17,6 +17,7 @@
  *     curl "https://telemetry.ite.lt/process_queue.php?limit=50"
  */
 
+date_default_timezone_set('Europe/Vilnius');
 $isCli = (php_sapi_name() === 'cli');
 
 if (!$isCli) {

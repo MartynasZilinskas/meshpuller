@@ -58,6 +58,49 @@ try {
     $repo->createTableIfNotExists();
     output("Lentelės 'raw_packets', 'nodes' ir 'telemetry' bei jų indeksai sėkmingai patikrinti / sukurti!", "success");
 
+    // Užtikriname, kad esamiems įrašams būtų priskirtas numatytasis 'KLP' bot_id
+    try {
+        $pdo->exec("UPDATE nodes SET bot_id = 'KLP' WHERE bot_id IS NULL OR bot_id = ''");
+        $pdo->exec("UPDATE raw_packets SET bot_id = 'KLP' WHERE bot_id IS NULL OR bot_id = ''");
+        $pdo->exec("UPDATE telemetry SET bot_id = 'KLP' WHERE bot_id IS NULL OR bot_id = ''");
+        output("Esamiems įrašams priskirtas numatytasis bot_id = 'KLP'", "info");
+    } catch (\Throwable $e) {}
+
+    // Užtikriname, kad 'nodes.last_seen_at' neturėtų automatinio ON UPDATE CURRENT_TIMESTAMP
+    if ($driver !== 'pgsql') {
+        try {
+            $pdo->exec("ALTER TABLE `nodes` MODIFY COLUMN `last_seen_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP");
+            output("Užtikrinta: 'nodes.last_seen_at' atnaujinamas tik pasirodžius paketui tinkle (be auto-update)", "info");
+        } catch (\Throwable $e) {}
+    }
+
+    // Užpildome 'nodes.telemetry_updated_at' esamiems mazgams iš 'telemetry' lentelės, jei data tuščia
+    try {
+        if ($driver === 'pgsql') {
+            $pdo->exec("UPDATE nodes n SET telemetry_updated_at = sub.max_rec
+                        FROM (
+                            SELECT public_key, node_id, MAX(recorded_at) as max_rec
+                            FROM telemetry
+                            WHERE battery_v IS NOT NULL OR temperature_c IS NOT NULL
+                            GROUP BY public_key, node_id
+                        ) sub
+                        WHERE (n.public_key IS NOT NULL AND n.public_key = sub.public_key)
+                           OR (n.node_id IS NOT NULL AND n.node_id = sub.node_id)
+                          AND n.telemetry_updated_at IS NULL");
+        } else {
+            $pdo->exec("UPDATE `nodes` n
+                        JOIN (
+                            SELECT public_key, node_id, MAX(recorded_at) as max_rec
+                            FROM telemetry
+                            WHERE battery_v IS NOT NULL OR temperature_c IS NOT NULL
+                            GROUP BY public_key, node_id
+                        ) sub ON (n.public_key IS NOT NULL AND n.public_key = sub.public_key) OR (n.node_id IS NOT NULL AND n.node_id = sub.node_id)
+                        SET n.telemetry_updated_at = sub.max_rec
+                        WHERE n.telemetry_updated_at IS NULL");
+        }
+        output("Sinchronizuota 'telemetry_updated_at' data esamiems mazgams iš 'telemetry' lentelės", "info");
+    } catch (\Throwable $e) {}
+
     // 2. Patikriname visų trijų lentelių stulpelius
     $tablesToCheck = ['raw_packets', 'nodes', 'telemetry'];
 
@@ -109,9 +152,50 @@ try {
         output("Aptikta ir perkelta į 'telemetry' lentelę esamų telemetrijos taškų: {$backfilledTelemetry}", "success");
     }
 
-    // 5. Statistikos išvedimas
-    $rawStats = $repo->getStats();
+    // 5. Išvalome neteisingus/iškreiptus telemetrijos įrašus (pvz. >15V ar sugedusio šifro triukšmą)
+    $cleaned = $repo->cleanupInvalidTelemetry();
+    if ($cleaned > 0) {
+        output("Išvalyti neteisingi/iškreipti telemetrijos įrašai iš 'telemetry': {$cleaned}", "success");
+    }
+
+    // 6. Kartotuvų slaptažodžių ir 'update' būsenos sinchronizavimas
     $nodeStats = $repo->getNodeStats();
+    $monitoredCount = (int)($nodeStats['monitored_repeaters_count'] ?? 0);
+
+    if ($monitoredCount === 0) {
+        // Jei dar nėra nė vieno kartotuvo su update=1, inicializuojame pradinius kartotuvus
+        $seedList = [
+            ['id' => 'b9dd', 'name' => 'LT-LM Tilžė B9DD', 'pub' => 'b9ddd788b7a59eab40eaa49a2534fa9e7fc0ef7d920ef4811139998cddd631db', 'pass' => 'hello'],
+            ['id' => '1bbd', 'name' => 'LT-LM 1BBD',       'pub' => '1bbd45c1ae2b2241ae997f0723066461bc8b0283abeee165d67ef9b35e9afb64', 'pass' => 'hello'],
+            ['id' => 'f9f8', 'name' => 'LT-LM F9F8',       'pub' => 'f9f86539d970c347818e4e6c8da7e9181b0fc502b9b3ee1a2f7b4358a352a38c', 'pass' => 'hello'],
+        ];
+
+        foreach ($seedList as $s) {
+            if ($driver === 'pgsql') {
+                $sql = 'INSERT INTO nodes (public_key, node_id, node_name, password, "update", is_repeater, first_seen_at, last_seen_at) 
+                        VALUES (:pub, :id, :name, :pass, true, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        ON CONFLICT (public_key) DO UPDATE SET password = EXCLUDED.password, "update" = true, is_repeater = true';
+            } else {
+                $sql = 'INSERT INTO `nodes` (`public_key`, `node_id`, `node_name`, `password`, `update`, `is_repeater`, `first_seen_at`, `last_seen_at`) 
+                        VALUES (:pub, :id, :name, :pass, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        ON DUPLICATE KEY UPDATE `password` = VALUES(`password`), `update` = 1, `is_repeater` = 1';
+            }
+            try {
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute([
+                    ':pub'  => $s['pub'],
+                    ':id'   => $s['id'],
+                    ':name' => $s['name'],
+                    ':pass' => $s['pass'],
+                ]);
+            } catch (\Throwable $e) {}
+        }
+        output("Pradiniai kartotuvai (b9dd, 1bbd, f9f8) sėkmingai pažymėti su update=true ir slaptažodžiu 'hello'!", "success");
+        $nodeStats = $repo->getNodeStats();
+    }
+
+    // 7. Statistikos išvedimas
+    $rawStats = $repo->getStats();
     $telemetryStats = $repo->getTelemetryStats();
 
     output("\n📊 Esama sistemos būsena:", "info");
@@ -120,6 +204,7 @@ try {
     output("  [raw_packets] Apdorota: " . ($rawStats['completed_count'] ?? 0), "info");
     output("  [nodes] Iš viso žinomų mazgų: " . ($nodeStats['total_nodes'] ?? 0), "info");
     output("  [nodes] Kartotuvų (repeaters): " . ($nodeStats['repeaters_count'] ?? 0), "info");
+    output("  [nodes] Stebimų kartotuvų (update=1): " . ($nodeStats['monitored_repeaters_count'] ?? 0), "info");
     output("  [nodes] Su GPS koordinatėmis: " . ($nodeStats['nodes_with_location'] ?? 0), "info");
     output("  [telemetry] Iš viso telemetrijos taškų: " . ($telemetryStats['total_points'] ?? 0), "info");
     output("  [telemetry] Stebimi unikalūs mazgai: " . ($telemetryStats['monitored_nodes'] ?? 0), "info");

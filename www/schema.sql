@@ -14,6 +14,7 @@
 CREATE TABLE IF NOT EXISTS `raw_packets` (
     `id`                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     `direction`         VARCHAR(16) NULL DEFAULT NULL COMMENT 'Paketo kryptis: RX (gautas iš eterio) arba TX (išsiųstas)',
+    `bot_id`            VARCHAR(16) NOT NULL DEFAULT 'KLP' COMMENT 'ESP32 boto / vartų identifikatorius (pvz. KLP)',
     `raw_hex`           LONGTEXT NOT NULL COMMENT 'Neapdorota heksadecimali paketo eilutė',
     `length`            INT UNSIGNED NULL DEFAULT NULL COMMENT 'Paketo ilgis baitais',
     `rssi`              DECIMAL(6, 2) NULL DEFAULT NULL COMMENT 'Gauto signalo lygis dBm (pvz. -85.50)',
@@ -39,6 +40,7 @@ CREATE TABLE IF NOT EXISTS `raw_packets` (
     INDEX `idx_processed_queue` (`processed`, `processed_at`, `id`),
     INDEX `idx_created_at` (`created_at`),
     INDEX `idx_direction` (`direction`),
+    INDEX `idx_bot_id` (`bot_id`),
     INDEX `idx_target_name` (`target_name`),
     INDEX `idx_sender_public_key` (`sender_public_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='MeshCore LoRa neapdorotų paketų ir apdorojimo eilės lentelė';
@@ -52,6 +54,7 @@ CREATE TABLE IF NOT EXISTS `nodes` (
     `public_key`        VARCHAR(64) NOT NULL UNIQUE COMMENT 'Ed25519 32 baitų viešasis raktas (64 hex simboliai)',
     `node_name`         VARCHAR(128) NULL DEFAULT NULL COMMENT 'Mazgo pavadinimas (pvz. LT-LM Tilžė B9DD)',
     `node_id`           VARCHAR(16) NULL DEFAULT NULL COMMENT 'Trumpasis mazgo ID (pvz. b9dd)',
+    `bot_id`            VARCHAR(16) NOT NULL DEFAULT 'KLP' COMMENT 'ESP32 boto identifikatorius (iš kurio mazgas gautas/atnaujintas)',
     `advert_format`     VARCHAR(8) NULL DEFAULT NULL COMMENT 'Skelbimo formatas: A (su parašu, >=101B) arba B (be parašo)',
     `advert_timestamp`  BIGINT UNSIGNED NULL DEFAULT NULL COMMENT 'Mazgo paskutinio skelbimo laiko žyma (timestamp)',
     `signature`         VARCHAR(128) NULL DEFAULT NULL COMMENT 'Ed25519 parašas (64 baitai = 128 hex simboliai)',
@@ -61,6 +64,8 @@ CREATE TABLE IF NOT EXISTS `nodes` (
     `node_type`         TINYINT UNSIGNED NULL DEFAULT NULL COMMENT 'Mazgo tipas: 0=generic, 1=chat, 2=repeater, 3=room',
     `node_type_str`     VARCHAR(32) NULL DEFAULT NULL COMMENT 'Mazgo tipo tekstinis pavadinimas (repeater, chat, room)',
     `is_repeater`       TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Ar mazgas yra kartotuvas',
+    `password`          VARCHAR(128) NULL DEFAULT NULL COMMENT 'Kartotuvo valdymo/prisijungimo slaptažodis',
+    `update`            TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Ar kartotuvas yra aktyviai atnaujinamas/stebimas boto (1=taip, 0=ne)',
     `is_chat`           TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Ar mazgas yra pokalbių klientas',
     `is_room`           TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Ar mazgas yra kambario serveris',
     `has_location`      TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Ar skelbime yra GPS koordinatės',
@@ -69,9 +74,10 @@ CREATE TABLE IF NOT EXISTS `nodes` (
     `latitude`          DECIMAL(10, 7) NULL DEFAULT NULL COMMENT 'GPS Platuma (pvz. 55.705207)',
     `longitude`         DECIMAL(10, 7) NULL DEFAULT NULL COMMENT 'GPS Ilguma (pvz. 21.145874)',
     
-    -- Telemetrija iš skelbimo:
+    -- Telemetrija:
     `battery_mv`        INT UNSIGNED NULL DEFAULT NULL COMMENT 'Baterijos įtampa milivoltais (mV)',
     `battery_v`         DECIMAL(4, 2) NULL DEFAULT NULL COMMENT 'Baterijos įtampa voltais (V)',
+    `temperature_c`     DECIMAL(4, 1) NULL DEFAULT NULL COMMENT 'Paskutinė temperatūra C',
     
     -- Paskutinio radijo signalo metrika:
     `last_rssi`         DECIMAL(6, 2) NULL DEFAULT NULL COMMENT 'Paskutinio gauto paketo RSSI dBm',
@@ -82,14 +88,20 @@ CREATE TABLE IF NOT EXISTS `nodes` (
     `raw_advert_json`   JSON NULL COMMENT 'Pilnas iškoduoto skelbimo (advert) JSON objektas',
     
     -- Laiko žymos:
-    `first_seen_at`     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'Pirmą kartą užregistruotas tinkle',
-    `last_seen_at`      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'Paskutinį kartą atnaujinta',
+    `first_seen_at`        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'Pirmą kartą užregistruotas tinkle',
+    `last_seen_at`         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'Paskutinį kartą matytas tinkle (ADVERT / Telemetrija)',
+    `requested_date`       TIMESTAMP NULL DEFAULT NULL COMMENT 'Kada paskutinį kartą atiduotas atnaujinimui botui',
+    `telemetry_updated_at` TIMESTAMP NULL DEFAULT NULL COMMENT 'Kada paskutinį kartą atnaujinta telemetrija (baterija, temperatūra)',
 
     -- Indeksai greitai paieškai:
     INDEX `idx_node_name` (`node_name`),
     INDEX `idx_node_id` (`node_id`),
+    INDEX `idx_nodes_bot_id` (`bot_id`),
+    INDEX `idx_nodes_requested_date` (`requested_date`),
+    INDEX `idx_nodes_telemetry_updated_at` (`telemetry_updated_at`),
     INDEX `idx_node_type` (`node_type`),
     INDEX `idx_is_repeater` (`is_repeater`),
+    INDEX `idx_nodes_update` (`update`),
     INDEX `idx_last_seen_at` (`last_seen_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='MeshCore tinklo mazgų (kartotuvų, klientų) duomenų lentelė';
 
@@ -104,6 +116,7 @@ CREATE TABLE IF NOT EXISTS `telemetry` (
     `public_key`        VARCHAR(64) NULL DEFAULT NULL COMMENT 'Mazgo 32 baitų viešasis raktas (64 hex)',
     `raw_packet_id`     BIGINT UNSIGNED NULL DEFAULT NULL COMMENT 'Nuoroda į raw_packets įrašą',
     `type`              VARCHAR(16) NOT NULL DEFAULT 'STATUS' COMMENT 'Šaltinis: STATUS, TELEMETRY, ADVERT',
+    `bot_id`            VARCHAR(16) NULL DEFAULT 'KLP' COMMENT 'ESP32 boto identifikatorius',
     
     -- Telemetrijos ir jutiklių rodikliai:
     `battery_mv`        INT UNSIGNED NULL DEFAULT NULL COMMENT 'Baterijos įtampa milivoltais (mV)',
@@ -129,6 +142,7 @@ CREATE TABLE IF NOT EXISTS `telemetry` (
     -- Indeksai greitoms laiko intervalo ir mazgo užklausoms (pvz. paskutinės 24h):
     INDEX `idx_telemetry_node_time` (`node_id`, `recorded_at`),
     INDEX `idx_telemetry_pubkey_time` (`public_key`, `recorded_at`),
+    INDEX `idx_telemetry_bot_id` (`bot_id`),
     INDEX `idx_telemetry_time` (`recorded_at`),
     INDEX `idx_telemetry_raw_packet` (`raw_packet_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Kompaktiška telemetrijos ir kartotuvų būsenos lentelė grafikams ir statistikai';

@@ -65,7 +65,8 @@ class MeshCoreDecoder
         // Jei tai yra /api/raw paketas su raw_hex lauku:
         if (!empty($data['raw_hex'])) {
             $sharedSecret = $data['shared_secret_hex'] ?? null;
-            $decoded = $this->decodeRawPacket($data['raw_hex'], $sharedSecret);
+            $myPublicKey  = $data['my_public_key'] ?? null;
+            $decoded = $this->decodeRawPacket($data['raw_hex'], $sharedSecret, $myPublicKey);
 
             // Prisegame originalią API meta informaciją (kryptį, signalą, laiko žymą ir t.t.)
             return array_merge([
@@ -98,9 +99,10 @@ class MeshCoreDecoder
      *
      * @param string $rawHexOrBytes Šešioliktainė eilutė (pvz. "1200B9...") arba binariniai baitai
      * @param string|null $sharedSecretHex 32 baitų (64 hex simbolių) ECDH bendrasis raktas
+     * @param string|null $myPublicKeyHex Mūsų mazgo viešasis raktas (kad būtų galima patikrinti ar paketas skirtas mums)
      * @return array Pilnai išanalizuota paketo struktūra
      */
-    public function decodeRawPacket(string $rawHexOrBytes, ?string $sharedSecretHex = null): array
+    public function decodeRawPacket(string $rawHexOrBytes, ?string $sharedSecretHex = null, ?string $myPublicKeyHex = null): array
     {
         $rawBytes = $this->ensureBinaryBytes($rawHexOrBytes);
         $totalLen = strlen($rawBytes);
@@ -210,7 +212,7 @@ class MeshCoreDecoder
         if ($payloadType === self::PAYLOAD_TYPE_ADVERT) {
             $result['advert'] = $this->decodeAdvert($payloadBytes);
         } elseif (in_array($payloadType, [self::PAYLOAD_TYPE_REQ, self::PAYLOAD_TYPE_RESPONSE, self::PAYLOAD_TYPE_ANON_REQ, self::PAYLOAD_TYPE_PATH, self::PAYLOAD_TYPE_TXT_MSG])) {
-            $result['encryption'] = $this->handleEncryptedPayload($payloadType, $payloadBytes, $sharedSecretHex);
+            $result['encryption'] = $this->handleEncryptedPayload($payloadType, $payloadBytes, $sharedSecretHex, $myPublicKeyHex);
         }
 
         return $result;
@@ -326,7 +328,7 @@ class MeshCoreDecoder
     /**
      * Apdoroja šifruotą krovinį: ištraukia siuntėjo/gavėjo mazgus ir, jei pateiktas raktas, dešifruoja.
      */
-    protected function handleEncryptedPayload(int $payloadType, string $payload, ?string $sharedSecretHex): array
+    protected function handleEncryptedPayload(int $payloadType, string $payload, ?string $sharedSecretHex, ?string $myPublicKeyHex = null): array
     {
         $len = strlen($payload);
         $res = [
@@ -348,7 +350,7 @@ class MeshCoreDecoder
                 $res['decryption_error'] = 'Krovinys per trumpas ANON_REQ formatui';
                 return $res;
             }
-            $res['dest_hash'] = sprintf('0x%02X', ord($payload[0]));
+            $res['dest_hash'] = sprintf('%02X', ord($payload[0]));
             $res['sender_public_key'] = strtolower(bin2hex(substr($payload, 1, 32)));
             $encOffset = 33;
         } else {
@@ -357,15 +359,25 @@ class MeshCoreDecoder
                 $res['decryption_error'] = 'Krovinys per trumpas [dest, src, mac] formatui';
                 return $res;
             }
-            $res['dest_hash'] = sprintf('0x%02X', ord($payload[0]));
-            $res['src_hash']  = sprintf('0x%02X', ord($payload[1]));
+            $res['dest_hash'] = sprintf('%02X', ord($payload[0]));
+            $res['src_hash']  = sprintf('%02X', ord($payload[1]));
             $encOffset = 2;
         }
 
         $encryptedBlock = substr($payload, $encOffset);
 
         if (empty($sharedSecretHex)) {
-            $res['decryption_error'] = 'Nepateiktas bendrasis šifravimo raktas (shared_secret_hex)';
+            $msg = 'Nepateiktas bendrasis šifravimo raktas (shared_secret_hex)';
+            if ($myPublicKeyHex && !empty($res['src_hash'])) {
+                $cleanMyKey = trim($myPublicKeyHex);
+                if (strlen($cleanMyKey) >= 2) {
+                    $myHash = sprintf('%02X', hexdec(substr($cleanMyKey, 0, 2)));
+                    if (strcasecmp($res['src_hash'], $myHash) === 0) {
+                        $msg = "Tai yra mūsų pačių mazgo ({$myHash}) išsiųstos užklausos aidas (Echo), kurį kartotuvas pakartojo per eterį.";
+                    }
+                }
+            }
+            $res['decryption_error'] = $msg;
             return $res;
         }
 
@@ -375,7 +387,17 @@ class MeshCoreDecoder
             $res['plaintext_hex'] = strtoupper(bin2hex($plaintext));
             $res['parsed_data'] = $this->parseDecryptedPlaintext($plaintext, $payloadType);
         } catch (\Throwable $e) {
-            $res['decryption_error'] = $e->getMessage();
+            $errorMsg = $e->getMessage();
+            if ($myPublicKeyHex && !empty($res['dest_hash'])) {
+                $cleanMyKey = trim($myPublicKeyHex);
+                if (strlen($cleanMyKey) >= 2) {
+                    $myHash = sprintf('%02X', hexdec(substr($cleanMyKey, 0, 2)));
+                    if (strcasecmp($res['dest_hash'], $myHash) !== 0) {
+                        $errorMsg = "Paketas adresuotas ne mūsų mazgui (Taikinio hash: {$res['dest_hash']}, o mūsų mazgo hash: {$myHash}). Kartotuvas šį atsaką užšifravo su gavėjo ({$res['dest_hash']}) bendruoju raktu, todėl šis mazgas jo iššifruoti negali.";
+                    }
+                }
+            }
+            $res['decryption_error'] = $errorMsg;
         }
 
         return $res;
@@ -484,41 +506,6 @@ class MeshCoreDecoder
             }
         }
 
-        // ---------------------------------------------------------------------
-        // 4. BANDYMAS IŠGELBĖTI (Fallback trial):
-        // Jei MAC nesutampa (pvz. pavyzdiniai duomenys ar pažeistas MAC),
-        // bet galbūt raktas teisingas ir pavyksta iššifruoti pradinį kadrą:
-        // ---------------------------------------------------------------------
-        $trialCipher = null;
-        if ($blockLen >= 18 && (($blockLen - 2) % 16 === 0)) {
-            $trialCipher = substr($encryptedBlock, 2);
-        } elseif ($blockLen >= 20 && (($blockLen - 4) % 16 === 0)) {
-            $trialCipher = substr($encryptedBlock, 0, $blockLen - 4);
-        } elseif ($blockLen % 16 === 0) {
-            $trialCipher = $encryptedBlock;
-        }
-
-        if ($trialCipher !== null && strlen($trialCipher) >= 16) {
-            foreach (['aes-128-ecb', 'aes-128-cbc'] as $cipherMode) {
-                $iv = ($cipherMode === 'aes-128-cbc') ? str_repeat("\0", 16) : '';
-                $decrypted = openssl_decrypt(
-                    $trialCipher,
-                    $cipherMode,
-                    $encKey,
-                    OPENSSL_RAW_DATA | OPENSSL_NO_PADDING,
-                    $iv
-                );
-
-                if ($decrypted !== false && strlen($decrypted) >= 4) {
-                    $ts = unpack('V', substr($decrypted, 0, 4))[1];
-                    // Jei laiko žyma atrodo kaip realus Unix laikas (2020..2040 metai)
-                    if ($ts >= 1577836800 && $ts <= 2208988800) {
-                        return $decrypted;
-                    }
-                }
-            }
-        }
-
         throw new \RuntimeException('HMAC-SHA256 patikra nepavyko! Neteisingas bendras raktas arba pažeistas paketas.');
     }
 
@@ -589,9 +576,12 @@ class MeshCoreDecoder
             // B) Tikriname RepeaterStats būsenos struktūrą (44..52 baitai po 4B antraštės)
             if ($dataLen >= 4 + 44) {
                 $statsBytes = substr($dataPtr, 4);
-                $res['response_type'] = 'REPEATER_STATS';
-                $res['repeater_stats'] = $this->parseRepeaterStats($statsBytes);
-                return $res;
+                $stats = $this->parseRepeaterStats($statsBytes);
+                if (empty($stats['error'])) {
+                    $res['response_type'] = 'REPEATER_STATS';
+                    $res['repeater_stats'] = $stats;
+                    return $res;
+                }
             }
 
             // C) Skenuojame CayenneLPP jutiklių telemetriją
@@ -637,6 +627,39 @@ class MeshCoreDecoder
         $recvDirect = $this->unpackUInt32LE(substr($bytes, 36, 4));
         $errEvents = $this->unpackUInt16LE(substr($bytes, 40, 2));
         $lastSnrRaw = $this->unpackInt16LE(substr($bytes, 42, 2));
+        $lastSnrDb = round($lastSnrRaw / 4.0, 2);
+
+        // Sanity checks (duomenų patikimumo tikrinimas):
+        // 1. Baterija: Li-Ion / LiFePO4 / 12V saulės sistema turi būti tarp 2000 mV (2.0V) ir 15000 mV (15.0V).
+        // Jokiu būdu negali būti 42080 mV (42.08V)!
+        if ($battMv < 2000 || $battMv > 15000) {
+            return ['error' => "Nekorektiška baterijos įtampa RepeaterStats struktūroje: {$battMv} mV"];
+        }
+
+        // 2. RSSI: radijo signalas tarp -150 dBm ir 0 dBm
+        if ($lastRssi < -150 || $lastRssi > 0) {
+            return ['error' => "Nekorektiškas RSSI RepeaterStats struktūroje: {$lastRssi} dBm"];
+        }
+
+        // 3. SNR: signalo/triukšmo santykis tarp -35 dB ir +35 dB
+        if ($lastSnrDb < -35.0 || $lastSnrDb > 35.0) {
+            return ['error' => "Nekorektiškas SNR RepeaterStats struktūroje: {$lastSnrDb} dB"];
+        }
+
+        // 4. Noise floor: eterio triukšmas tarp -150 dBm ir -20 dBm
+        if ($noiseFloor < -150 || $noiseFloor > -20) {
+            return ['error' => "Nekorektiškas Noise Floor RepeaterStats struktūroje: {$noiseFloor} dBm"];
+        }
+
+        // 5. TxQueue: eilės ilgis negali viršyti 2000 paketų
+        if ($txQueue > 2000) {
+            return ['error' => "Nekorektiškas TxQueue ilgis: {$txQueue}"];
+        }
+
+        // 6. Uptime: veikimo laikas iki 10 metų
+        if ($upTimeSecs > 315360000) {
+            return ['error' => "Nekorektiškas Uptime sekundėmis: {$upTimeSecs}"];
+        }
 
         $stats = [
             'battery_mv'          => $battMv,
@@ -646,7 +669,7 @@ class MeshCoreDecoder
             'air_time_seconds'    => $airTimeSecs,
             'noise_floor_dbm'     => $noiseFloor,
             'last_rssi_dbm'       => $lastRssi,
-            'last_snr_db'         => round($lastSnrRaw / 4.0, 2),
+            'last_snr_db'         => $lastSnrDb,
             'packets_received'    => $pktsRecv,
             'packets_sent'        => $pktsSent,
             'sent_flood'          => $sentFlood,

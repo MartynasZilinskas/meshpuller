@@ -1,0 +1,1277 @@
+<!DOCTYPE html>
+<html lang="lt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MeshCore Tinklo Žemėlapis & Kartotuvų Telemetrija</title>
+    <meta name="description" content="Tiesioginis MeshCore LoRa kartotuvų tinklo žemėlapis su baterijos įkrova, temperatūra ir būsenos statistika realiu laiku.">
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    
+    <style>
+        :root {
+            --bg-base: #1a1a1a;
+            --bg-navbar: #333333;
+            --bg-sidebar: #1e1e1e;
+            --bg-header: #252525;
+            --bg-card: #252525;
+            --bg-card-hover: #2c2c2c;
+            --bg-card-active: #1e2630;
+            --border-color: #383838;
+            --border-light: #444444;
+            
+            --accent-cyan: #00d2ff;
+            --accent-blue: #007bff;
+            --accent-green: #28a745;
+            --accent-orange: #fd7e14;
+            --accent-amber: #ffc107;
+            --accent-red: #dc3545;
+
+            --text-main: #ffffff;
+            --text-secondary: #cccccc;
+            --text-muted: #aaaaaa;
+            --text-dim: #777777;
+
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+            --font-mono: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            --radius-sm: 4px;
+            --radius-md: 6px;
+            --radius-lg: 8px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-sans);
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* MeshMapper viršutinė navigacijos juosta */
+        header.top-navbar {
+            height: 50px;
+            background: var(--bg-navbar);
+            border-bottom: 1px solid #222222;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 16px;
+            z-index: 1000;
+            position: relative;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+        }
+
+        .brand-box {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo-icon {
+            width: 28px;
+            height: 28px;
+            background: #252525;
+            border: 1px solid var(--accent-cyan);
+            border-radius: var(--radius-sm);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 0 8px rgba(0, 210, 255, 0.3);
+        }
+
+        .logo-icon svg {
+            width: 16px;
+            height: 16px;
+            fill: var(--accent-cyan);
+        }
+
+        .brand-text-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .brand-title {
+            font-size: 1.05rem;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+            color: #ffffff;
+            margin: 0;
+        }
+
+        .brand-badge {
+            font-size: 0.68rem;
+            color: #aaaaaa;
+            background: #252525;
+            border: 1px solid #444444;
+            padding: 2px 6px;
+            border-radius: var(--radius-sm);
+            font-family: var(--font-mono);
+            letter-spacing: 0.02em;
+        }
+
+        .header-meta {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        /* MeshMapper sesijos indikatorius */
+        .session-indicator {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(40, 167, 69, 0.15);
+            border: 1px solid var(--accent-green);
+            color: #2ed573;
+            padding: 5px 10px;
+            border-radius: var(--radius-md);
+            font-size: 0.72rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+        }
+
+        .pulse-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--accent-green);
+            box-shadow: 0 0 8px var(--accent-green);
+            animation: pulse-ring 2s infinite ease-in-out;
+        }
+
+        @keyframes pulse-ring {
+            0% { transform: scale(0.95); opacity: 0.9; }
+            50% { transform: scale(1.4); opacity: 0.5; }
+            100% { transform: scale(0.95); opacity: 0.9; }
+        }
+
+        /* MeshMapper mygtukų stilius */
+        .nav-btn {
+            background: rgba(0, 210, 255, 0.1);
+            border: 1px solid var(--accent-cyan);
+            color: var(--accent-cyan);
+            padding: 5px 12px;
+            border-radius: var(--radius-md);
+            font-family: var(--font-sans);
+            font-size: 0.78rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .nav-btn:hover {
+            background: rgba(0, 210, 255, 0.22);
+            box-shadow: 0 0 10px rgba(0, 210, 255, 0.35);
+            color: #ffffff;
+        }
+
+        .nav-btn svg {
+            width: 13px;
+            height: 13px;
+            transition: transform 0.4s ease;
+        }
+
+        .nav-btn.rotating svg {
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Pagrindinis turinys: Žemėlapis ir Šoninė panelė */
+        .main-container {
+            flex: 1;
+            display: flex;
+            position: relative;
+            overflow: hidden;
+            background: #141414;
+        }
+
+        #map {
+            flex: 1;
+            height: 100%;
+            width: 100%;
+            background: #141414;
+            z-index: 10;
+        }
+
+        /* Tamsaus žemėlapio filtras */
+        .dark-map-tiles {
+            filter: brightness(0.6) invert(1) contrast(2.6) hue-rotate(195deg) saturate(0.3) brightness(0.75);
+        }
+
+        /* Leaflet valdymo elementų stilius pagal MeshMapper */
+        .leaflet-bar {
+            border: 1px solid var(--border-light) !important;
+            border-radius: var(--radius-md) !important;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.5) !important;
+            overflow: hidden !important;
+        }
+
+        .leaflet-bar a {
+            background: var(--bg-header) !important;
+            color: var(--accent-cyan) !important;
+            border-bottom: 1px solid var(--border-color) !important;
+            transition: background 0.2s ease, color 0.2s ease;
+        }
+
+        .leaflet-bar a:hover {
+            background: #333333 !important;
+            color: #ffffff !important;
+        }
+
+        .leaflet-control-layers {
+            background: var(--bg-header) !important;
+            border: 1px solid var(--border-light) !important;
+            border-radius: var(--radius-md) !important;
+            color: var(--text-main) !important;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6) !important;
+            font-family: var(--font-sans) !important;
+        }
+
+        .leaflet-control-layers-expanded {
+            padding: 8px 12px !important;
+        }
+
+        .leaflet-control-layers-base label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.78rem;
+            cursor: pointer;
+            margin: 4px 0;
+            color: var(--text-muted);
+        }
+
+        .leaflet-control-layers-base label:hover {
+            color: #ffffff;
+        }
+
+        /* Šoninė panelė su kartotuvais */
+        aside.sidebar-panel {
+            width: 330px;
+            background: var(--bg-sidebar);
+            border-left: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 50px);
+            max-height: calc(100vh - 50px);
+            z-index: 500;
+            overflow: hidden;
+            transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .sidebar-header {
+            padding: 10px 12px;
+            background: var(--bg-header);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+        }
+
+        .stat-card {
+            background: #1e1e1e;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            padding: 6px 4px;
+            text-align: center;
+        }
+
+        .stat-val {
+            font-size: 0.92rem;
+            font-weight: 700;
+            font-family: var(--font-mono);
+            color: var(--accent-cyan);
+            line-height: 1.2;
+        }
+
+        .stat-label {
+            font-size: 0.58rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            margin-top: 2px;
+        }
+
+        .search-box {
+            position: relative;
+            width: 100%;
+        }
+
+        .search-input {
+            width: 100%;
+            background: #2b2b2b;
+            border: 1px solid var(--border-light);
+            border-radius: var(--radius-sm);
+            padding: 6px 10px 6px 28px;
+            font-size: 0.78rem;
+            color: #ffffff;
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        .search-input:focus {
+            border-color: var(--accent-cyan);
+            background: #303030;
+            box-shadow: 0 0 8px rgba(0, 210, 255, 0.25);
+        }
+
+        .search-icon {
+            position: absolute;
+            left: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 13px;
+            height: 13px;
+            fill: var(--text-dim);
+        }
+
+        /* Kartotuvų sąrašas – FIKSUOTO AUKŠČIO su švariu scroll'u žemyn */
+        .node-list-container {
+            flex: 1 1 auto;
+            min-height: 0;
+            height: calc(100vh - 185px);
+            max-height: calc(100vh - 185px);
+            overflow-y: auto;
+            overflow-x: hidden;
+            overscroll-behavior: contain;
+            padding: 8px 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            scrollbar-width: thin;
+            scrollbar-color: #444444 #1e1e1e;
+        }
+
+        .node-list-container::-webkit-scrollbar {
+            width: 6px;
+        }
+        .node-list-container::-webkit-scrollbar-track {
+            background: #1e1e1e;
+        }
+        .node-list-container::-webkit-scrollbar-thumb {
+            background: #444444;
+            border-radius: 3px;
+        }
+        .node-list-container::-webkit-scrollbar-thumb:hover {
+            background: var(--accent-cyan);
+        }
+
+        /* MeshMapper stiliaus kartotuvo kortelė */
+        .node-item-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-left: 3px solid transparent;
+            border-radius: var(--radius-sm);
+            padding: 7px 10px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            position: relative;
+        }
+
+        .node-item-card:hover {
+            background: var(--bg-card-hover);
+            border-color: #444444;
+            border-left-color: var(--accent-cyan);
+            transform: translateY(-1px);
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+        }
+
+        .node-item-card.active {
+            background: var(--bg-card-active);
+            border-color: var(--accent-cyan);
+            border-left: 3px solid var(--accent-cyan);
+            box-shadow: 0 0 12px rgba(0, 210, 255, 0.2);
+        }
+
+        .node-title-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 6px;
+            margin-bottom: 5px;
+            min-width: 0;
+        }
+
+        .node-title-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 0;
+            flex: 1;
+        }
+
+        .node-bot-badge {
+            display: inline-block;
+            background: rgba(168, 85, 247, 0.15);
+            color: #c084fc;
+            border: 1px solid rgba(168, 85, 247, 0.4);
+            padding: 1px 5px;
+            border-radius: var(--radius-sm);
+            font-size: 0.65rem;
+            font-weight: 600;
+            flex-shrink: 0;
+            line-height: 1.2;
+        }
+
+        .node-metrics-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 6px;
+            margin-bottom: 4px;
+        }
+
+        .node-telem-time {
+            font-size: 0.68rem;
+            line-height: 1.2;
+            flex-shrink: 0;
+        }
+
+        .node-name {
+            font-size: 0.84rem;
+            font-weight: 600;
+            color: #ffffff;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            line-height: 1.2;
+            flex-shrink: 1;
+            min-width: 0;
+        }
+
+        /* MeshMapper .rep-hex-badge */
+        .node-badge-id {
+            display: inline-block;
+            font-family: var(--font-mono);
+            font-size: 0.65rem;
+            font-weight: 700;
+            background: var(--accent-blue);
+            color: #ffffff;
+            padding: 1px 5px;
+            border-radius: var(--radius-sm);
+            flex-shrink: 0;
+            line-height: 1.2;
+            letter-spacing: 0.02em;
+        }
+
+        .node-indicators {
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+
+        /* MeshMapper stiliaus rodmenų žymekliai */
+        .metric-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            padding: 2px 6px;
+            border-radius: var(--radius-sm);
+            font-family: var(--font-mono);
+            font-size: 0.68rem;
+            font-weight: 600;
+            white-space: nowrap;
+            line-height: 1.2;
+        }
+
+        .metric-pill.battery {
+            background: rgba(40, 167, 69, 0.15);
+            color: #2ed573;
+            border: 1px solid var(--accent-green);
+        }
+
+        .metric-pill.battery.warn {
+            background: rgba(255, 193, 7, 0.15);
+            color: var(--accent-amber);
+            border: 1px solid var(--accent-amber);
+        }
+
+        .metric-pill.battery.crit {
+            background: rgba(220, 53, 69, 0.15);
+            color: #ff4757;
+            border: 1px solid var(--accent-red);
+        }
+
+        .metric-pill.temp {
+            background: rgba(253, 126, 20, 0.15);
+            color: var(--accent-orange);
+            border: 1px solid var(--accent-orange);
+        }
+
+        .metric-pill.temp.cool {
+            background: rgba(0, 210, 255, 0.15);
+            color: var(--accent-cyan);
+            border: 1px solid var(--accent-cyan);
+        }
+
+        .node-details-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 0.67rem;
+            color: var(--text-dim);
+            padding-top: 4px;
+            border-top: 1px solid #303030;
+            line-height: 1.2;
+        }
+
+        .node-loc-status {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+        }
+
+        /* Custom Leaflet žymekliai tiesiai žemėlapyje su rodmenimis */
+        .mesh-marker-container {
+            background: transparent !important;
+            border: none !important;
+            display: flex !important;
+            justify-content: center !important;
+            align-items: flex-end !important;
+            transition: opacity 0.25s ease, filter 0.25s ease;
+        }
+
+        /* Kai aktyvuotas (atidarytas) koks nors taškas – visi kiti tampa 50% permatomi */
+        .has-active-marker .mesh-marker-container:not(.popup-open) {
+            opacity: 0.5 !important;
+            filter: grayscale(0.2);
+        }
+
+        .has-active-marker .mesh-marker-container:not(.popup-open):hover {
+            opacity: 0.85 !important;
+            filter: none;
+        }
+
+        .custom-mesh-marker {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            pointer-events: auto;
+            user-select: none;
+        }
+
+        .marker-bubble {
+            background: var(--bg-card);
+            border: 1px solid var(--accent-cyan);
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6), 0 0 10px rgba(0, 210, 255, 0.25);
+            border-radius: var(--radius-sm);
+            padding: 4px 8px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 3px;
+            font-family: var(--font-sans);
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .marker-bubble:hover {
+            transform: scale(1.06) translateY(-2px);
+            box-shadow: 0 6px 18px rgba(0, 210, 255, 0.45);
+        }
+
+        .marker-top-metrics {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+        }
+
+        .marker-name-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+        }
+
+        .marker-name {
+            font-weight: 700;
+            font-size: 0.76rem;
+            color: #ffffff;
+            text-align: center;
+            white-space: nowrap;
+        }
+
+        .marker-pill {
+            font-family: var(--font-mono);
+            font-size: 0.68rem;
+            font-weight: 700;
+            padding: 1px 5px;
+            border-radius: var(--radius-sm);
+            white-space: nowrap;
+        }
+
+        .marker-pin-dot {
+            width: 9px;
+            height: 9px;
+            background: var(--accent-cyan);
+            border: 2px solid #ffffff;
+            border-radius: 50%;
+            margin-top: 2px;
+            box-shadow: 0 0 8px var(--accent-cyan);
+            transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+        }
+
+        /* Kai atidarytas didelis popup, paslepiame mažąjį preview burbulą */
+        .mesh-marker-container.popup-open .marker-bubble {
+            display: none !important;
+        }
+
+        .mesh-marker-container.popup-open .marker-pin-dot {
+            transform: scale(1.3);
+            background: var(--accent-cyan);
+            border-color: #ffffff;
+            box-shadow: 0 0 12px var(--accent-cyan);
+        }
+
+        /* Leaflet popup stiliai pagal MeshMapper */
+        .leaflet-popup-content-wrapper {
+            background: var(--bg-card) !important;
+            color: #ffffff !important;
+            border: 1px solid var(--border-light) !important;
+            border-radius: var(--radius-lg) !important;
+            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.7) !important;
+            padding: 6px !important;
+        }
+
+        .leaflet-popup-close-button {
+            color: var(--text-dim) !important;
+            padding: 6px 8px !important;
+            font-size: 1.15rem !important;
+            font-weight: 700 !important;
+            transition: color 0.15s ease !important;
+        }
+
+        .leaflet-popup-close-button:hover {
+            color: var(--accent-cyan) !important;
+        }
+
+        .leaflet-popup-tip {
+            background: var(--bg-card) !important;
+            border: 1px solid var(--border-light) !important;
+        }
+
+        .popup-card {
+            min-width: 240px;
+            padding: 8px 6px;
+            font-family: var(--font-sans);
+        }
+
+        .popup-header {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #ffffff;
+            margin-bottom: 2px;
+        }
+
+        .popup-id {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            color: var(--accent-cyan);
+            margin-bottom: 10px;
+        }
+
+        .popup-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .popup-stat {
+            background: #1e1e1e;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            padding: 8px;
+            text-align: center;
+        }
+
+        .popup-stat-val {
+            font-family: var(--font-mono);
+            font-size: 0.98rem;
+            font-weight: 700;
+        }
+
+        .popup-stat-lbl {
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            margin-top: 2px;
+        }
+
+        .popup-footer {
+            font-size: 0.70rem;
+            color: var(--text-dim);
+            border-top: 1px solid var(--border-color);
+            padding-top: 8px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        /* Mobiliems įrenginiams */
+        @media (max-width: 768px) {
+            aside.sidebar-panel {
+                position: absolute;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                width: 100%;
+                height: 45vh;
+                max-height: 45vh;
+                border-left: none;
+                border-top: 1px solid var(--border-color);
+            }
+            .node-list-container {
+                height: calc(45vh - 125px);
+                max-height: calc(45vh - 125px);
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- MeshMapper stiliaus viršutinė navigacijos juosta -->
+    <header class="top-navbar" id="topNavbar">
+        <div class="brand-box">
+            <div class="logo-icon">
+                <svg viewBox="0 0 24 24">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                </svg>
+            </div>
+            <div class="brand-text-container">
+                <h1 class="brand-title">MeshCore Map</h1>
+                <span class="brand-badge">869.618 MHz • ShortFast</span>
+            </div>
+        </div>
+
+        <div class="header-meta">
+            <div class="session-indicator" id="liveStatusBadge">
+                <div class="pulse-dot"></div>
+                <span id="liveStatusText">TIESIOGIAI ETERYJE</span>
+            </div>
+
+            <button class="nav-btn" id="refreshBtn" onclick="fetchNodesData(true)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+                </svg>
+                <span>Atnaujinti</span>
+            </button>
+
+            <a href="admin/" class="nav-btn" style="text-decoration: none;" title="Administravimo pultas">
+                <span>⚙️ Admin</span>
+            </a>
+        </div>
+    </header>
+
+    <!-- Pagrindinis langas -->
+    <div class="main-container">
+        <!-- Žemėlapis -->
+        <div id="map"></div>
+
+        <!-- Šoninė panelė su statistika ir mazgų kortelėmis -->
+        <aside class="sidebar-panel" id="sidebarPanel">
+            <div class="sidebar-header">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-val" id="statRepeatersCount">0</div>
+                        <div class="stat-label">Kartotuvai</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-val" id="statAvgBattery">- V</div>
+                        <div class="stat-label">Vid. Baterija</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-val" id="statAvgTemp">- °C</div>
+                        <div class="stat-label">Vid. Temp.</div>
+                    </div>
+                </div>
+
+                <div class="search-box">
+                    <svg class="search-icon" viewBox="0 0 24 24">
+                        <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+                    </svg>
+                    <input type="text" id="searchInput" class="search-input" placeholder="Filtruoti mazgus pagal vardą ar ID..." oninput="filterNodesList()">
+                </div>
+            </div>
+
+            <!-- Mazgų sąrašas -->
+            <div class="node-list-container" id="nodeListContainer">
+                <div style="padding: 20px; text-align: center; color: var(--text-dim);">
+                    Kraunami mazgų duomenys iš /api/nodes...
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+    <script>
+        let repeaters = [];
+        let map = null;
+        let markersGroup = null;
+        let markersMap = {}; // node_id -> leaflet marker
+
+        // Inicijuojame Leaflet žemėlapį
+        function initMap() {
+            // Numatytas centras: Lietuva (55.2, 23.9)
+            map = L.map('map', {
+                zoomControl: true,
+                attributionControl: false
+            }).setView([55.2, 23.9], 8);
+
+            // Baziniai sluoksniai (100% nemokami, NEREIKIA jokio API rakto)
+            const osmStandard = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors'
+            });
+
+            // Tamsus OSM sluoksnis (veikia be jokio rakto)
+            const osmDark = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                className: 'dark-map-tiles',
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors'
+            });
+
+            // Palydovinis sluoksnis (Esri World Imagery - nemokamas be rakto)
+            const esriSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                maxZoom: 19,
+                attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+            });
+
+            const baseLayers = {
+                "🗺️ Standartinis (OSM)": osmStandard,
+                "🌙 Tamsus (OSM)": osmDark,
+                "🛰️ Palydovas (Esri)": esriSat
+            };
+
+            // Pagrindinė numatytoji tema: Standartinis OSM
+            const savedLayer = localStorage.getItem('meshcore_map_layer');
+            if (savedLayer && baseLayers[savedLayer]) {
+                baseLayers[savedLayer].addTo(map);
+            } else {
+                osmStandard.addTo(map);
+            }
+
+            // Sluoksnių perjungėjas viršuje dešinėje
+            L.control.layers(baseLayers, null, { position: 'topright' }).addTo(map);
+
+            map.on('baselayerchange', function(e) {
+                localStorage.setItem('meshcore_map_layer', e.name);
+            });
+
+            // Attribution apatiniame kampe
+            L.control.attribution({position: 'bottomleft'})
+                .addAttribution('&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> • MeshCore LoRa')
+                .addTo(map);
+
+            // Kai atidaromas bet kuris popup žemėlapyje – kiti taškai tampa 50% permatomi
+            map.on('popupopen', () => {
+                map.getContainer().classList.add('has-active-marker');
+            });
+
+            // Kai popup uždaromas – visi taškai grįžta į 100% matomumą
+            map.on('popupclose', () => {
+                map.getContainer().classList.remove('has-active-marker');
+            });
+
+            markersGroup = L.featureGroup().addTo(map);
+
+            // Užkrauname duomenis
+            fetchNodesData(true);
+        }
+
+        // Gauna mazgų duomenis iš /api/nodes
+        async function fetchNodesData(animateBtn = false) {
+            const btn = document.getElementById('refreshBtn');
+            if (animateBtn && btn) btn.classList.add('rotating');
+
+            try {
+                // Ieškome /api/nodes arba kitų galimų adresų
+                const endpoints = ['/api/nodes', '/nodes.php', 'api/nodes', '/nodes'];
+                let response = null;
+
+                for (const url of endpoints) {
+                    try {
+                        const res = await fetch(url);
+                        if (res.ok) {
+                            response = await res.json();
+                            break;
+                        }
+                    } catch (e) {
+                        // bandome kitą
+                    }
+                }
+
+                if (response && (response.repeaters || response.nodes)) {
+                    repeaters = response.repeaters || response.nodes || [];
+                    renderNodes(repeaters);
+                } else {
+                    document.getElementById('nodeListContainer').innerHTML = `
+                        <div style="padding: 24px; text-align: center; color: var(--text-dim);">
+                            <div style="font-size: 1.8rem; margin-bottom: 6px;">📡</div>
+                            <div>Gautas tuščias atsakymas iš serverio.</div>
+                        </div>`;
+                }
+            } catch (err) {
+                console.error("Klaida gaunant /api/nodes:", err);
+                document.getElementById('nodeListContainer').innerHTML = `
+                    <div style="padding: 24px; text-align: center; color: var(--accent-red);">
+                        Nepavyko užkrauti duomenų iš /api/nodes.
+                    </div>`;
+            } finally {
+                if (btn) btn.classList.remove('rotating');
+            }
+        }
+
+        // Baterijos stiliaus nustatymas pagal įtampą
+        function getBatteryStyle(volts) {
+            if (volts === null || volts === undefined) return { class: '', text: 'N/A' };
+            const v = parseFloat(volts);
+            if (v >= 3.9) return { class: '', text: `${v.toFixed(2)}V` };
+            if (v >= 3.65) return { class: 'warn', text: `${v.toFixed(2)}V` };
+            return { class: 'crit', text: `${v.toFixed(2)}V` };
+        }
+
+        // Temperatūros stiliaus nustatymas
+        function getTempStyle(temp) {
+            if (temp === null || temp === undefined) return { class: '', text: 'N/A' };
+            const t = parseFloat(temp);
+            const isCool = t <= 20.0;
+            return { class: isCool ? 'cool' : '', text: `${t > 0 ? '+' : ''}${t.toFixed(1)}°C` };
+        }
+
+        // Konvertuoja serverio datą į Date objektą atsižvelgiant į Lietuvos laiko juostą (UTC+3 vasarą / UTC+2 žiemą)
+        function parseToLithuanianDate(dateStr) {
+            if (!dateStr) return null;
+            // Jei data jau turi laiko juostos žymę (+03:00 arba Z)
+            if (dateStr.includes('Z') || dateStr.match(/[+-]\d{2}:?\d{2}$/)) {
+                return new Date(dateStr);
+            }
+            // Jei data yra YYYY-MM-DD HH:MM:SS formatu:
+            const localParsed = new Date(dateStr.replace(' ', 'T'));
+            const utcParsed = new Date(dateStr.replace(' ', 'T') + 'Z');
+            const now = new Date();
+
+            // Jei localParsed yra apie ~3 valandas praeityje (serveris išsaugojo UTC),
+            // o utcParsed atitinka dabartinį laiką, imame utcParsed:
+            const diffLocal = Math.abs(now - localParsed);
+            const diffUtc = Math.abs(now - utcParsed);
+
+            if (diffUtc < diffLocal && (diffLocal - diffUtc > 7000000)) {
+                return utcParsed;
+            }
+            return localParsed;
+        }
+
+        // Tikslus laiko atvaizdavimas Lietuvos laiko juostoje (pvz. "20:59")
+        function formatLithuanianTime(dateStr, includeSeconds = false) {
+            if (!dateStr) return '';
+            const date = parseToLithuanianDate(dateStr);
+            if (!date || isNaN(date.getTime())) return dateStr;
+
+            return date.toLocaleTimeString('lt-LT', {
+                timeZone: 'Europe/Vilnius',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: includeSeconds ? '2-digit' : undefined,
+                hour12: false
+            });
+        }
+
+        // Pilnas datos ir laiko atvaizdavimas Lietuvos laiko juostoje (pvz. "2026-10-01 20:59:15")
+        function formatLithuanianDateTime(dateStr) {
+            if (!dateStr) return 'Nematytas';
+            const date = parseToLithuanianDate(dateStr);
+            if (!date || isNaN(date.getTime())) return dateStr;
+
+            return date.toLocaleString('lt-LT', {
+                timeZone: 'Europe/Vilnius',
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false
+            });
+        }
+
+        // Santykinis laiko formatavimas (pvz. "prieš 5s", "prieš 2 min.")
+        function formatRelativeTime(dateStr) {
+            if (!dateStr) return 'Nematytas';
+            const date = parseToLithuanianDate(dateStr);
+            if (!date || isNaN(date.getTime())) return dateStr;
+
+            const now = new Date();
+            const diffSec = Math.max(0, Math.floor((now - date) / 1000));
+
+            if (diffSec < 60) return `prieš ${diffSec}s`;
+            if (diffSec < 3600) return `prieš ${Math.floor(diffSec / 60)} min.`;
+            if (diffSec < 86400) return `prieš ${Math.floor(diffSec / 3600)} val.`;
+            return `prieš ${Math.floor(diffSec / 86400)} d.`;
+        }
+
+        // Renderina mazgus žemėlapyje ir sąraše
+        function renderNodes(nodeList) {
+            markersGroup.clearLayers();
+            markersMap = {};
+
+            const listContainer = document.getElementById('nodeListContainer');
+            listContainer.innerHTML = '';
+
+            let hasCoordinatesCount = 0;
+            let totalBattery = 0, battCount = 0;
+            let totalTemp = 0, tempCount = 0;
+
+            if (nodeList.length === 0) {
+                listContainer.innerHTML = `
+                    <div style="padding: 30px 20px; text-align: center; color: var(--text-dim);">
+                        <div style="font-size: 2rem; margin-bottom: 8px;">📡</div>
+                        <div>Šiuo metu kartotuvų duomenų bazėje nėra.</div>
+                        <div style="font-size: 0.75rem; margin-top: 6px;">Duomenys atsiras, kai ESP32 arba klientas atsiųs ADVERT arba telemetrijos paketą.</div>
+                    </div>`;
+                return;
+            }
+
+            nodeList.forEach(node => {
+                const name = node.name || node.node_id || 'Kartotuvas';
+                const nodeId = node.node_id || (node.public_key ? node.public_key.substring(0, 4) : 'node');
+                const lastSeen = node.last_seen_at || '';
+                const telemTime = node.telemetry_updated_at || (node.telemetry ? (node.telemetry.telemetry_updated_at || node.telemetry.last_telemetry_at) : null) || '';
+                const botId = String(node.bot_id || 'KLP').replace(/[^a-zA-Z0-9_-]/g, '');
+                
+                // Telemetrija: temperatūra ir baterija V
+                const battV = node.battery_v !== null ? node.battery_v : (node.telemetry ? node.telemetry.battery_v : null);
+                const tempC = node.temperature_c !== null ? node.temperature_c : (node.telemetry ? node.telemetry.temperature_c : null);
+
+                if (battV !== null) {
+                    totalBattery += parseFloat(battV);
+                    battCount++;
+                }
+                if (tempC !== null) {
+                    totalTemp += parseFloat(tempC);
+                    tempCount++;
+                }
+
+                const battStyle = getBatteryStyle(battV);
+                const tempStyle = getTempStyle(tempC);
+
+                // Tikriname koordinates
+                const lat = node.latitude || (node.location ? node.location.latitude : null);
+                const lon = node.longitude || (node.location ? node.location.longitude : null);
+                const hasValidCoords = (lat !== null && lon !== null && Math.abs(lat) > 0.001 && Math.abs(lon) > 0.001);
+
+                // 1. ŽEMĖLAPIO ŽYMEKLIS (jei yra koordinatės)
+                if (hasValidCoords) {
+                    hasCoordinatesCount++;
+
+                    // Custom HTML žymeklis: Baterija ir temperatūra viršuje, mazgo pavadinimas apačioje išcentruotas
+                    const hasMetrics = (battV !== null || tempC !== null);
+                    const markerHtml = `
+                        <div class="custom-mesh-marker" data-node-id="${nodeId}">
+                            <div class="marker-bubble">
+                                ${hasMetrics ? `
+                                    <div class="marker-top-metrics">
+                                        ${battV !== null ? `<span class="marker-pill metric-pill battery ${battStyle.class}" title="Baterija (atnaujinta: ${formatLithuanianDateTime(telemTime) || 'Nėra'})">🔋 ${battStyle.text}</span>` : ''}
+                                        ${tempC !== null ? `<span class="marker-pill metric-pill temp ${tempStyle.class}" title="Temperatūra (atnaujinta: ${formatLithuanianDateTime(telemTime) || 'Nėra'})">🌡️ ${tempStyle.text}</span>` : ''}
+                                    </div>
+                                ` : ''}
+                                <div class="marker-name-row">
+                                    <span class="marker-name">${name}</span>
+                                </div>
+                            </div>
+                            <div class="marker-pin-dot"></div>
+                        </div>
+                    `;
+
+                    const customIcon = L.divIcon({
+                        className: 'mesh-marker-container',
+                        html: markerHtml,
+                        iconSize: [180, 56],
+                        iconAnchor: [90, 56],
+                        popupAnchor: [0, -14]
+                    });
+
+                    const popupContent = `
+                        <div class="popup-card">
+                            <div class="popup-header"><span class="node-badge-id" style="margin-right: 6px;">${nodeId.toUpperCase()}</span>${name}</div>
+                            <div class="popup-id">${node.is_repeater ? 'KARTOTUVAS' : 'MAZGAS'} • <span style="color:#c084fc; font-weight:600;">🤖 ${botId}</span></div>
+                            
+                            <div class="popup-grid">
+                                <div class="popup-stat">
+                                    <div class="popup-stat-val" style="color: ${battStyle.class === 'crit' ? '#ef4444' : '#10b981'};">
+                                        ${battV !== null ? parseFloat(battV).toFixed(2) + ' V' : 'N/A'}
+                                    </div>
+                                    <div class="popup-stat-lbl">🔋 Baterija</div>
+                                </div>
+                                <div class="popup-stat">
+                                    <div class="popup-stat-val" style="color: var(--accent-cyan);">
+                                        ${tempC !== null ? tempStyle.text : 'N/A'}
+                                    </div>
+                                    <div class="popup-stat-lbl">🌡️ Temp.</div>
+                                </div>
+                            </div>
+
+                            <div class="popup-footer" style="flex-direction: column; gap: 5px; align-items: stretch;">
+                                <div style="display:flex; justify-content:space-between; align-items:center;">
+                                    <span>📍 ${parseFloat(lat).toFixed(5)}, ${parseFloat(lon).toFixed(5)}</span>
+                                    <span title="${formatLithuanianDateTime(lastSeen)}">📡 Matytas: ${formatRelativeTime(lastSeen)}</span>
+                                </div>
+                                <div style="font-size: 0.72rem; color: #a78bfa; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 4px; display:flex; justify-content:space-between;" title="${formatLithuanianDateTime(telemTime)}">
+                                    <span>⏱️ Telemetrija:</span>
+                                    <strong>${telemTime ? formatRelativeTime(telemTime) + ' (' + formatLithuanianTime(telemTime, false) + ')' : 'Nėra duomenų'}</strong>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+
+                    const marker = L.marker([lat, lon], { icon: customIcon })
+                        .bindPopup(popupContent, {
+                            offset: [0, -6],
+                            closeButton: true,
+                            autoPan: true
+                        });
+
+                    // Kai atidaromas didelis langas (popup): paslepiame mažąjį preview burbulą
+                    marker.on('popupopen', () => {
+                        const el = marker.getElement();
+                        if (el) el.classList.add('popup-open');
+
+                        // Šoninėje panelėje aktyvuojame atitinkamą kortelę
+                        document.querySelectorAll('.node-item-card').forEach(c => c.classList.remove('active'));
+                        const card = document.getElementById(`card-${nodeId}`);
+                        if (card) {
+                            card.classList.add('active');
+                            card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                        }
+                    });
+
+                    // Kai uždaromas didelis langas (popup): grąžiname mažąjį preview burbulą
+                    marker.on('popupclose', () => {
+                        const el = marker.getElement();
+                        if (el) el.classList.remove('popup-open');
+                    });
+                    
+                    markersGroup.addLayer(marker);
+                    markersMap[nodeId] = marker;
+                }
+
+                // 2. ŠONINĖS PANELĖS KORTELĖ
+                const card = document.createElement('div');
+                card.className = 'node-item-card';
+                card.id = `card-${nodeId}`;
+                card.onclick = () => focusNode(nodeId, hasValidCoords ? [lat, lon] : null);
+
+                card.innerHTML = `
+                    <div class="node-title-row">
+                        <div class="node-title-group">
+                            <span class="node-badge-id">${nodeId.toUpperCase()}</span>
+                            <span class="node-name" title="${name}">${name}</span>
+                        </div>
+                        <span class="node-bot-badge" title="Gauta per ESP32">🤖 ${botId}</span>
+                    </div>
+
+                    <div class="node-metrics-row">
+                        <div class="node-indicators">
+                            ${battV !== null ? `<span class="metric-pill battery ${battStyle.class}" title="Baterija (atnaujinta: ${formatLithuanianDateTime(telemTime) || 'Nėra'})">🔋 ${battStyle.text}</span>` : '<span class="metric-pill" style="color:var(--text-dim);">🔋 -</span>'}
+                            ${tempC !== null ? `<span class="metric-pill temp ${tempStyle.class}" title="Temperatūra (atnaujinta: ${formatLithuanianDateTime(telemTime) || 'Nėra'})">🌡️ ${tempStyle.text}</span>` : ''}
+                        </div>
+                        <div class="node-telem-time" title="Telemetrija atnaujinta: ${formatLithuanianDateTime(telemTime) || 'Nėra'}">
+                            ${telemTime ? `<span style="color:#c084fc; font-weight:600;">⏱️ ${formatRelativeTime(telemTime)}</span>` : ''}
+                        </div>
+                    </div>
+
+                    <div class="node-details-row">
+                        <div class="node-loc-status">
+                            ${hasValidCoords ? `<span style="color:var(--accent-cyan);">📍 ${parseFloat(lat).toFixed(3)}, ${parseFloat(lon).toFixed(3)}</span>` : '<span style="color:var(--text-dim);">📍 Be koord.</span>'}
+                        </div>
+                        <div class="node-seen-time" title="Paskutinį kartą matytas: ${formatLithuanianDateTime(lastSeen)}">
+                            <span>📡 ${formatRelativeTime(lastSeen)}</span>
+                        </div>
+                    </div>
+                `;
+
+                listContainer.appendChild(card);
+            });
+
+            // Atnaujiname viršutinius statistikos langelius
+            document.getElementById('statRepeatersCount').innerText = nodeList.length;
+            document.getElementById('statAvgBattery').innerText = battCount > 0 ? (totalBattery / battCount).toFixed(2) + ' V' : '- V';
+            document.getElementById('statAvgTemp').innerText = tempCount > 0 ? (totalTemp / tempCount).toFixed(1) + ' °C' : '- °C';
+
+            // Jei turime žymeklių žemėlapyje - automatiškai pritraukiame kamerą
+            if (hasCoordinatesCount > 0) {
+                map.fitBounds(markersGroup.getBounds(), { padding: [60, 60], maxZoom: 13 });
+            }
+        }
+
+        // Paspaudus ant mazgo sąraše – nuskrendame į žemėlapį ir atidarome popup'ą
+        function focusNode(nodeId, coords = null) {
+            document.querySelectorAll('.node-item-card').forEach(c => c.classList.remove('active'));
+            const card = document.getElementById(`card-${nodeId}`);
+            if (card) {
+                card.classList.add('active');
+                card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+
+            const marker = markersMap[nodeId];
+            if (marker) {
+                map.flyTo(marker.getLatLng(), 14, { duration: 1.2 });
+                setTimeout(() => marker.openPopup(), 1200);
+            } else if (coords) {
+                map.flyTo(coords, 14, { duration: 1.2 });
+            }
+        }
+
+        // Sąrašo filtravimas realiu laiku
+        function filterNodesList() {
+            const query = document.getElementById('searchInput').value.toLowerCase().trim();
+            const cards = document.querySelectorAll('.node-item-card');
+
+            cards.forEach(card => {
+                const text = card.innerText.toLowerCase();
+                card.style.display = text.includes(query) ? 'block' : 'none';
+            });
+        }
+
+        // Paleidžiame žemėlapį užsikrovus DOM (atnaujinimas rankinis per mygtuką)
+        document.addEventListener('DOMContentLoaded', () => {
+            initMap();
+        });
+    </script>
+</body>
+</html>

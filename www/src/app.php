@@ -1,5 +1,8 @@
 <?php
 
+// Nustatome Lietuvos laiko juostą
+date_default_timezone_set('Europe/Vilnius');
+
 // Automatinis Composer arba vietinių klasių užkrovimas
 if (file_exists(__DIR__ . '/../vendor/autoload.php')) {
     require_once __DIR__ . '/../vendor/autoload.php';
@@ -50,6 +53,114 @@ $isNodesEndpoint = (
     (isset($_GET['action']) && $_GET['action'] === 'nodes') ||
     basename($_SERVER['SCRIPT_FILENAME'] ?? '') === 'nodes.php'
 );
+
+// Nustatome ar kreipiamasi į /api/repyters arba /api/repeaters endpointą (visi kartotuvai)
+$isRepytersEndpoint = (
+    preg_match('#/(api/)?(api/)?(repyters|repeaters)(\.json|\.php)?$#i', $path) || 
+    (isset($_GET['endpoint']) && in_array(strtolower($_GET['endpoint']), ['repyters', 'repeaters', 'r'])) ||
+    (isset($_GET['action']) && in_array(strtolower($_GET['action']), ['repyters', 'repeaters', 'r'])) ||
+    in_array(basename($_SERVER['SCRIPT_FILENAME'] ?? ''), ['repyters.php', 'repeaters.php', 'r.json'])
+);
+
+// Nustatome ar kreipiamasi į /api/api/repeater arba /api/repeater endpointą (TIK 1 kartotuvas pagal requested_date)
+$isSingleRepeaterEndpoint = (
+    preg_match('#/(api/)?(api/)?(repeater|repyter)(\.json|\.php)?$#i', $path) || 
+    (isset($_GET['endpoint']) && in_array(strtolower($_GET['endpoint']), ['repeater', 'repyter'])) ||
+    (isset($_GET['action']) && in_array(strtolower($_GET['action']), ['repeater', 'repyter'])) ||
+    in_array(basename($_SERVER['SCRIPT_FILENAME'] ?? ''), ['repeater.php', 'repyter.php'])
+);
+
+// -----------------------------------------------------------------------------
+// 📡 ENDPOINT: GET /api/api/repeater (arba /api/repeater)
+// Grąžina TIK 1 kartotuvą pagal requested_date prioritetą (tuščia data -> seniausia data)
+// ir iškart pažymi requested_date = CURRENT_TIMESTAMP duomenų bazėje.
+// Formatas: JSON objektas (arba 1 elemento masyvas su ?format=array)
+// {
+//   "name": "b9dd",
+//   "public_id": "b9ddd788b7a59eab40eaa49a2534fa9e7fc0ef7d920ef4811139998cddd631db",
+//   "password": "hello",
+//   "isDirect": false,
+//   "status": true,
+//   "telemetry": true,
+//   "requested_date": "2026-10-02 19:20:00"
+// }
+// -----------------------------------------------------------------------------
+if ($isSingleRepeaterEndpoint) {
+    if ($method !== 'GET') {
+        http_response_code(405);
+        echo json_encode([
+            'success' => false,
+            'error'   => 'Metodas nepalaikomas. /api/api/repeater priima tik GET užklausas.'
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $repeater = ($repository) ? $repository->getNextRepeaterToRequest() : null;
+
+    // Jei duomenų bazėje nieko nerasta arba DB klaida, kaip atsarginį variantą paimame pirmą iš failo:
+    if (!$repeater) {
+        $repFile = __DIR__ . '/../repeaters.json';
+        if (file_exists($repFile)) {
+            $fl = json_decode(file_get_contents($repFile), true) ?: [];
+            if (!empty($fl[0])) {
+                $repeater = $fl[0];
+            }
+        }
+    }
+
+    if (!$repeater) {
+        http_response_code(404);
+        echo json_encode([
+            'success' => false,
+            'error'   => 'Nėra aktyvių kartotuvų (update=true) eilėje.'
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    // Jei klientas paprašo formato kaip masyvo per ?format=array:
+    $wantsArray = (isset($_GET['format']) && strtolower($_GET['format']) === 'array');
+    echo json_encode($wantsArray ? [$repeater] : $repeater, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
+// -----------------------------------------------------------------------------
+// 📡 ENDPOINT: GET /api/repyters (Visi stebimi kartotuvai)
+// Formatas:
+// [
+//   {
+//     "name": "b9dd",
+//     "public_id": "b9ddd788b7a59eab40eaa49a2534fa9e7fc0ef7d920ef4811139998cddd631db",
+//     "password": "hello",
+//     "isDirect": false,
+//     "status": true,
+//     "telemetry": true
+//   },
+//   ...
+// ]
+// -----------------------------------------------------------------------------
+if ($isRepytersEndpoint) {
+    if ($method !== 'GET') {
+        http_response_code(405);
+        echo json_encode([
+            'success' => false,
+            'error'   => 'Metodas nepalaikomas. /api/repyters priima tik GET užklausas.'
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $repeatersList = ($repository) ? $repository->getMonitoredRepeaters() : [];
+
+    // Jei $repository nebuvo sukurtas dėl DB klaidos, perskaitome tiesiai iš failo:
+    if (empty($repeatersList)) {
+        $repFile = __DIR__ . '/../repeaters.json';
+        if (file_exists($repFile)) {
+            $repeatersList = json_decode(file_get_contents($repFile), true) ?: [];
+        }
+    }
+
+    echo json_encode($repeatersList, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
 
 // -----------------------------------------------------------------------------
 // 📡 ENDPOINT: GET /api/nodes (Kartotuvų sąrašas su paskutine telemetrija)
@@ -111,8 +222,10 @@ if ($method === 'GET') {
             'node_stats'  => $nodeStats,
         ],
         'endpoints' => [
-            'GET /api/nodes' => 'Ištraukia visus kartotuvus (nodes) su pavadinimu, node_id, koordinatėmis, kada paskutinį kartą matytas, bei paskutine temperatūra ir baterijos įkrova V.',
-            'POST /api/raw'  => 'Visas LoRa srautas (RX/TX) išsaugomas DB eilėje (processed = false). Dekodavimas vyksta fone per process_queue.php.',
+            'GET /api/repeater' => 'Grąžina TIK 1 kartotuvą eilėje (su tuščia arba seniausia requested_date) ir pažymi DB requested_date = CURRENT_TIMESTAMP.',
+            'GET /api/repyters'     => 'Grąžina visų stebimų kartotuvų sąrašą tiksliai tokiu formatu, kokio reikalauja ESP32 bot (name, public_id, password, isDirect, status, telemetry).',
+            'GET /api/nodes'        => 'Grąžina žemėlapiui optimizuotus kartotuvus (nodes) su paskutine telemetrija, surūšiuotus pagal telemetrijos atnaujinimo datą nuo naujausio.',
+            'POST /api/raw'         => 'Visas LoRa srautas (RX/TX) išsaugomas DB eilėje (processed = false). Dekodavimas vyksta fone per process_queue.php.',
         ],
         'deprecated_endpoints' => [
             'POST /api/adverts'   => 'Panaikinta. Skelbimai apdorojami serveryje iš RAW srauto.',
@@ -230,10 +343,29 @@ if ($forceSync) {
 
             $repository->extractAndSaveTelemetry($recordId, $decoded, $payloadData);
 
+            if (is_array($payloadData) && !empty($payloadData['direction']) && strtoupper((string)$payloadData['direction']) === 'RX') {
+                $senderKey = !empty($payloadData['sender_public_key']) ? (string)$payloadData['sender_public_key'] : null;
+                if ($senderKey) {
+                    $bId = !empty($payloadData['bot_id']) ? (string)$payloadData['bot_id'] : 'KLP';
+                    $r = isset($payloadData['rssi']) ? (float)$payloadData['rssi'] : null;
+                    $s = isset($payloadData['snr']) ? (float)$payloadData['snr'] : null;
+                    $repository->touchNodeSeen($senderKey, $bId, null, null, $r, $s);
+                }
+            }
+
+            $errorMsg = null;
+            if (!empty($decoded['error'])) {
+                $errorMsg = (string)$decoded['error'];
+            } elseif (!empty($decoded['encryption']['decryption_error'])) {
+                $errorMsg = (string)$decoded['encryption']['decryption_error'];
+            } elseif (!empty($decoded['advert']['error'])) {
+                $errorMsg = (string)$decoded['advert']['error'];
+            }
+
             if (!empty($decoded['success'])) {
-                $repository->completeProcessing($recordId, $decoded);
+                $repository->completeProcessing($recordId, $decoded, $errorMsg);
             } else {
-                $repository->failProcessing($recordId, $decoded['error'] ?? 'Dekodavimo klaida');
+                $repository->failProcessing($recordId, $errorMsg ?? 'Dekodavimo klaida', $decoded);
             }
         } catch (\Throwable $e) {
             // DB atnaujinimo klaida

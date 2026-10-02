@@ -14,6 +14,10 @@ const char *WIFI_PASSWORD = "37810200438";
 // const char *WIFI_SSID = "Nerijus’s iPhone";
 // const char *WIFI_PASSWORD = "kodas123";
 
+// 1b. Laiko juosta (Lietuvos laikas: EET/EEST, automatinis žiemos/vasaros
+// laikas)
+const char *TIMEZONE_STRING = "EET-2EEST,M3.5.0/3,M10.5.0/4";
+
 // 2. API Endpoint
 const char *API_BASE_URL = "https://telemetry.ite.lt";
 const char *API_ENDPOINT_RAW =
@@ -21,9 +25,14 @@ const char *API_ENDPOINT_RAW =
 const char *API_AUTH_KEY =
     ""; // Pvz.: "Bearer TAVO_TOKENAS" (jei nereikia - palikti "")
 
-// 3. Stebimų kartotuvų sąrašo URL (iš kur prieš kiekvieną ciklą parsiunčiamas
-// kartotuvų JSON sąrašas)
-const char *REPEATERS_URL = "https://telemetry.ite.lt/r.json";
+// 2b. ESP32 Boto identifikatorius (3 ženklų kodas, pvz. "KLP", "VNO", "KAU")
+// Siunčiamas su kiekviena API užklausa, kad serveryje būtų galima atskirti, iš
+// kurio ESP32 atėjo paketas
+const char *BOT_ID = "KLP";
+
+// 3. Stebimo kartotuvo gavimo URL (iš kur prieš kiekvieną ciklą parsiunčiamas
+// 1 sekantis atnaujinamas kartotuvas pagal eilę)
+const char *REPEATERS_URL = "https://telemetry.ite.lt/api/repeater";
 
 // Maksimalus stebimų kartotuvų skaičius atmintyje:
 const size_t MAX_MONITORED_REPEATERS = 16;
@@ -48,9 +57,14 @@ enum WaitTarget {
   WAIT_TELEMETRY = 3
 };
 
-// Atsakymo laukimo laikas (milisekundėmis) po kiekvienos užklausos (10
-// sekundžių):
-const unsigned long REPEATER_REPLY_TIMEOUT_MS = 10000;
+// Atsakymo laukimo laikas (milisekundėmis) po kiekvienos užklausos tiesioginiam
+// kartotuvui:
+const unsigned long REPEATER_REPLY_TIMEOUT_MS = 12000;
+
+// Atsakymo laukimo laikas nutolusiems kartotuvams per kelis šuolius (multi-hop
+// / FLOOD): Būtina 25-35 s, nes paketas turi nukeliauti per 2-4 tarpinius
+// kartotuvus ir grįžti atgal
+const unsigned long REPEATER_REMOTE_REPLY_TIMEOUT_MS = 30000;
 
 // Pauzė (milisekundėmis) tarp atskirų užklausų laukimo (pvz. po status prieš
 // telemetriją):
@@ -70,7 +84,7 @@ const char *MY_PRVKEY_HEX =
     "0bbd84b028bdf755edd8f30c6f67839c3f81846c9f0079f377ea32a1e93410f3";
 
 // Užklausų ciklo periodiškumas (milisekundėmis): kas 1 valandą (3600000 ms)
-const unsigned long TELEMETRY_REQUEST_INTERVAL_MS = 60000 * 60;
+const unsigned long TELEMETRY_REQUEST_INTERVAL_MS = 60000;
 
 // ================================================================================
 // 🌐 MESHCORE MARŠRUTIZAVIMO IR KELIO NUSTATYMAI (ROUTING, PATH & SCOPE)
@@ -83,7 +97,8 @@ const unsigned long TELEMETRY_REQUEST_INTERVAL_MS = 60000 * 60;
 //   16 -> 2 baitai (16 bitų) – Rekomenduojama didesniuose tinkluose (mažiau
 //   kolizijų, 65536 ID) 24 -> 3 baitai (24 bitai) – Maksimalus tikslumas (16
 //   mln. ID)
-const uint8_t PATH_HASH_BITS = 16; // Pasirinkite: 8, 16 arba 24 bitai
+const uint8_t PATH_HASH_BITS = 16; // 16 bitų (2 baitai) – Standartas Lietuvos
+                                   // MeshCore tinkle (B9DD, 2BBD ir kt.)
 
 // 2. Regioninio Scope (potinklio / Scoped Flood) nustatymai:
 // Jei ENABLE_SCOPE = true:
