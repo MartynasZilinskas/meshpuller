@@ -192,6 +192,9 @@ if ($action === 'save_settings') {
         if (isset($data['max_telemetry_fails']) && is_numeric($data['max_telemetry_fails'])) {
             $newSettings['max_telemetry_fails'] = max(0, (int)$data['max_telemetry_fails']);
         }
+        if (isset($data['min_telemetry_interval_mins']) && is_numeric($data['min_telemetry_interval_mins'])) {
+            $newSettings['min_telemetry_interval_mins'] = max(0, (int)$data['min_telemetry_interval_mins']);
+        }
         if (isset($data['auto_add_new_repeaters'])) {
             $newSettings['auto_add_new_repeaters'] = ($data['auto_add_new_repeaters'] === true || $data['auto_add_new_repeaters'] === '1' || $data['auto_add_new_repeaters'] === 1);
         }
@@ -478,9 +481,11 @@ if ($action === 'node_queue') {
         $successCount = 0;
         $timeoutCount = 0;
         $blockedCount = 0;
+        $rateLimitedCount = 0;
 
         foreach ($queue as $item) {
             if (!empty($item['is_blocked'])) $blockedCount++;
+            elseif (!empty($item['is_rate_limited'])) $rateLimitedCount++;
             elseif ($item['attempt_status'] === 'never') $pendingFirst++;
             elseif ($item['attempt_status'] === 'success') $successCount++;
             elseif ($item['attempt_status'] === 'timeout') $timeoutCount++;
@@ -496,7 +501,8 @@ if ($action === 'node_queue') {
                 'pending_first' => $pendingFirst,
                 'success'       => $successCount,
                 'timeout'       => $timeoutCount,
-                'blocked'       => $blockedCount
+                'blocked'       => $blockedCount,
+                'rate_limited'  => $rateLimitedCount
             ]
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
     } catch (\Throwable $e) {

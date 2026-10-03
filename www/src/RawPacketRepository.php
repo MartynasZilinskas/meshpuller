@@ -1751,6 +1751,8 @@ SQL;
         'lithuania_lon_max'                  => 26.85,
         'max_telemetry_fails'                => 20,
         'auto_add_new_repeaters'             => false,
+        'min_telemetry_interval_mins'        => 60,
+        'telemetry_chart_days'               => 7,
     ];
 
     /**
@@ -1992,7 +1994,7 @@ SQL;
      *
      * @return array
      */
-    public function getMonitoredRepeaters(): array
+    public function getMonitoredRepeaters(?string $botId = null): array
     {
         $repeaters = [];
         $knownKeys = [];
@@ -2007,19 +2009,38 @@ SQL;
                 $failFilterPgsql = ($maxFails > 0) ? " AND (COALESCE(telemetry_fail_count, 0) < {$maxFails})" : "";
                 $failFilterMysql = ($maxFails > 0) ? " AND (COALESCE(`telemetry_fail_count`, 0) < {$maxFails})" : "";
 
+                $minIntervalMins = (int)$this->getSetting('min_telemetry_interval_mins', 60);
+                $intervalFilterPgsql = "";
+                $intervalFilterMysql = "";
+                if ($minIntervalMins > 0) {
+                    $intervalFilterPgsql = " AND (telemetry_updated_at IS NULL OR telemetry_updated_at <= (CURRENT_TIMESTAMP - INTERVAL '{$minIntervalMins} minutes'))";
+                    $intervalFilterMysql = " AND (`telemetry_updated_at` IS NULL OR `telemetry_updated_at` <= DATE_SUB(NOW(), INTERVAL {$minIntervalMins} MINUTE))";
+                }
+
+                $botFilterPgsql = "";
+                $botFilterMysql = "";
+                $params = [];
+                if (!empty($botId)) {
+                    $cleanBotId = strtoupper(substr(trim((string)$botId), 0, 16));
+                    $botFilterPgsql = " AND (bot_id = :bot_id)";
+                    $botFilterMysql = " AND (`bot_id` = :bot_id)";
+                    $params[':bot_id'] = $cleanBotId;
+                }
+
                 if ($driver === 'pgsql') {
-                    $sql = "SELECT public_key, node_id, node_name, is_repeater, password, \"update\" 
+                    $sql = "SELECT public_key, node_id, node_name, is_repeater, password, \"update\", bot_id 
                             FROM nodes 
-                            WHERE \"update\" = true {$failFilterPgsql}
+                            WHERE \"update\" = true {$failFilterPgsql} {$intervalFilterPgsql} {$botFilterPgsql}
                             ORDER BY last_seen_at DESC";
                 } else {
-                    $sql = "SELECT public_key, node_id, node_name, is_repeater, `password`, `update` 
+                    $sql = "SELECT public_key, node_id, node_name, is_repeater, `password`, `update`, `bot_id` 
                             FROM `nodes` 
-                            WHERE `update` = 1 {$failFilterMysql}
+                            WHERE `update` = 1 {$failFilterMysql} {$intervalFilterMysql} {$botFilterMysql}
                             ORDER BY last_seen_at DESC";
                 }
 
-                $stmt = $this->pdo->query($sql);
+                $stmt = $this->pdo->prepare($sql);
+                $stmt->execute($params);
                 while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
                     if (empty($row['public_key'])) {
                         continue;
@@ -2042,6 +2063,7 @@ SQL;
                             'isDirect'  => false,
                             'status'    => true,
                             'telemetry' => true,
+                            'bot_id'    => $row['bot_id'] ?? null,
                         ];
                     }
                 }
@@ -2198,7 +2220,7 @@ SQL;
      *
      * @return array|null Kartotuvo konfigūracija arba null
      */
-    public function getNextRepeaterToRequest(): ?array
+    public function getNextRepeaterToRequest(?string $botId = null): ?array
     {
         $driver = $this->pdo ? $this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME) : null;
         if (!$this->pdo) {
@@ -2212,12 +2234,33 @@ SQL;
         $failFilterPgsql = ($maxFails > 0) ? " AND (COALESCE(telemetry_fail_count, 0) < {$maxFails})" : "";
         $failFilterMysql = ($maxFails > 0) ? " AND (COALESCE(`telemetry_fail_count`, 0) < {$maxFails})" : "";
 
+        // Minimalus telemetrijos atnaujinimo intervalas (minutėmis)
+        // Jei mazgo telemetrija buvo atnaujinta neseniai (mažiau nei prieš N min.),
+        // jis praleidžiamas, o imamas kitas mazgas, kurio telemetrija senesnė arba NULL.
+        $minIntervalMins = (int)$this->getSetting('min_telemetry_interval_mins', 60);
+        $intervalFilterPgsql = "";
+        $intervalFilterMysql = "";
+        if ($minIntervalMins > 0) {
+            $intervalFilterPgsql = " AND (telemetry_updated_at IS NULL OR telemetry_updated_at <= (CURRENT_TIMESTAMP - INTERVAL '{$minIntervalMins} minutes'))";
+            $intervalFilterMysql = " AND (`telemetry_updated_at` IS NULL OR `telemetry_updated_at` <= DATE_SUB(NOW(), INTERVAL {$minIntervalMins} MINUTE))";
+        }
+
+        $botFilterPgsql = "";
+        $botFilterMysql = "";
+        $params = [];
+        if (!empty($botId)) {
+            $cleanBotId = strtoupper(substr(trim((string)$botId), 0, 16));
+            $botFilterPgsql = " AND (nodes.bot_id = :bot_id)";
+            $botFilterMysql = " AND (`nodes`.`bot_id` = :bot_id)";
+            $params[':bot_id'] = $cleanBotId;
+        }
+
         if ($driver === 'pgsql') {
             $sql = <<<SQL
             WITH next_rep AS (
-                SELECT id, public_key, node_id, node_name, password, requested_date, telemetry_updated_at, last_failed_request_at
+                SELECT id, public_key, node_id, node_name, password, requested_date, telemetry_updated_at, last_failed_request_at, bot_id
                 FROM nodes
-                WHERE (is_repeater = true) AND ("update" = true) {$failFilterPgsql}
+                WHERE (is_repeater = true) AND ("update" = true) {$failFilterPgsql} {$intervalFilterPgsql} {$botFilterPgsql}
                 ORDER BY 
                     CASE WHEN requested_date IS NULL THEN 0 ELSE 1 END ASC,
                     requested_date ASC,
@@ -2244,10 +2287,11 @@ SQL;
                 requested_date = CURRENT_TIMESTAMP
             FROM next_rep
             WHERE nodes.id = next_rep.id
-            RETURNING nodes.public_key, nodes.node_id, nodes.node_name, nodes.password, nodes.requested_date, nodes.telemetry_fail_count;
+            RETURNING nodes.public_key, nodes.node_id, nodes.node_name, nodes.password, nodes.requested_date, nodes.telemetry_fail_count, nodes.bot_id;
 SQL;
             try {
-                $stmt = $this->pdo->query($sql);
+                $stmt = $this->pdo->prepare($sql);
+                $stmt->execute($params);
                 $row = $stmt->fetch(\PDO::FETCH_ASSOC);
                 if ($row) {
                     $pubId = strtolower(trim($row['public_key']));
@@ -2265,6 +2309,7 @@ SQL;
                         'isDirect'             => false,
                         'status'               => true,
                         'telemetry'            => true,
+                        'bot_id'               => $row['bot_id'] ?? null,
                         'requested_date'       => $row['requested_date'] ?? date('Y-m-d H:i:s'),
                         'telemetry_fail_count' => (int)($row['telemetry_fail_count'] ?? 0),
                     ];
@@ -2279,11 +2324,13 @@ SQL;
         $this->pdo->beginTransaction();
         try {
             $selectSql = <<<SQL
-            SELECT id, public_key, node_id, node_name, `password`, `requested_date`, `telemetry_updated_at`, `last_failed_request_at`, `telemetry_fail_count`
+            SELECT id, public_key, node_id, node_name, `password`, `requested_date`, `telemetry_updated_at`, `last_failed_request_at`, `telemetry_fail_count`, `bot_id`
             FROM `nodes`
             WHERE (`is_repeater` = 1 OR `is_repeater` = true)
               AND (`update` = 1 OR `update` = true)
               {$failFilterMysql}
+              {$intervalFilterMysql}
+              {$botFilterMysql}
             ORDER BY 
                 CASE WHEN `requested_date` IS NULL THEN 0 ELSE 1 END ASC,
                 `requested_date` ASC,
@@ -2291,7 +2338,8 @@ SQL;
             LIMIT 1
             FOR UPDATE
 SQL;
-            $stmt = $this->pdo->query($selectSql);
+            $stmt = $this->pdo->prepare($selectSql);
+            $stmt->execute($params);
             $row = $stmt->fetch(\PDO::FETCH_ASSOC);
 
             if ($row) {
@@ -2338,6 +2386,7 @@ SQL;
                     'isDirect'             => false,
                     'status'               => true,
                     'telemetry'            => true,
+                    'bot_id'               => $row['bot_id'] ?? null,
                     'requested_date'       => $now,
                     'telemetry_fail_count' => $failCount,
                 ];
@@ -2536,7 +2585,23 @@ SQL;
                 }
             }
 
-            $queuePos = $isBlocked ? null : $queueIndex++;
+            $minIntervalMins = (int)$this->getSetting('min_telemetry_interval_mins', 60);
+            $isRateLimited = false;
+            $rateLimitRemainingMins = 0;
+            if ($minIntervalMins > 0 && $rawTelemDate !== null && trim((string)$rawTelemDate) !== '') {
+                $telemTimestamp = strtotime($rawTelemDate);
+                $elapsedSec = $now - $telemTimestamp;
+                $requiredSec = $minIntervalMins * 60;
+                if ($elapsedSec < $requiredSec) {
+                    $isRateLimited = true;
+                    $rateLimitRemainingMins = ceil(($requiredSec - $elapsedSec) / 60);
+                }
+            }
+
+            // Jei mazgas yra užblokuotas (fail limitas) ARBA jo telemetrija atnaujinta per nustatytą intervalą (rate-limited),
+            // jis negauna aktyvios eilės pozicijos (bus paduodamas kitas mazgas)
+            $isEligibleForNext = (!$isBlocked && !$isRateLimited);
+            $queuePos = $isEligibleForNext ? $queueIndex++ : null;
 
             $result[] = [
                 'queue_pos'                => $queuePos,
@@ -2554,6 +2619,9 @@ SQL;
                 'telemetry_fail_count'     => $failCount,
                 'is_blocked'               => $isBlocked,
                 'max_telemetry_fails'      => $maxFails,
+                'is_rate_limited'          => $isRateLimited,
+                'rate_limit_remaining_mins'=> $rateLimitRemainingMins,
+                'min_interval_mins'        => $minIntervalMins,
                 'has_prior_telemetry'      => $hasPriorTelemetry,
                 'last_seen_at'             => $formatLt($row['last_seen_at']),
                 'last_seen_at_iso'         => $formatIsoLt($row['last_seen_at']),

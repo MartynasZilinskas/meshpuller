@@ -947,6 +947,10 @@ $isLoggedIn = isAdminLoggedIn();
                             <div class="val" id="qStatSuccess">-</div>
                             <div class="lbl">✅ Telemetrija Gauta</div>
                         </div>
+                        <div class="stat-box purple">
+                            <div class="val" id="qStatRateLimited">-</div>
+                            <div class="lbl">⏳ Atnaujinta neseniai (Pauzė)</div>
+                        </div>
                         <div class="stat-box orange">
                             <div class="val" id="qStatTimeout">-</div>
                             <div class="lbl">❌ Neatsakė / Timeout</div>
@@ -978,10 +982,11 @@ $isLoggedIn = isAdminLoggedIn();
 
                         <div style="display: flex; align-items: center; gap: 6px;">
                             <label style="font-size: 0.78rem; color: var(--text-muted);">Rezultatas:</label>
-                            <select id="queueStatusFilter" class="form-control" style="width: 190px;" onchange="onQueueStatusFilterChange()">
+                            <select id="queueStatusFilter" class="form-control" style="width: 210px;" onchange="onQueueStatusFilterChange()">
                                 <option value="">Visi rezultatai</option>
                                 <option value="never">🚀 Prioritetas (NULL)</option>
                                 <option value="success">✅ Gauta telemetrija</option>
+                                <option value="rate_limited">⏳ Atnaujinta neseniai (Pauzė)</option>
                                 <option value="in_progress">⏳ Laukiama...</option>
                                 <option value="timeout">❌ Neatsakė / Timeout</option>
                                 <option value="blocked">⛔ Sustabdyti (Fail limitas)</option>
@@ -1171,6 +1176,25 @@ $isLoggedIn = isAdminLoggedIn();
                                     </div>
                                 </div>
                             </label>
+                        </div>
+
+                        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 16px; margin-bottom: 20px;">
+                            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
+                                <div style="max-width: 580px;">
+                                    <div style="font-size: 0.95rem; font-weight: 600; color: #ffffff;">
+                                        Minimalus telemetrijos atnaujinimo intervalas
+                                    </div>
+                                    <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
+                                        Kaip dažnai gali būti atnaujinama konkretaus mazgo telemetrija. Nustatymas galioja mazgams, imamiems per <code>/api/repeater</code> ir <code>/api/repyters</code>.
+                                        <br>Pvz., jei nustatyta <b>60 min. (1h)</b>, mazgas nebus paduodamas, jei jo telemetrija jau buvo atnaujinta per paskutinę 1h – vietoje jo eilėje bus paimtas kitas mazgas, kurio telemetrija gauta seniau arba dar negauta visai.
+                                        <br><span style="color: var(--accent-cyan);">Numatyta reikšmė: <b>60</b> min. Įveskite <b>0</b>, jei norite rotuoti mazgus iš eilės be jokio minimalaus laiko tarpo.</span>
+                                    </div>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="number" min="0" max="10080" step="1" id="settingMinTelemetryIntervalMins" class="form-control" style="width: 100px; font-weight: 700; text-align: center; font-size: 1rem;" placeholder="60" required>
+                                    <span style="font-size: 0.82rem; color: var(--text-muted);">min.</span>
+                                </div>
+                            </div>
                         </div>
 
                         <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 16px; margin-bottom: 20px;">
@@ -2319,12 +2343,14 @@ $isLoggedIn = isAdminLoggedIn();
                 const qStatTotal = document.getElementById('qStatTotal');
                 const qStatPending = document.getElementById('qStatPending');
                 const qStatSuccess = document.getElementById('qStatSuccess');
+                const qStatRateLimited = document.getElementById('qStatRateLimited');
                 const qStatTimeout = document.getElementById('qStatTimeout');
                 const qStatBlocked = document.getElementById('qStatBlocked');
 
                 if (qStatTotal) qStatTotal.innerText = stats.total ?? currentQueueData.length;
                 if (qStatPending) qStatPending.innerText = stats.pending_first ?? 0;
                 if (qStatSuccess) qStatSuccess.innerText = stats.success ?? 0;
+                if (qStatRateLimited) qStatRateLimited.innerText = stats.rate_limited ?? 0;
                 if (qStatTimeout) qStatTimeout.innerText = stats.timeout ?? 0;
                 if (qStatBlocked) qStatBlocked.innerText = stats.blocked ?? 0;
                 if (badge) badge.innerText = `${currentQueueData.length} mazgų`;
@@ -2360,6 +2386,8 @@ $isLoggedIn = isAdminLoggedIn();
             if (statusFilter) {
                 if (statusFilter === 'blocked') {
                     list = list.filter(item => item.is_blocked || item.attempt_status === 'blocked');
+                } else if (statusFilter === 'rate_limited') {
+                    list = list.filter(item => item.is_rate_limited && !item.is_blocked);
                 } else {
                     list = list.filter(item => item.attempt_status === statusFilter && !item.is_blocked);
                 }
@@ -2378,9 +2406,15 @@ $isLoggedIn = isAdminLoggedIn();
 
             tbody.innerHTML = list.map(item => {
                 const isBlocked = !!item.is_blocked;
-                const isNext = (!isBlocked && item.queue_pos === 1);
-                const posBadgeClass = isBlocked ? 'badge-red' : (isNext ? 'badge-green' : (item.queue_pos <= 3 ? 'badge-cyan' : 'badge-gray'));
-                const posLabel = isBlocked ? '⛔' : `#${item.queue_pos}`;
+                const isRateLimited = !!item.is_rate_limited && !isBlocked;
+                const isNext = (!isBlocked && !isRateLimited && item.queue_pos === 1);
+                const posBadgeClass = isBlocked ? 'badge-red' : (isRateLimited ? 'badge-amber' : (isNext ? 'badge-green' : (item.queue_pos <= 3 ? 'badge-cyan' : 'badge-gray')));
+                const posLabel = isBlocked ? '⛔' : (isRateLimited ? '⏳' : `#${item.queue_pos}`);
+                const posTitle = isBlocked 
+                    ? `Mazgas sustabdytas (${failCount}/${maxFails} fail)` 
+                    : (isRateLimited 
+                        ? `Pauzė: telemetrija atnaujinta neseniai (liko ${item.rate_limit_remaining_mins} min., limitas: ${item.min_interval_mins} min.)` 
+                        : `Eilės pozicija #${item.queue_pos}`);
 
                 // Mazgo pavadinimas ir identifikatorius
                 const nameStr = escapeHtml(item.name || item.node_id);
@@ -2437,6 +2471,19 @@ $isLoggedIn = isAdminLoggedIn();
                             <span style="font-size: 0.72rem; color: #ff6b81;">Viršytas limitas: <b>${failCount}/${maxFails} fail</b></span>
                             <span style="font-size: 0.70rem; color: var(--text-muted);">Nebeimamas į /api/repeater užklausas</span>
                             ${priorTelemBox}
+                        </div>
+                    `;
+                } else if (isRateLimited) {
+                    attemptBadge = `
+                        <div style="display: flex; flex-direction: column; gap: 3px;">
+                            <span class="badge badge-amber" style="width: fit-content;">⏳ Atnaujinta neseniai (Pauzė)</span>
+                            <span style="font-size: 0.72rem; color: var(--accent-amber);">Liko palaukti: <b>${item.rate_limit_remaining_mins} min.</b></span>
+                            <span style="font-size: 0.70rem; color: var(--text-muted);">Intervalas: ${item.min_interval_mins} min. Eilėje praleidžiamas.</span>
+                            ${priorTelemDate ? `
+                                <div style="margin-top: 4px; font-size: 0.71rem; color: var(--text-muted);">
+                                    📡 Gauta: <b style="font-family: var(--font-mono); color: #ffffff;">${escapeHtml(priorTelemDate)}</b> (${priorTelemRel})
+                                </div>
+                            ` : ''}
                         </div>
                     `;
                 } else if (item.attempt_status === 'never') {
@@ -2528,9 +2575,9 @@ $isLoggedIn = isAdminLoggedIn();
                 const nodeFilterId = escapeHtml(item.node_id || (item.public_key ? item.public_key.substring(0, 4) : ''));
 
                 return `
-                    <tr style="${isBlocked ? 'background: rgba(232, 65, 24, 0.08);' : (isNext ? 'background: rgba(0, 210, 255, 0.04);' : '')}">
+                    <tr style="${isBlocked ? 'background: rgba(232, 65, 24, 0.08);' : (isRateLimited ? 'background: rgba(255, 177, 66, 0.05);' : (isNext ? 'background: rgba(0, 210, 255, 0.04);' : ''))}">
                         <td style="text-align: center;">
-                            <span class="badge ${posBadgeClass}" style="font-weight: 700; white-space: nowrap;" title="${isBlocked ? `Mazgas sustabdytas (${failCount}/${maxFails} fail)` : `Eilės pozicija #${item.queue_pos}`}">
+                            <span class="badge ${posBadgeClass}" style="font-weight: 700; white-space: nowrap;" title="${escapeHtml(posTitle)}">
                                 ${posLabel}
                             </span>
                         </td>
@@ -2540,6 +2587,7 @@ $isLoggedIn = isAdminLoggedIn();
                                     <span style="font-weight: 600; color: #ffffff; font-size: 0.88rem;">${nameStr}</span>
                                     <span class="badge badge-blue" style="font-size: 0.7rem;">${idStr}</span>
                                     ${isBlocked ? `<span class="badge badge-red" style="font-size: 0.68rem; font-weight: 700; padding: 1px 5px; background: #e84118;" title="Mazgas sustabdytas! Pasiekė ${failCount} fail (limitas: ${maxFails})">⛔ ${failCount} fail (Sustabdytas)</span>` : (failCount > 0 ? `<span class="badge badge-red" style="font-size: 0.68rem; font-weight: 700; padding: 1px 5px; cursor: pointer;" onclick="resetNodeFailCount('${escapeHtml(nodeIdentifier)}', '${safeName}')" title="${failCount} nesėkmingi bandymai. Paspauskite, kad nuresetintumėte į 0.">⚠️ ${failCount} fail 🧹</span>` : '')}
+                                    ${isRateLimited ? `<span class="badge badge-amber" style="font-size: 0.68rem; font-weight: 600; padding: 1px 5px;" title="Telemetrijos atnaujinimo intervalas: ${item.min_interval_mins} min. Liko palaukti: ${item.rate_limit_remaining_mins} min.">⏳ Pauzė (${item.rate_limit_remaining_mins} min.)</span>` : ''}
                                     ${!isMonitored ? '<span class="badge badge-gray" style="font-size: 0.65rem;" title="update=0 (Išjungta)">Neaktyvus</span>' : ''}
                                 </div>
                                 <div style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-dim);" title="Viešasis raktas: ${escapeHtml(item.public_key || '')}">
@@ -2894,6 +2942,7 @@ $isLoggedIn = isAdminLoggedIn();
                 const lonMinEl = document.getElementById('settingLtLonMin');
                 const lonMaxEl = document.getElementById('settingLtLonMax');
                 const maxFailsEl = document.getElementById('settingMaxTelemetryFails');
+                const minIntervalEl = document.getElementById('settingMinTelemetryIntervalMins');
 
                 if (enabledEl) enabledEl.checked = !!currentSettings.filter_lithuania_enabled;
                 if (noCoordsEl) noCoordsEl.checked = !!currentSettings.filter_lithuania_include_no_coords;
@@ -2902,6 +2951,7 @@ $isLoggedIn = isAdminLoggedIn();
                 if (lonMinEl) lonMinEl.value = currentSettings.lithuania_lon_min ?? 20.9000;
                 if (lonMaxEl) lonMaxEl.value = currentSettings.lithuania_lon_max ?? 26.8500;
                 if (maxFailsEl) maxFailsEl.value = currentSettings.max_telemetry_fails ?? 20;
+                if (minIntervalEl) minIntervalEl.value = currentSettings.min_telemetry_interval_mins ?? 60;
 
                 const autoAddRepEl = document.getElementById('settingAutoAddNewRepeaters');
                 if (autoAddRepEl) autoAddRepEl.checked = !!currentSettings.auto_add_new_repeaters;
@@ -2969,6 +3019,7 @@ $isLoggedIn = isAdminLoggedIn();
                     lithuania_lon_min: parseFloat(document.getElementById('settingLtLonMin').value),
                     lithuania_lon_max: parseFloat(document.getElementById('settingLtLonMax').value),
                     max_telemetry_fails: parseInt(document.getElementById('settingMaxTelemetryFails')?.value || '20', 10),
+                    min_telemetry_interval_mins: parseInt(document.getElementById('settingMinTelemetryIntervalMins')?.value || '60', 10),
                     auto_add_new_repeaters: document.getElementById('settingAutoAddNewRepeaters')?.checked ?? false
                 };
 

@@ -46,10 +46,11 @@ inline void stopWebConfigAP() {
   if (!apActive) return;
   apActive = false;
   dnsServer.stop();
+  webServer.stop();
   WiFi.softAPdisconnect(true);
   WiFi.enableAP(false);
   WiFi.mode(WIFI_STA);
-  Serial.println("[WebPortal] Wi-Fi AP ('MeshPuller') išjungtas.");
+  Serial.println("[WebPortal] Wi-Fi AP ('MeshPuller') pilnai išjungtas ir paslėptas.");
 }
 
 // Pirmyn deklaruojame pagrindinio kodo funkcijas
@@ -1474,15 +1475,17 @@ inline void initWebConfigPortal() {
 }
 
 inline void handleWebConfigPortal() {
-  if (apActive) {
-    dnsServer.processNextRequest();
+  if (!apActive) return;
 
-    // Jei klientas buvo pasijungęs, bet atsijungė ir 10 min. nėra jokio veiksmo - išjungiame AP
-    int clients = WiFi.softAPgetStationNum();
-    if (clients == 0 && (millis() - lastApActivityTime >= 10 * 60 * 1000UL)) {
-      stopWebConfigAP();
-    }
+  dnsServer.processNextRequest();
+
+  // Jei klientas buvo pasijungęs, bet atsijungė ir 10 min. nėra jokio veiksmo - išjungiame AP
+  int clients = WiFi.softAPgetStationNum();
+  if (clients == 0 && (millis() - lastApActivityTime >= 10 * 60 * 1000UL)) {
+    stopWebConfigAP();
+    return;
   }
+
   webServer.handleClient();
 }
 

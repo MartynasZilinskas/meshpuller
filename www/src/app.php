@@ -90,12 +90,19 @@ if ($isSingleRepeaterEndpoint) {
         http_response_code(405);
         echo json_encode([
             'success' => false,
-            'error'   => 'Metodas nepalaikomas. /api/api/repeater priima tik GET užklausas.'
+            'error'   => 'Metodas nepalaikomas. /api/repeater priima tik GET užklausas.'
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
         exit;
     }
 
-    $repeater = ($repository) ? $repository->getNextRepeaterToRequest() : null;
+    $requestedBotId = null;
+    if (!empty($_GET['bot_id'])) {
+        $requestedBotId = strtoupper(substr(trim((string)$_GET['bot_id']), 0, 16));
+    } elseif (!empty($_SERVER['HTTP_X_BOT_ID'])) {
+        $requestedBotId = strtoupper(substr(trim((string)$_SERVER['HTTP_X_BOT_ID']), 0, 16));
+    }
+
+    $repeater = ($repository) ? $repository->getNextRepeaterToRequest($requestedBotId) : null;
 
     // Atsarginis variantas iš repeaters.json failo naudojamas TIK jei DB visiškai tuščia (0 mazgų) arba nepasiekiama:
     if (!$repeater && (!$repository || !$repository->hasAnyNodes())) {
@@ -110,9 +117,12 @@ if ($isSingleRepeaterEndpoint) {
 
     if (!$repeater) {
         http_response_code(404);
+        $err = $requestedBotId 
+            ? "Nėra aktyvių kartotuvų eilėje botui '{$requestedBotId}' (visi atjungti, update=false arba viršijo nesėkmingų bandymų limitą)."
+            : "Nėra aktyvių kartotuvų eilėje (visi atjungti, update=false arba viršijo nesėkmingų bandymų limitą).";
         echo json_encode([
             'success' => false,
-            'error'   => 'Nėra aktyvių kartotuvų eilėje (visi atjungti, update=false arba viršijo nesėkmingų bandymų limitą).'
+            'error'   => $err
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
         exit;
     }
@@ -148,7 +158,14 @@ if ($isRepytersEndpoint) {
         exit;
     }
 
-    $repeatersList = ($repository) ? $repository->getMonitoredRepeaters() : [];
+    $requestedBotId = null;
+    if (!empty($_GET['bot_id'])) {
+        $requestedBotId = strtoupper(substr(trim((string)$_GET['bot_id']), 0, 16));
+    } elseif (!empty($_SERVER['HTTP_X_BOT_ID'])) {
+        $requestedBotId = strtoupper(substr(trim((string)$_SERVER['HTTP_X_BOT_ID']), 0, 16));
+    }
+
+    $repeatersList = ($repository) ? $repository->getMonitoredRepeaters($requestedBotId) : [];
 
     // Jei $repository nebuvo sukurtas dėl DB klaidos, perskaitome tiesiai iš failo:
     if (empty($repeatersList)) {

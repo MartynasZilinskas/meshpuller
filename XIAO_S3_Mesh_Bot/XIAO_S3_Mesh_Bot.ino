@@ -518,13 +518,23 @@ bool fetchRepeatersFromURL() {
     return false;
   }
 
+  String requestUrl = String(REPEATERS_URL);
+  if (BOT_ID.length() > 0) {
+    requestUrl += (requestUrl.indexOf('?') >= 0) ? "&bot_id=" : "?bot_id=";
+    requestUrl += BOT_ID;
+  }
+
   HTTPClient http;
-  http.begin(REPEATERS_URL);
+  http.begin(requestUrl);
   http.setTimeout(8000);
+  if (BOT_ID.length() > 0) {
+    http.addHeader("X-Bot-ID", BOT_ID);
+  }
+  Serial.printf("[FetchRepeaters] Užklausiama sekantis kartotuvas botui '%s': %s\n", BOT_ID.c_str(), requestUrl.c_str());
   int code = http.GET();
 
   if (code != 200) {
-    Serial.printf("[FetchRepeaters] HTTP klaida %d parsiunčiant '%s'\n", code, REPEATERS_URL);
+    Serial.printf("[FetchRepeaters] HTTP klaida %d parsiunčiant iš '%s'\n", code, requestUrl.c_str());
     http.end();
     if (wifiHttpMutex != nullptr) xSemaphoreGive(wifiHttpMutex);
     return false;
@@ -1167,7 +1177,12 @@ void connectToWiFi() {
   // Prieš jungiantis nuskaitome ir išvedame pasiekiamų Wi-Fi tinklų sąrašą
   scanWiFiNetworks();
 
-  // Atjungiame stotį (STA), bet išlaikome AP režimą (WIFI_AP_STA)
+  // Atjungiame stotį (STA), bet AP režimą išlaikome tik jei jis aktyvus
+  if (isWebConfigAPActive()) {
+    WiFi.mode(WIFI_AP_STA);
+  } else {
+    WiFi.mode(WIFI_STA);
+  }
   WiFi.disconnect(false);
   delay(200);
 
