@@ -244,7 +244,9 @@ SQL;
                 first_seen_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 last_seen_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 requested_date TIMESTAMP WITHOUT TIME ZONE NULL,
-                telemetry_updated_at TIMESTAMP WITHOUT TIME ZONE NULL
+                telemetry_updated_at TIMESTAMP WITHOUT TIME ZONE NULL,
+                telemetry_fail_count INTEGER NOT NULL DEFAULT 0,
+                last_failed_request_at TIMESTAMP WITHOUT TIME ZONE NULL
             );
             CREATE INDEX IF NOT EXISTS idx_nodes_node_name ON nodes (node_name);
             CREATE INDEX IF NOT EXISTS idx_nodes_node_id ON nodes (node_id);
@@ -289,6 +291,8 @@ SQL;
                 `last_seen_at`      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 `requested_date`    TIMESTAMP NULL DEFAULT NULL,
                 `telemetry_updated_at` TIMESTAMP NULL DEFAULT NULL,
+                `telemetry_fail_count` INT NOT NULL DEFAULT 0,
+                `last_failed_request_at` TIMESTAMP NULL DEFAULT NULL,
                 INDEX `idx_node_name` (`node_name`),
                 INDEX `idx_node_id` (`node_id`),
                 INDEX `idx_node_type` (`node_type`),
@@ -313,12 +317,25 @@ SQL;
                 $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS temperature_c NUMERIC(4, 1) NULL');
                 $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS requested_date TIMESTAMP WITHOUT TIME ZONE NULL');
                 $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS telemetry_updated_at TIMESTAMP WITHOUT TIME ZONE NULL');
+                $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS telemetry_fail_count INTEGER NOT NULL DEFAULT 0');
+                $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS last_failed_request_at TIMESTAMP WITHOUT TIME ZONE NULL');
                 $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_nodes_update ON nodes ("update")');
                 $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_nodes_bot_id ON nodes (bot_id)');
                 $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_nodes_requested_date ON nodes (requested_date)');
-                $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_nodes_telemetry_updated_at ON nodes (telemetry_updated_at)');
                 $this->pdo->exec('ALTER TABLE ' . $this->table . ' ADD COLUMN IF NOT EXISTS bot_id VARCHAR(16) NOT NULL DEFAULT \'KLP\'');
                 $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_' . $this->table . '_bot_id ON ' . $this->table . ' (bot_id)');
+
+                // Užtikriname, kad telemetry lentelėje nebūtų ADVERT įrašų ir atnaujiname telemetry_updated_at
+                $this->pdo->exec("DELETE FROM telemetry WHERE type = 'ADVERT' OR (type != 'TELEMETRY' AND type != 'STATUS')");
+                $this->pdo->exec("
+                    UPDATE nodes n
+                    SET telemetry_updated_at = (
+                        SELECT MAX(t.recorded_at)
+                        FROM telemetry t
+                        WHERE (t.node_id = n.node_id OR (n.public_key IS NOT NULL AND t.public_key = n.public_key))
+                          AND t.type IN ('TELEMETRY', 'STATUS')
+                    )
+                ");
             } catch (\Throwable $e) {}
         } else {
             try {
@@ -328,6 +345,8 @@ SQL;
                 $hasReqDate = false;
                 $hasTelemDate = false;
                 $hasTempC = false;
+                $hasFailCount = false;
+                $hasLastFailedReq = false;
                 $colsStmt = $this->pdo->query("SHOW COLUMNS FROM `nodes`");
                 while ($c = $colsStmt->fetch(\PDO::FETCH_ASSOC)) {
                     $fn = strtolower($c['Field'] ?? '');
@@ -337,6 +356,8 @@ SQL;
                     if ($fn === 'requested_date') $hasReqDate = true;
                     if ($fn === 'telemetry_updated_at') $hasTelemDate = true;
                     if ($fn === 'temperature_c') $hasTempC = true;
+                    if ($fn === 'telemetry_fail_count') $hasFailCount = true;
+                    if ($fn === 'last_failed_request_at') $hasLastFailedReq = true;
                 }
                 if (!$hasPassword) {
                     $this->pdo->exec("ALTER TABLE `nodes` ADD COLUMN `password` VARCHAR(128) NULL DEFAULT NULL AFTER `node_id`");
@@ -368,6 +389,29 @@ SQL;
                 if (!$hasTempC) {
                     $this->pdo->exec("ALTER TABLE `nodes` ADD COLUMN `temperature_c` DECIMAL(4, 1) NULL DEFAULT NULL AFTER `battery_v`");
                 }
+                if (!$hasFailCount) {
+                    $this->pdo->exec("ALTER TABLE `nodes` ADD COLUMN `telemetry_fail_count` INT NOT NULL DEFAULT 0 AFTER `telemetry_updated_at`");
+                }
+                if (!$hasLastFailedReq) {
+                    $this->pdo->exec("ALTER TABLE `nodes` ADD COLUMN `last_failed_request_at` TIMESTAMP NULL DEFAULT NULL AFTER `telemetry_fail_count`");
+                }
+
+                // Užtikriname, kad telemetry lentelėje nebūtų ADVERT įrašų (tik TELEMETRY ir STATUS laikoma telemetrija)
+                $this->pdo->exec("DELETE FROM telemetry WHERE type = 'ADVERT' OR (type != 'TELEMETRY' AND type != 'STATUS')");
+                
+                // Sinchronizuojame nodes.telemetry_updated_at tik pagal tikrus TELEMETRY ir STATUS įrašus
+                $this->pdo->exec("
+                    UPDATE nodes n 
+                    LEFT JOIN (
+                        SELECT 
+                            COALESCE(public_key, node_id) AS node_key,
+                            MAX(recorded_at) AS max_telem
+                        FROM telemetry
+                        WHERE type IN ('TELEMETRY', 'STATUS')
+                        GROUP BY COALESCE(public_key, node_id)
+                    ) t ON (n.public_key = t.node_key OR n.node_id = t.node_key)
+                    SET n.telemetry_updated_at = t.max_telem
+                ");
 
                 // Tikriname raw_packets bot_id
                 $hasRawBotId = false;
@@ -972,10 +1016,13 @@ SQL;
         $flagsRaw = $flags['raw'] ?? null;
         $nodeType = isset($flags['type']) ? (int)$flags['type'] : null;
         $nodeTypeStr = $flags['type_str'] ?? null;
-        $isRepeater = !empty($flags['repeater']);
+        $isRepeater = !empty($flags['repeater']) || (strtolower((string)$nodeTypeStr) === 'repeater') || ($nodeType === 2);
         $isChat = !empty($flags['chat']);
         $isRoom = !empty($flags['room']);
         $hasLocation = !empty($flags['hasLocation']);
+
+        $autoAdd = (bool)$this->getSetting('auto_add_new_repeaters', false);
+        $initialUpdate = ($isRepeater && $autoAdd);
 
         $lat = isset($advert['location']['latitude']) ? (float)$advert['location']['latitude'] : null;
         $lon = isset($advert['location']['longitude']) ? (float)$advert['location']['longitude'] : null;
@@ -1004,13 +1051,13 @@ SQL;
                 flags_raw, node_type, node_type_str, is_repeater, is_chat, is_room,
                 has_location, latitude, longitude, battery_mv, battery_v,
                 last_rssi, last_snr, flags_json, raw_advert_json, bot_id, first_seen_at, last_seen_at,
-                requested_date, telemetry_updated_at
+                requested_date, telemetry_updated_at, "update"
             ) VALUES (
                 :public_key, :node_name, :node_id, :advert_format, :advert_timestamp, :signature,
                 :flags_raw, :node_type, :node_type_str, :is_repeater, :is_chat, :is_room,
                 :has_location, :latitude, :longitude, :battery_mv, :battery_v,
                 :last_rssi, :last_snr, :flags_json::jsonb, :raw_advert_json::jsonb, :bot_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
-                NULL, (CASE WHEN :has_telemetry = 1 THEN CURRENT_TIMESTAMP ELSE NULL END)
+                NULL, NULL, :initial_update
             )
             ON CONFLICT (public_key) DO UPDATE SET
                 node_name = COALESCE(EXCLUDED.node_name, nodes.node_name),
@@ -1036,7 +1083,11 @@ SQL;
                 bot_id = COALESCE(EXCLUDED.bot_id, nodes.bot_id),
                 last_seen_at = CURRENT_TIMESTAMP,
                 requested_date = NULL,
-                telemetry_updated_at = CASE WHEN EXCLUDED.battery_v IS NOT NULL OR EXCLUDED.battery_mv IS NOT NULL THEN CURRENT_TIMESTAMP ELSE nodes.telemetry_updated_at END
+                "update" = CASE 
+                    WHEN (nodes.is_repeater = false OR nodes.is_repeater IS NULL) AND EXCLUDED.is_repeater = true AND :auto_add_flag = 1 
+                    THEN true 
+                    ELSE nodes."update" 
+                END
 SQL;
         } else {
             $sql = <<<SQL
@@ -1045,13 +1096,13 @@ SQL;
                 `flags_raw`, `node_type`, `node_type_str`, `is_repeater`, `is_chat`, `is_room`,
                 `has_location`, `latitude`, `longitude`, `battery_mv`, `battery_v`,
                 `last_rssi`, `last_snr`, `flags_json`, `raw_advert_json`, `bot_id`, `first_seen_at`, `last_seen_at`,
-                `requested_date`, `telemetry_updated_at`
+                `requested_date`, `telemetry_updated_at`, `update`
             ) VALUES (
                 :public_key, :node_name, :node_id, :advert_format, :advert_timestamp, :signature,
                 :flags_raw, :node_type, :node_type_str, :is_repeater, :is_chat, :is_room,
                 :has_location, :latitude, :longitude, :battery_mv, :battery_v,
                 :last_rssi, :last_snr, :flags_json, :raw_advert_json, :bot_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
-                NULL, (CASE WHEN :has_telemetry = 1 THEN CURRENT_TIMESTAMP ELSE NULL END)
+                NULL, NULL, :initial_update
             )
             ON DUPLICATE KEY UPDATE
                 `node_name` = COALESCE(VALUES(`node_name`), `node_name`),
@@ -1077,13 +1128,15 @@ SQL;
                 `bot_id` = COALESCE(VALUES(`bot_id`), `bot_id`),
                 `last_seen_at` = CURRENT_TIMESTAMP,
                 `requested_date` = NULL,
-                `telemetry_updated_at` = CASE WHEN VALUES(`battery_v`) IS NOT NULL OR VALUES(`battery_mv`) IS NOT NULL THEN CURRENT_TIMESTAMP ELSE `telemetry_updated_at` END
+                `update` = CASE 
+                    WHEN (`is_repeater` = 0 OR `is_repeater` IS NULL) AND VALUES(`is_repeater`) = 1 AND :auto_add_flag = 1 
+                    THEN 1 
+                    ELSE `update` 
+                END
 SQL;
         }
 
         $stmt = $this->pdo->prepare($sql);
-        $hasTelem = ($batteryV !== null || $batteryMv !== null) ? 1 : 0;
-        $stmt->bindValue(':has_telemetry', $hasTelem, PDO::PARAM_INT);
         $stmt->bindValue(':public_key', $pubKey);
         $stmt->bindValue(':node_name', $nodeName);
         $stmt->bindValue(':node_id', $nodeId);
@@ -1106,6 +1159,10 @@ SQL;
         $stmt->bindValue(':flags_json', $flagsJson);
         $stmt->bindValue(':raw_advert_json', $rawAdvertJson);
         $stmt->bindValue(':bot_id', $botId);
+        $stmt->bindValue(':initial_update', ($driver === 'pgsql') 
+            ? ($initialUpdate ? 'true' : 'false') 
+            : ($initialUpdate ? 1 : 0));
+        $stmt->bindValue(':auto_add_flag', $autoAdd ? 1 : 0, PDO::PARAM_INT);
 
         return $stmt->execute();
     }
@@ -1150,9 +1207,11 @@ SQL;
             $params[':bot_id'] = strtoupper(substr(trim($botId), 0, 16));
         }
 
-        $isTelemetryUpdate = $hasTelemetry || ($batteryV !== null) || ($batteryMv !== null) || ($temperatureC !== null);
-        if ($isTelemetryUpdate) {
+        // 'telemetry_updated_at' atnaujinamas TIK TADA, kai gautas tikras TELEMETRY arba STATUS paketas (hasTelemetry === true)
+        // Sėkmingai gavus telemetriją, nesėkmingų bandymų skaičius (telemetry_fail_count) nusinulina
+        if ($hasTelemetry) {
             $sets[] = 'telemetry_updated_at = CURRENT_TIMESTAMP';
+            $sets[] = 'telemetry_fail_count = 0';
         }
 
         if ($batteryV !== null && $batteryV >= 1.0 && $batteryV <= 15.0) {
@@ -1330,40 +1389,9 @@ SQL;
                 }
             }
         }
-        // 3. Tikriname ar tai ADVERT (Mazgo periodinis skelbimas)
-        elseif (!empty($decoded['advert'])) {
-            $adv = $decoded['advert'];
-            $type = 'ADVERT';
-            $publicKey = strtolower($adv['public_key'] ?? '');
-            $nodeId = substr($publicKey, 0, 4);
-            if (!empty($adv['battery']['voltage_mv'])) {
-                $batteryMv = (int)$adv['battery']['voltage_mv'];
-                $batteryV = isset($adv['battery']['voltage_v']) ? (float)$adv['battery']['voltage_v'] : round($batteryMv / 1000.0, 2);
-            }
-            if (!empty($adv['timestamp'])) {
-                $recordedAt = date('Y-m-d H:i:s', $adv['timestamp']);
-            }
-        }
 
-        // Apsauga nuo klaidingų/iškreiptų rodiklių (pvz. dešifravimo triukšmo su 42V):
-        if ($batteryV !== null && ($batteryV < 1.0 || $batteryV > 15.0)) {
-            return null;
-        }
-        if ($batteryMv !== null && ($batteryMv < 1000 || $batteryMv > 15000)) {
-            return null;
-        }
-        if ($rssi !== null && ($rssi < -150.0 || $rssi > 0.0)) {
-            $rssi = null;
-        }
-        if ($snr !== null && ($snr < -35.0 || $snr > 35.0)) {
-            $snr = null;
-        }
-        if ($noiseFloor !== null && ($noiseFloor < -150 || $noiseFloor > -20)) {
-            $noiseFloor = null;
-        }
-
-        // Jei jokių telemetrijos ar būsenos rodiklių nėra – įrašo neformuojame
-        if ($type === null) {
+        // Tik TELEMETRY ir STATUS laikomi telemetrija. ADVERT nėra telemetrija!
+        if ($type === null || ($type !== 'STATUS' && $type !== 'TELEMETRY')) {
             return null;
         }
 
@@ -1411,7 +1439,7 @@ SQL;
                 ? strtoupper(substr(trim((string)$pj['bot_id']), 0, 16))
                 : 'KLP');
 
-        $hasTelemetry = ($batteryV !== null || $batteryMv !== null || $temperatureC !== null);
+        $hasTelemetry = true;
 
         // Atnaujiname mazgo 'last_seen_at' ir telemetrijos rodiklius 'nodes' lentelėje
         // Jei pakete buvo telemetrijos duomenų, atnaujiname ir 'telemetry_updated_at'
@@ -1600,10 +1628,12 @@ SQL;
             n.temperature_c AS node_temperature_c,
             n.last_seen_at,
             n.telemetry_updated_at,
+            n.telemetry_fail_count,
             (
                 SELECT t.battery_v 
                 FROM telemetry t 
                 WHERE (t.node_id = n.node_id OR (n.public_key IS NOT NULL AND t.public_key = n.public_key)) 
+                  AND t.type IN ('TELEMETRY', 'STATUS')
                   AND t.battery_v IS NOT NULL 
                   AND t.battery_v >= 1.0 AND t.battery_v <= 15.0
                 ORDER BY t.recorded_at DESC, t.id DESC 
@@ -1613,6 +1643,7 @@ SQL;
                 SELECT t.temperature_c 
                 FROM telemetry t 
                 WHERE (t.node_id = n.node_id OR (n.public_key IS NOT NULL AND t.public_key = n.public_key)) 
+                  AND t.type IN ('TELEMETRY', 'STATUS')
                   AND t.temperature_c IS NOT NULL 
                 ORDER BY t.recorded_at DESC, t.id DESC 
                 LIMIT 1
@@ -1621,6 +1652,7 @@ SQL;
                 SELECT t.recorded_at 
                 FROM telemetry t 
                 WHERE (t.node_id = n.node_id OR (n.public_key IS NOT NULL AND t.public_key = n.public_key)) 
+                  AND t.type IN ('TELEMETRY', 'STATUS')
                 ORDER BY t.recorded_at DESC, t.id DESC 
                 LIMIT 1
             ) AS last_telemetry_at
@@ -1645,18 +1677,14 @@ SQL;
             $lat = ($row['latitude'] !== null) ? (float)$row['latitude'] : null;
             $lon = ($row['longitude'] !== null) ? (float)$row['longitude'] : null;
 
-            // Baterijos įkrova V: pirmenybė iš 'telemetry' lentelės, fallback į 'nodes' (ADVERT)
-            $batteryV = ($row['last_battery_v'] !== null) 
-                ? (float)$row['last_battery_v'] 
-                : (($row['advert_battery_v'] !== null) ? (float)$row['advert_battery_v'] : null);
+            // Baterijos įkrova V: TIK iš 'telemetry' lentelės (TELEMETRY ir STATUS), advert nelaikomas telemetrija
+            $batteryV = ($row['last_battery_v'] !== null) ? (float)$row['last_battery_v'] : null;
 
-            // Temperatūra °C: pirmenybė iš 'telemetry' lentelės, fallback į 'nodes'
-            $tempC = ($row['last_temperature_c'] !== null) 
-                ? (float)$row['last_temperature_c'] 
-                : (($row['node_temperature_c'] !== null) ? (float)$row['node_temperature_c'] : null);
+            // Temperatūra °C: TIK iš 'telemetry' lentelės (TELEMETRY ir STATUS), advert nelaikomas telemetrija
+            $tempC = ($row['last_temperature_c'] !== null) ? (float)$row['last_temperature_c'] : null;
 
-            // Telemetrijos atnaujinimo data: pirmenybė iš 'nodes.telemetry_updated_at', po to iš 'telemetry.recorded_at'
-            $telemUpdatedAt = $row['telemetry_updated_at'] ?? $row['last_telemetry_at'];
+            // Telemetrijos atnaujinimo data: TIK iš tikros telemetrijos (last_telemetry_at arba išvalytas telemetry_updated_at)
+            $telemUpdatedAt = $row['last_telemetry_at'] ?? $row['telemetry_updated_at'];
 
             $nodeId = !empty($row['node_id']) 
                 ? (string)$row['node_id'] 
@@ -1673,6 +1701,7 @@ SQL;
                 'battery_v'            => $batteryV,
                 'temperature_c'        => $tempC,
                 'telemetry_updated_at' => $telemUpdatedAt,
+                'telemetry_fail_count' => (int)($row['telemetry_fail_count'] ?? 0),
                 'last_seen_at'         => $row['last_seen_at'],
             ];
         }
@@ -1720,6 +1749,8 @@ SQL;
         'lithuania_lat_max'                  => 56.45,
         'lithuania_lon_min'                  => 20.90,
         'lithuania_lon_max'                  => 26.85,
+        'max_telemetry_fails'                => 20,
+        'auto_add_new_repeaters'             => false,
     ];
 
     /**
@@ -1969,18 +2000,23 @@ SQL;
         $dbSuccess = false;
 
         // 1. Pirmiausia skaitome iš 'nodes' DB lentelės mazgus, kuriems update = true / 1
+        // ir kurių nesėkmingų bandymų skaičius neviršija max_telemetry_fails nustatymo
         if ($this->pdo) {
             try {
+                $maxFails = (int)$this->getSetting('max_telemetry_fails', 20);
+                $failFilterPgsql = ($maxFails > 0) ? " AND (COALESCE(telemetry_fail_count, 0) < {$maxFails})" : "";
+                $failFilterMysql = ($maxFails > 0) ? " AND (COALESCE(`telemetry_fail_count`, 0) < {$maxFails})" : "";
+
                 if ($driver === 'pgsql') {
-                    $sql = 'SELECT public_key, node_id, node_name, is_repeater, password, "update" 
+                    $sql = "SELECT public_key, node_id, node_name, is_repeater, password, \"update\" 
                             FROM nodes 
-                            WHERE "update" = true 
-                            ORDER BY last_seen_at DESC';
+                            WHERE \"update\" = true {$failFilterPgsql}
+                            ORDER BY last_seen_at DESC";
                 } else {
-                    $sql = 'SELECT public_key, node_id, node_name, is_repeater, `password`, `update` 
+                    $sql = "SELECT public_key, node_id, node_name, is_repeater, `password`, `update` 
                             FROM `nodes` 
-                            WHERE `update` = 1 
-                            ORDER BY last_seen_at DESC';
+                            WHERE `update` = 1 {$failFilterMysql}
+                            ORDER BY last_seen_at DESC";
                 }
 
                 $stmt = $this->pdo->query($sql);
@@ -2111,6 +2147,48 @@ SQL;
     }
 
     /**
+     * Sinchronizuoja ir padidina nesėkmingų bandymų gauti telemetriją skaičių (telemetry_fail_count)
+     * visiems mazgams, kuriems buvo išsiųsta užklausa prieš daugiau nei $timeoutSeconds sek.,
+     * bet telemetrija nebuvo gauta ir šis bandymas dar nebuvo užskaitytas kaip nesėkmingas.
+     */
+    public function syncFailedTelemetryAttempts(int $timeoutSeconds = 180): int
+    {
+        if (!$this->pdo) {
+            return 0;
+        }
+
+        $driver = $this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME);
+        $timeout = (int)$timeoutSeconds;
+
+        try {
+            if ($driver === 'pgsql') {
+                $sql = "UPDATE nodes
+                SET 
+                    telemetry_fail_count = telemetry_fail_count + 1,
+                    last_failed_request_at = requested_date
+                WHERE requested_date IS NOT NULL
+                  AND requested_date <= (CURRENT_TIMESTAMP - INTERVAL '{$timeout} seconds')
+                  AND (telemetry_updated_at IS NULL OR telemetry_updated_at < requested_date)
+                  AND (last_failed_request_at IS NULL OR last_failed_request_at < requested_date)";
+                return (int)$this->pdo->exec($sql);
+            }
+
+            // MySQL / SQLite
+            $sql = "UPDATE `nodes`
+            SET 
+                `telemetry_fail_count` = `telemetry_fail_count` + 1,
+                `last_failed_request_at` = `requested_date`
+            WHERE `requested_date` IS NOT NULL
+              AND `requested_date` <= DATE_SUB(NOW(), INTERVAL {$timeout} SECOND)
+              AND (`telemetry_updated_at` IS NULL OR `telemetry_updated_at` < `requested_date`)
+              AND (`last_failed_request_at` IS NULL OR `last_failed_request_at` < `requested_date`)";
+            return (int)$this->pdo->exec($sql);
+        } catch (\Throwable $e) {
+            return 0;
+        }
+    }
+
+    /**
      * Grąžina sekantį 1 stebimą kartotuvą (update = true), kurį botas turi užklausti.
      * Atrankos taisyklė:
      * - Pirmenybė kartotuvams su tuščia 'requested_date' (pvz. ką tik gautas ADVERT arba niekada neužklaustas).
@@ -2127,12 +2205,19 @@ SQL;
             return null;
         }
 
+        // Prieš parenkant sekantį kartotuvą, atnaujiname nesėkmingų bandymų skaičius tiems, kurie jau patyrė timeout
+        $this->syncFailedTelemetryAttempts(180);
+
+        $maxFails = (int)$this->getSetting('max_telemetry_fails', 20);
+        $failFilterPgsql = ($maxFails > 0) ? " AND (COALESCE(telemetry_fail_count, 0) < {$maxFails})" : "";
+        $failFilterMysql = ($maxFails > 0) ? " AND (COALESCE(`telemetry_fail_count`, 0) < {$maxFails})" : "";
+
         if ($driver === 'pgsql') {
             $sql = <<<SQL
             WITH next_rep AS (
-                SELECT id, public_key, node_id, node_name, password
+                SELECT id, public_key, node_id, node_name, password, requested_date, telemetry_updated_at, last_failed_request_at
                 FROM nodes
-                WHERE (is_repeater = true) AND ("update" = true)
+                WHERE (is_repeater = true) AND ("update" = true) {$failFilterPgsql}
                 ORDER BY 
                     CASE WHEN requested_date IS NULL THEN 0 ELSE 1 END ASC,
                     requested_date ASC,
@@ -2141,10 +2226,25 @@ SQL;
                 FOR UPDATE SKIP LOCKED
             )
             UPDATE nodes
-            SET requested_date = CURRENT_TIMESTAMP
+            SET 
+                telemetry_fail_count = CASE 
+                    WHEN next_rep.requested_date IS NOT NULL 
+                         AND (next_rep.telemetry_updated_at IS NULL OR next_rep.telemetry_updated_at < next_rep.requested_date)
+                         AND (next_rep.last_failed_request_at IS NULL OR next_rep.last_failed_request_at < next_rep.requested_date)
+                    THEN nodes.telemetry_fail_count + 1 
+                    ELSE nodes.telemetry_fail_count 
+                END,
+                last_failed_request_at = CASE 
+                    WHEN next_rep.requested_date IS NOT NULL 
+                         AND (next_rep.telemetry_updated_at IS NULL OR next_rep.telemetry_updated_at < next_rep.requested_date)
+                         AND (next_rep.last_failed_request_at IS NULL OR next_rep.last_failed_request_at < next_rep.requested_date)
+                    THEN next_rep.requested_date 
+                    ELSE nodes.last_failed_request_at 
+                END,
+                requested_date = CURRENT_TIMESTAMP
             FROM next_rep
             WHERE nodes.id = next_rep.id
-            RETURNING nodes.public_key, nodes.node_id, nodes.node_name, nodes.password, nodes.requested_date;
+            RETURNING nodes.public_key, nodes.node_id, nodes.node_name, nodes.password, nodes.requested_date, nodes.telemetry_fail_count;
 SQL;
             try {
                 $stmt = $this->pdo->query($sql);
@@ -2159,13 +2259,14 @@ SQL;
                         : '';
 
                     return [
-                        'name'           => $shortName,
-                        'public_id'      => $pubId,
-                        'password'       => $password,
-                        'isDirect'       => false,
-                        'status'         => true,
-                        'telemetry'      => true,
-                        'requested_date' => $row['requested_date'] ?? date('Y-m-d H:i:s'),
+                        'name'                 => $shortName,
+                        'public_id'            => $pubId,
+                        'password'             => $password,
+                        'isDirect'             => false,
+                        'status'               => true,
+                        'telemetry'            => true,
+                        'requested_date'       => $row['requested_date'] ?? date('Y-m-d H:i:s'),
+                        'telemetry_fail_count' => (int)($row['telemetry_fail_count'] ?? 0),
                     ];
                 }
                 return null;
@@ -2178,10 +2279,11 @@ SQL;
         $this->pdo->beginTransaction();
         try {
             $selectSql = <<<SQL
-            SELECT id, public_key, node_id, node_name, `password`, `requested_date`
+            SELECT id, public_key, node_id, node_name, `password`, `requested_date`, `telemetry_updated_at`, `last_failed_request_at`, `telemetry_fail_count`
             FROM `nodes`
             WHERE (`is_repeater` = 1 OR `is_repeater` = true)
               AND (`update` = 1 OR `update` = true)
+              {$failFilterMysql}
             ORDER BY 
                 CASE WHEN `requested_date` IS NULL THEN 0 ELSE 1 END ASC,
                 `requested_date` ASC,
@@ -2193,10 +2295,32 @@ SQL;
             $row = $stmt->fetch(\PDO::FETCH_ASSOC);
 
             if ($row) {
+                $failCount = (int)($row['telemetry_fail_count'] ?? 0);
+                $lastFailedAt = $row['last_failed_request_at'] ?? null;
+
+                // Jei mazgas turėjo ankstesnę užklausą ir negavo telemetrijos, fiksuojame nesėkmingą bandymą
+                if (!empty($row['requested_date'])) {
+                    $rDate = $row['requested_date'];
+                    $tDate = $row['telemetry_updated_at'] ?? null;
+                    if (($tDate === null || $tDate < $rDate) && ($lastFailedAt === null || $lastFailedAt < $rDate)) {
+                        $failCount++;
+                        $lastFailedAt = $rDate;
+                    }
+                }
+
                 $now = date('Y-m-d H:i:s');
-                $updateSql = "UPDATE `nodes` SET `requested_date` = :now WHERE `id` = :id";
+                $updateSql = "UPDATE `nodes` 
+                              SET `requested_date` = :now, 
+                                  `telemetry_fail_count` = :fail_count, 
+                                  `last_failed_request_at` = :last_failed 
+                              WHERE `id` = :id";
                 $uStmt = $this->pdo->prepare($updateSql);
-                $uStmt->execute([':now' => $now, ':id' => $row['id']]);
+                $uStmt->execute([
+                    ':now'        => $now,
+                    ':fail_count' => $failCount,
+                    ':last_failed'=> $lastFailedAt,
+                    ':id'         => $row['id']
+                ]);
                 $this->pdo->commit();
 
                 $pubId = strtolower(trim($row['public_key']));
@@ -2208,13 +2332,14 @@ SQL;
                     : '';
 
                 return [
-                    'name'           => $shortName,
-                    'public_id'      => $pubId,
-                    'password'       => $password,
-                    'isDirect'       => false,
-                    'status'         => true,
-                    'telemetry'      => true,
-                    'requested_date' => $now,
+                    'name'                 => $shortName,
+                    'public_id'            => $pubId,
+                    'password'             => $password,
+                    'isDirect'             => false,
+                    'status'               => true,
+                    'telemetry'            => true,
+                    'requested_date'       => $now,
+                    'telemetry_fail_count' => $failCount,
                 ];
             }
 
@@ -2225,6 +2350,351 @@ SQL;
                 $this->pdo->rollBack();
             }
             return null;
+        }
+    }
+
+    /**
+     * Grąžina kartotuvų telemetrijos užklausų eilę (kokia seka jie bus užklausiami per /api/repeater).
+     */
+    public function getNodePollingQueue(?string $botId = null, bool $monitoredOnly = true, ?string $search = null): array
+    {
+        if (!$this->pdo) {
+            return [];
+        }
+
+        // Prieš formuojant eilę, atnaujiname nesėkmingų bandymų skaičių mazgams, kurių užklausa patyrė timeout
+        $this->syncFailedTelemetryAttempts(180);
+
+        $driver = $this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME);
+        $updateCol = ($driver === 'pgsql') ? '"update"' : '`update`';
+        $repCol = ($driver === 'pgsql') ? 'is_repeater' : '`is_repeater`';
+
+        $where = [];
+        $params = [];
+
+        if ($monitoredOnly) {
+            $where[] = "({$updateCol} = 1 OR {$updateCol} = true)";
+        } else {
+            $where[] = "({$repCol} = 1 OR {$repCol} = true)";
+        }
+
+        if (!empty($botId)) {
+            $where[] = "n.bot_id = :bot_id";
+            $params[':bot_id'] = $botId;
+        }
+
+        if (!empty($search)) {
+            $where[] = "n.node_name LIKE :search OR n.node_id LIKE :search OR n.public_key LIKE :search";
+            $params[':search'] = '%' . $search . '%';
+        }
+
+        $whereSql = !empty($where) ? "WHERE " . implode(" AND ", $where) : "";
+
+        $sql = <<<SQL
+        SELECT 
+            n.id,
+            n.node_id,
+            n.node_name,
+            n.public_key,
+            n.bot_id,
+            n.is_repeater,
+            n.update,
+            n.latitude,
+            n.longitude,
+            n.battery_v AS advert_battery_v,
+            n.temperature_c AS node_temperature_c,
+            n.last_seen_at,
+            n.requested_date,
+            n.telemetry_updated_at,
+            n.telemetry_fail_count,
+            (
+                SELECT t.battery_v 
+                FROM telemetry t 
+                WHERE (t.node_id = n.node_id OR (n.public_key IS NOT NULL AND t.public_key = n.public_key)) 
+                  AND t.type IN ('TELEMETRY', 'STATUS')
+                  AND t.battery_v IS NOT NULL 
+                  AND t.battery_v >= 1.0 AND t.battery_v <= 15.0
+                ORDER BY t.recorded_at DESC, t.id DESC 
+                LIMIT 1
+            ) AS last_battery_v,
+            (
+                SELECT t.temperature_c 
+                FROM telemetry t 
+                WHERE (t.node_id = n.node_id OR (n.public_key IS NOT NULL AND t.public_key = n.public_key)) 
+                  AND t.type IN ('TELEMETRY', 'STATUS')
+                  AND t.temperature_c IS NOT NULL 
+                ORDER BY t.recorded_at DESC, t.id DESC 
+                LIMIT 1
+            ) AS last_temperature_c,
+            (
+                SELECT t.recorded_at 
+                FROM telemetry t 
+                WHERE (t.node_id = n.node_id OR (n.public_key IS NOT NULL AND t.public_key = n.public_key)) 
+                  AND t.type IN ('TELEMETRY', 'STATUS')
+                ORDER BY t.recorded_at DESC, t.id DESC 
+                LIMIT 1
+            ) AS last_telemetry_at
+        FROM nodes n
+        {$whereSql}
+        ORDER BY 
+            CASE WHEN n.requested_date IS NULL THEN 0 ELSE 1 END ASC,
+            n.requested_date ASC,
+            n.id ASC
+SQL;
+
+        try {
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute($params);
+            $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC) ?: [];
+        } catch (\Throwable $e) {
+            return [];
+        }
+
+        $result = [];
+        $queueIndex = 1;
+        $now = time();
+
+        $tz = new \DateTimeZone('Europe/Vilnius');
+        $formatLt = function(?string $dateStr) use ($tz): ?string {
+            if (!$dateStr) return null;
+            try {
+                $dt = new \DateTime($dateStr, $tz);
+                $dt->setTimezone($tz);
+                return $dt->format('Y-m-d H:i:s');
+            } catch (\Throwable $e) {
+                return $dateStr;
+            }
+        };
+
+        $formatIsoLt = function(?string $dateStr) use ($tz): ?string {
+            if (!$dateStr) return null;
+            try {
+                $dt = new \DateTime($dateStr, $tz);
+                $dt->setTimezone($tz);
+                return $dt->format(\DateTimeInterface::ATOM);
+            } catch (\Throwable $e) {
+                return $dateStr;
+            }
+        };
+
+        $maxFails = (int)$this->getSetting('max_telemetry_fails', 20);
+
+        foreach ($rows as $row) {
+            $nodeId = !empty($row['node_id']) 
+                ? (string)$row['node_id'] 
+                : (!empty($row['public_key']) ? substr($row['public_key'], 0, 4) : 'node');
+            $name = !empty($row['node_name']) ? (string)$row['node_name'] : $nodeId;
+            $bot = !empty($row['bot_id']) ? (string)$row['bot_id'] : 'KLP';
+
+            // Telemetrijos rodmenys TIK iš 'telemetry' lentelės (TELEMETRY ir STATUS), advert nelaikomas telemetrija
+            $battV = ($row['last_battery_v'] !== null) ? (float)$row['last_battery_v'] : null;
+            $tempC = ($row['last_temperature_c'] !== null) ? (float)$row['last_temperature_c'] : null;
+
+            $rawReqDate = $row['requested_date'];
+            // Telemetrijos data TIK iš tikros telemetrijos (TELEMETRY ir STATUS)
+            $rawTelemDate = $row['last_telemetry_at'] ?? $row['telemetry_updated_at'];
+
+            $hasPriorTelemetry = ($rawTelemDate !== null && trim((string)$rawTelemDate) !== '');
+
+            $failCount = (int)($row['telemetry_fail_count'] ?? 0);
+            $isBlocked = ($maxFails > 0 && $failCount >= $maxFails);
+
+            // Paskutinio bandymo rezultato įvertinimas
+            $attemptStatus = 'never';
+            $attemptLabel = '🚀 Prioritetas (Laukia 1-os užklausos)';
+            $attemptColor = 'green';
+
+            if ($isBlocked) {
+                $attemptStatus = 'blocked';
+                $attemptLabel = "⛔ Sustabdytas (viršytas limitas: {$failCount}/{$maxFails})";
+                $attemptColor = 'red';
+            } elseif ($rawReqDate !== null && trim($rawReqDate) !== '') {
+                $reqTime = strtotime($rawReqDate);
+                $telemTime = $rawTelemDate ? strtotime($rawTelemDate) : 0;
+
+                // Jei telemetrijos įrašas buvo gautas po užklausos (arba per paskutines 30 sek. iki jos)
+                if ($telemTime >= ($reqTime - 30)) {
+                    $attemptStatus = 'success';
+                    $attemptLabel = '✅ Telemetrija gauta';
+                    $attemptColor = 'green';
+                } else {
+                    $diffSec = $now - $reqTime;
+                    // Jei užklausa išsiųsta neseniai (iki 3 minučių) - vis dar laukiama paketo eteryje
+                    if ($diffSec < 180) {
+                        $attemptStatus = 'in_progress';
+                        $attemptLabel = '⏳ Laukiama atsakymo...';
+                        $attemptColor = 'blue';
+                    } else {
+                        // Praėjo daugiau nei 3 minutės ir atsakymas neatėjo
+                        $attemptStatus = 'timeout';
+                        $failSuffix = ($failCount > 1) ? " ({$failCount}x)" : '';
+                        $attemptLabel = $hasPriorTelemetry 
+                            ? "❌ Negauta (Timeout{$failSuffix}) - Yra ankstesnė telemetrija"
+                            : "❌ Negauta (Timeout{$failSuffix}) - Nėra telemetrijos";
+                        $attemptColor = 'red';
+                    }
+                }
+            }
+
+            $queuePos = $isBlocked ? null : $queueIndex++;
+
+            $result[] = [
+                'queue_pos'                => $queuePos,
+                'id'                       => (int)$row['id'],
+                'node_id'                  => $nodeId,
+                'name'                     => $name,
+                'public_key'               => $row['public_key'],
+                'bot_id'                   => $bot,
+                'is_repeater'              => (bool)$row['is_repeater'],
+                'update'                   => (bool)$row['update'],
+                'requested_date'           => $formatLt($rawReqDate),
+                'requested_date_iso'       => $formatIsoLt($rawReqDate),
+                'telemetry_updated_at'     => $formatLt($rawTelemDate),
+                'telemetry_updated_at_iso' => $formatIsoLt($rawTelemDate),
+                'telemetry_fail_count'     => $failCount,
+                'is_blocked'               => $isBlocked,
+                'max_telemetry_fails'      => $maxFails,
+                'has_prior_telemetry'      => $hasPriorTelemetry,
+                'last_seen_at'             => $formatLt($row['last_seen_at']),
+                'last_seen_at_iso'         => $formatIsoLt($row['last_seen_at']),
+                'battery_v'                => $battV,
+                'temperature_c'            => $tempC,
+                'attempt_status'           => $attemptStatus,
+                'attempt_label'            => $attemptLabel,
+                'attempt_color'            => $attemptColor,
+                'tz'                       => 'Europe/Vilnius',
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Grąžina visus duomenų bazėje esančius unikalius bot_id šaltinius.
+     */
+    public function getAvailableBotSources(): array
+    {
+        if (!$this->pdo) {
+            return [];
+        }
+        try {
+            $stmt = $this->pdo->query("SELECT DISTINCT bot_id FROM nodes WHERE bot_id IS NOT NULL AND bot_id != '' ORDER BY bot_id ASC");
+            return $stmt->fetchAll(\PDO::FETCH_COLUMN) ?: [];
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    /**
+     * Patikrina ar duomenų bazėje išvis yra bent 1 mazgas
+     */
+    public function hasAnyNodes(): bool
+    {
+        if (!$this->pdo) {
+            return false;
+        }
+        try {
+            return ((int)$this->pdo->query("SELECT COUNT(*) FROM nodes")->fetchColumn()) > 0;
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Nustato requested_date = NULL konkrečiam mazgui (nukreipia į eilės viršų).
+     * Taip pat pagal nutylėjimą nuresetina nesėkmingų bandymų skaičių į 0.
+     */
+    public function resetNodeRequestedDate(string $identifier, bool $resetFailCount = true): bool
+    {
+        if (!$this->pdo) {
+            return false;
+        }
+        try {
+            $cleanId = trim($identifier);
+            $failSql = $resetFailCount ? ", telemetry_fail_count = 0, last_failed_request_at = NULL" : "";
+            $stmt = $this->pdo->prepare("UPDATE nodes SET requested_date = NULL{$failSql} WHERE LOWER(public_key) = LOWER(:id1) OR LOWER(node_id) = LOWER(:id2)");
+            return $stmt->execute([':id1' => $cleanId, ':id2' => $cleanId]);
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Nustato telemetry_fail_count = 0 ir išvalo last_failed_request_at konkrečiam mazgui.
+     */
+    public function resetNodeFailCount(string $identifier): bool
+    {
+        if (!$this->pdo) {
+            return false;
+        }
+        try {
+            $cleanId = trim($identifier);
+            $stmt = $this->pdo->prepare("UPDATE nodes SET telemetry_fail_count = 0, last_failed_request_at = NULL WHERE LOWER(public_key) = LOWER(:id1) OR LOWER(node_id) = LOWER(:id2)");
+            return $stmt->execute([':id1' => $cleanId, ':id2' => $cleanId]);
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Nustato telemetry_fail_count = 0 ir last_failed_request_at = NULL visiems (arba nurodyto boto) mazgams.
+     */
+    public function resetAllFailCounts(?string $botId = null): int
+    {
+        if (!$this->pdo) {
+            return 0;
+        }
+        try {
+            $where = [];
+            $params = [];
+            if (!empty($botId)) {
+                $where[] = "bot_id = :bot_id";
+                $params[':bot_id'] = $botId;
+            }
+            $whereSql = !empty($where) ? "WHERE " . implode(" AND ", $where) : "";
+            $stmt = $this->pdo->prepare("UPDATE nodes SET telemetry_fail_count = 0, last_failed_request_at = NULL {$whereSql}");
+            $stmt->execute($params);
+            return $stmt->rowCount();
+        } catch (\Throwable $e) {
+            return 0;
+        }
+    }
+
+    /**
+     * Nustato requested_date = NULL visiems arba nurodyto boto mazgams.
+     * Taip pat gali nuresetinti ir nesėkmingų bandymų skaičių į 0.
+     */
+    public function resetAllRequestedDates(?string $botId = null, bool $monitoredOnly = true, bool $resetFailCount = false): int
+    {
+        if (!$this->pdo) {
+            return 0;
+        }
+        try {
+            $driver = $this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME);
+            $updateCol = ($driver === 'pgsql') ? '"update"' : '`update`';
+            $repCol = ($driver === 'pgsql') ? 'is_repeater' : '`is_repeater`';
+
+            $where = [];
+            $params = [];
+
+            if ($monitoredOnly) {
+                $where[] = "({$updateCol} = 1 OR {$updateCol} = true)";
+            } else {
+                $where[] = "({$repCol} = 1 OR {$repCol} = true)";
+            }
+
+            if (!empty($botId)) {
+                $where[] = "bot_id = :bot_id";
+                $params[':bot_id'] = $botId;
+            }
+
+            $whereSql = !empty($where) ? "WHERE " . implode(" AND ", $where) : "";
+            $failSql = $resetFailCount ? ", telemetry_fail_count = 0, last_failed_request_at = NULL" : "";
+            $stmt = $this->pdo->prepare("UPDATE nodes SET requested_date = NULL{$failSql} {$whereSql}");
+            $stmt->execute($params);
+            return $stmt->rowCount();
+        } catch (\Throwable $e) {
+            return 0;
         }
     }
 
@@ -2277,6 +2747,15 @@ SQL;
             $params[':longitude'] = ($fields['longitude'] !== null && $fields['longitude'] !== '') ? (float)$fields['longitude'] : null;
         }
 
+        if (array_key_exists('telemetry_fail_count', $fields)) {
+            $sets[] = "telemetry_fail_count = :telemetry_fail_count";
+            $cnt = max(0, (int)$fields['telemetry_fail_count']);
+            $params[':telemetry_fail_count'] = $cnt;
+            if ($cnt === 0) {
+                $sets[] = "last_failed_request_at = NULL";
+            }
+        }
+
         if (empty($sets)) {
             return false;
         }
@@ -2301,6 +2780,9 @@ SQL;
      */
     public function getFilteredNodes(array $filters = [], int $limit = 100, int $offset = 0): array
     {
+        // Atnaujiname nesėkmingų bandymų skaičių mazgams prieš formuojant sąrašą
+        $this->syncFailedTelemetryAttempts(180);
+
         $driver = $this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME);
         $colUpdate = ($driver === 'pgsql') ? '"update"' : '`update`';
 
@@ -2371,8 +2853,15 @@ SQL;
         }
 
         if (!empty($filters['type'])) {
-            $where[] = "type = :type";
-            $params[':type'] = strtoupper(trim($filters['type']));
+            $cleanType = strtoupper(trim($filters['type']));
+            if ($cleanType === 'STATUS' || $cleanType === 'TELEMETRY') {
+                $where[] = "type = :type";
+                $params[':type'] = $cleanType;
+            } else {
+                $where[] = "type IN ('TELEMETRY', 'STATUS')";
+            }
+        } else {
+            $where[] = "type IN ('TELEMETRY', 'STATUS')";
         }
 
         if (!empty($filters['from'])) {

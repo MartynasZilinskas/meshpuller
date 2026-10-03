@@ -189,6 +189,12 @@ if ($action === 'save_settings') {
         if (isset($data['lithuania_lon_max']) && is_numeric($data['lithuania_lon_max'])) {
             $newSettings['lithuania_lon_max'] = (float)$data['lithuania_lon_max'];
         }
+        if (isset($data['max_telemetry_fails']) && is_numeric($data['max_telemetry_fails'])) {
+            $newSettings['max_telemetry_fails'] = max(0, (int)$data['max_telemetry_fails']);
+        }
+        if (isset($data['auto_add_new_repeaters'])) {
+            $newSettings['auto_add_new_repeaters'] = ($data['auto_add_new_repeaters'] === true || $data['auto_add_new_repeaters'] === '1' || $data['auto_add_new_repeaters'] === 1);
+        }
 
         $saved = $repository->saveSettings($newSettings);
         $geoStats = $repository->getGeolocationFilterStats();
@@ -267,6 +273,9 @@ if ($action === 'update_node') {
     }
     if (array_key_exists('longitude', $data)) {
         $fieldsToUpdate['longitude'] = $data['longitude'];
+    }
+    if (array_key_exists('telemetry_fail_count', $data)) {
+        $fieldsToUpdate['telemetry_fail_count'] = max(0, (int)$data['telemetry_fail_count']);
     }
 
     try {
@@ -444,6 +453,188 @@ if ($action === 'process_queue_batch') {
             'success'   => true,
             'processed' => $processed,
             'results'   => $results
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    } catch (\Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// -----------------------------------------------------------------------------
+// 📋 Kartotuvų telemetrijos užklausų eilė (/api/repeater)
+// -----------------------------------------------------------------------------
+if ($action === 'node_queue') {
+    try {
+        $botId = isset($_GET['bot_id']) && trim($_GET['bot_id']) !== '' ? trim($_GET['bot_id']) : null;
+        $monitoredOnly = !isset($_GET['monitored_only']) || ($_GET['monitored_only'] === '1' || $_GET['monitored_only'] === 'true');
+        $search = isset($_GET['search']) && trim($_GET['search']) !== '' ? trim($_GET['search']) : null;
+
+        $queue = $repository->getNodePollingQueue($botId, $monitoredOnly, $search);
+        $bots = $repository->getAvailableBotSources();
+
+        $totalCount = count($queue);
+        $pendingFirst = 0;
+        $successCount = 0;
+        $timeoutCount = 0;
+        $blockedCount = 0;
+
+        foreach ($queue as $item) {
+            if (!empty($item['is_blocked'])) $blockedCount++;
+            elseif ($item['attempt_status'] === 'never') $pendingFirst++;
+            elseif ($item['attempt_status'] === 'success') $successCount++;
+            elseif ($item['attempt_status'] === 'timeout') $timeoutCount++;
+        }
+
+        echo json_encode([
+            'success'   => true,
+            'count'     => $totalCount,
+            'queue'     => $queue,
+            'bots'      => $bots,
+            'stats'     => [
+                'total'         => $totalCount,
+                'pending_first' => $pendingFirst,
+                'success'       => $successCount,
+                'timeout'       => $timeoutCount,
+                'blocked'       => $blockedCount
+            ]
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    } catch (\Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// -----------------------------------------------------------------------------
+// 🔄 Nuresetinti vieno mazgo requested_date (nukreipia į eilės pradžią)
+// -----------------------------------------------------------------------------
+if ($action === 'reset_requested_date') {
+    if ($method !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['success' => false, 'error' => 'Metodas nepalaikomas']);
+        exit;
+    }
+
+    $rawInput = file_get_contents('php://input');
+    $data = json_decode($rawInput, true) ?: $_POST;
+    $identifier = trim((string)($data['identifier'] ?? $data['node_id'] ?? $data['public_key'] ?? $_GET['identifier'] ?? ''));
+
+    if ($identifier === '') {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Nenurodytas mazgo identifikatorius (node_id arba public_key)']);
+        exit;
+    }
+
+    try {
+        $ok = $repository->resetNodeRequestedDate($identifier, true);
+        if ($ok) {
+            echo json_encode([
+                'success' => true,
+                'message' => 'Mazgas sėkmingai nukreiptas į eilės pradžią (requested_date išvalyta į NULL, fail=0)'
+            ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        } else {
+            echo json_encode([
+                'success' => false,
+                'error'   => 'Nepavyko atnaujinti requested_date šiam mazgui'
+            ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        }
+    } catch (\Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// -----------------------------------------------------------------------------
+// ⚡ Nuresetinti visų mazgų requested_date
+// -----------------------------------------------------------------------------
+if ($action === 'reset_all_requested_dates') {
+    if ($method !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['success' => false, 'error' => 'Metodas nepalaikomas']);
+        exit;
+    }
+
+    $rawInput = file_get_contents('php://input');
+    $data = json_decode($rawInput, true) ?: $_POST;
+    $botId = isset($data['bot_id']) && trim($data['bot_id']) !== '' ? trim($data['bot_id']) : null;
+    $monitoredOnly = !isset($data['monitored_only']) || ($data['monitored_only'] === true || $data['monitored_only'] === '1');
+
+    try {
+        $count = $repository->resetAllRequestedDates($botId, $monitoredOnly, true);
+        echo json_encode([
+            'success' => true,
+            'message' => "Išvalyta {$count} mazgų requested_date data ir nuresetinti fail skaičiai. Eilė atstatyta.",
+            'count'   => $count
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    } catch (\Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// -----------------------------------------------------------------------------
+// 🧹 Nuresetinti vieno mazgo nesėkmingų bandymų (fail) skaičių į 0
+// -----------------------------------------------------------------------------
+if ($action === 'reset_node_fail_count') {
+    if ($method !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['success' => false, 'error' => 'Metodas nepalaikomas']);
+        exit;
+    }
+
+    $rawInput = file_get_contents('php://input');
+    $data = json_decode($rawInput, true) ?: $_POST;
+    $identifier = trim((string)($data['identifier'] ?? $data['node_id'] ?? $data['public_key'] ?? $_GET['identifier'] ?? ''));
+
+    if ($identifier === '') {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Nenurodytas mazgo identifikatorius (node_id arba public_key)']);
+        exit;
+    }
+
+    try {
+        $ok = $repository->resetNodeFailCount($identifier);
+        if ($ok) {
+            echo json_encode([
+                'success' => true,
+                'message' => 'Mazgo nesėkmingų bandymų (fail) skaičius sėkmingai nustatytas į 0'
+            ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        } else {
+            echo json_encode([
+                'success' => false,
+                'error'   => 'Nepavyko nuresetinti fail skaičiaus šiam mazgui'
+            ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        }
+    } catch (\Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// -----------------------------------------------------------------------------
+// 🧹 Nuresetinti visų mazgų nesėkmingų bandymų (fail) skaičių į 0
+// -----------------------------------------------------------------------------
+if ($action === 'reset_all_fail_counts') {
+    if ($method !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['success' => false, 'error' => 'Metodas nepalaikomas']);
+        exit;
+    }
+
+    $rawInput = file_get_contents('php://input');
+    $data = json_decode($rawInput, true) ?: $_POST;
+    $botId = isset($data['bot_id']) && trim($data['bot_id']) !== '' ? trim($data['bot_id']) : null;
+
+    try {
+        $count = $repository->resetAllFailCounts($botId);
+        echo json_encode([
+            'success' => true,
+            'message' => "Sėkmingai nuresetintas {$count} mazgų fail skaičius į 0. Mazgai vėl gali būti imami į eilę.",
+            'count'   => $count
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
     } catch (\Throwable $e) {
         http_response_code(500);

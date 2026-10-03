@@ -97,8 +97,8 @@ if ($isSingleRepeaterEndpoint) {
 
     $repeater = ($repository) ? $repository->getNextRepeaterToRequest() : null;
 
-    // Jei duomenų bazėje nieko nerasta arba DB klaida, kaip atsarginį variantą paimame pirmą iš failo:
-    if (!$repeater) {
+    // Atsarginis variantas iš repeaters.json failo naudojamas TIK jei DB visiškai tuščia (0 mazgų) arba nepasiekiama:
+    if (!$repeater && (!$repository || !$repository->hasAnyNodes())) {
         $repFile = __DIR__ . '/../repeaters.json';
         if (file_exists($repFile)) {
             $fl = json_decode(file_get_contents($repFile), true) ?: [];
@@ -112,7 +112,7 @@ if ($isSingleRepeaterEndpoint) {
         http_response_code(404);
         echo json_encode([
             'success' => false,
-            'error'   => 'Nėra aktyvių kartotuvų (update=true) eilėje.'
+            'error'   => 'Nėra aktyvių kartotuvų eilėje (visi atjungti, update=false arba viršijo nesėkmingų bandymų limitą).'
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
         exit;
     }

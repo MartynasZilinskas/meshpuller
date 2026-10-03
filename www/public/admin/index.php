@@ -185,6 +185,20 @@ $isLoggedIn = isAdminLoggedIn();
             border-radius: var(--radius-sm);
         }
 
+        .btn-icon {
+            width: 26px;
+            height: 26px;
+            min-width: 26px;
+            padding: 0;
+            font-size: 0.82rem;
+            line-height: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: var(--radius-sm);
+            flex-shrink: 0;
+        }
+
         /* Prisijungimo ekranas */
         .login-wrapper {
             flex: 1;
@@ -761,7 +775,7 @@ $isLoggedIn = isAdminLoggedIn();
                                 <th>Stebimas (Update)</th>
                                 <th>Slaptažodis</th>
                                 <th>Koordinatės</th>
-                                <th>Paskutinį kartą matytas</th>
+                                <th>Paskutinį kartą matytas (LT laiku)</th>
                                 <th style="text-align: right;">Veiksmai</th>
                             </tr>
                         </thead>
@@ -783,11 +797,10 @@ $isLoggedIn = isAdminLoggedIn();
 
                         <input type="text" id="telemetryNodeInput" class="form-control" style="width: 180px;" placeholder="Mazgo ID (pvz. b9dd)..." onchange="onTelemetryFilterChange()" onkeydown="if(event.key==='Enter') onTelemetryFilterChange()">
                         
-                        <select id="telemetryTypeFilter" class="form-control" style="width: 160px;" onchange="onTelemetryFilterChange()">
-                            <option value="">Visi tipai</option>
+                        <select id="telemetryTypeFilter" class="form-control" style="width: 170px;" onchange="onTelemetryFilterChange()">
+                            <option value="">Visi (TELEMETRY & STATUS)</option>
                             <option value="STATUS">STATUS</option>
                             <option value="TELEMETRY">TELEMETRY</option>
-                            <option value="ADVERT">ADVERT</option>
                         </select>
 
                         <button class="btn btn-secondary btn-sm" onclick="onTelemetryFilterChange()">Filtruoti</button>
@@ -810,7 +823,7 @@ $isLoggedIn = isAdminLoggedIn();
                                 <th>Signalo Kokybė</th>
                                 <th>Veikimo Laikas (Uptime)</th>
                                 <th>Paketai RX/TX</th>
-                                <th>Užregistruota</th>
+                                <th>Užregistruota (LT laiku)</th>
                                 <th style="text-align: right;">Veiksmai</th>
                             </tr>
                         </thead>
@@ -871,7 +884,7 @@ $isLoggedIn = isAdminLoggedIn();
                                 <th>Ilgis / Radijas</th>
                                 <th>Būsena</th>
                                 <th>Klaida (jei yra)</th>
-                                <th>Gauta Data</th>
+                                <th>Gauta Data (LT laiku)</th>
                                 <th style="text-align: right;">Veiksmai</th>
                             </tr>
                         </thead>
@@ -892,9 +905,115 @@ $isLoggedIn = isAdminLoggedIn();
 
             <!-- SKIRTUKAS 4: EILĖ & ĮRANKIAI -->
             <div class="tab-content" id="tab-tools">
+                <!-- 1. KARTOTUVŲ TELEMETRIJOS UŽKLAUSŲ EILĖ (/api/repeater) -->
+                <div class="filter-card" style="display: block; margin-bottom: 16px;">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 12px;">
+                        <div>
+                            <h4 style="color: #ffffff; font-size: 1.1rem; margin-bottom: 4px; display: flex; align-items: center; gap: 8px;">
+                                <span>📋 Kartotuvų Telemetrijos Užklausų Eilė</span>
+                                <span id="queueCountBadge" class="badge badge-cyan">Kraunama...</span>
+                            </h4>
+                            <p style="color: var(--text-muted); font-size: 0.84rem; max-width: 820px;">
+                                Seka, kuria ESP32 botas rotuoja ir užklausia kartotuvus per <code>/api/repeater</code>. Pirmenybę turi mazgai su išvalyta (NULL) <code>requested_date</code>, po to – seniausiai užklausti.
+                            </p>
+                        </div>
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                            <a href="../api/repeater" target="_blank" class="btn btn-secondary btn-sm" style="text-decoration: none;" title="Pasižiūrėti sekantį kartotuvą JSON formatu">
+                                <span>🎯 /api/repeater</span>
+                            </a>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="resetAllRequestedDates()" title="Išvalyti visų mazgų requested_date datą į NULL">
+                                <span>⚡ Nuresetinti visų eilę</span>
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="resetAllFailCounts()" title="Nuresetinti visų mazgų nesėkmingų bandymų (fail) skaičių į 0">
+                                <span>🧹 Nuresetinti visų fail (0)</span>
+                            </button>
+                            <button type="button" class="btn btn-sm" onclick="loadNodeQueue(true)">
+                                <span>🔄 Atnaujinti</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Eilės statistikos suvestinė -->
+                    <div class="stats-banner" style="margin-top: 14px; margin-bottom: 14px;">
+                        <div class="stat-box">
+                            <div class="val" id="qStatTotal">-</div>
+                            <div class="lbl">Viso Eilėje</div>
+                        </div>
+                        <div class="stat-box green">
+                            <div class="val" id="qStatPending">-</div>
+                            <div class="lbl">🚀 Prioritetas (NULL)</div>
+                        </div>
+                        <div class="stat-box blue">
+                            <div class="val" id="qStatSuccess">-</div>
+                            <div class="lbl">✅ Telemetrija Gauta</div>
+                        </div>
+                        <div class="stat-box orange">
+                            <div class="val" id="qStatTimeout">-</div>
+                            <div class="lbl">❌ Neatsakė / Timeout</div>
+                        </div>
+                        <div class="stat-box red">
+                            <div class="val" id="qStatBlocked">-</div>
+                            <div class="lbl">⛔ Sustabdyti (Fail limitas)</div>
+                        </div>
+                    </div>
+
+                    <!-- Filtravimo valdymo juosta -->
+                    <div class="filter-group" style="flex-wrap: wrap; gap: 10px; padding-top: 10px; border-top: 1px solid var(--border-color);">
+                        <input type="text" id="queueSearchInput" class="form-control" style="width: 240px;" placeholder="Ieškoti mazgo ar ID..." oninput="onQueueFilterChange()">
+
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <label style="font-size: 0.78rem; color: var(--text-muted);">Šaltinis (Botas):</label>
+                            <select id="queueBotFilter" class="form-control" style="width: 160px;" onchange="onQueueFilterChange()">
+                                <option value="">Visi šaltiniai (botai)</option>
+                            </select>
+                        </div>
+
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <label style="font-size: 0.78rem; color: var(--text-muted);">Apimtis:</label>
+                            <select id="queueMonitoredFilter" class="form-control" style="width: 190px;" onchange="onQueueFilterChange()">
+                                <option value="1">Tik stebimi (update=1)</option>
+                                <option value="0">Visi kartotuvai</option>
+                            </select>
+                        </div>
+
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <label style="font-size: 0.78rem; color: var(--text-muted);">Rezultatas:</label>
+                            <select id="queueStatusFilter" class="form-control" style="width: 190px;" onchange="onQueueStatusFilterChange()">
+                                <option value="">Visi rezultatai</option>
+                                <option value="never">🚀 Prioritetas (NULL)</option>
+                                <option value="success">✅ Gauta telemetrija</option>
+                                <option value="in_progress">⏳ Laukiama...</option>
+                                <option value="timeout">❌ Neatsakė / Timeout</option>
+                                <option value="blocked">⛔ Sustabdyti (Fail limitas)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- LENTELĖ SU EILE -->
+                <div class="table-wrapper" style="margin-bottom: 24px;">
+                    <table class="admin-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 50px; text-align: center;">#</th>
+                                <th>Mazgas</th>
+                                <th>Šaltinis (Botas)</th>
+                                <th>Paskutinė Užklausa (LT laiku)</th>
+                                <th>Paskutinio Bandymo Rezultatas</th>
+                                <th>Paskutiniai Rodmenys & Telemetrija (LT laiku)</th>
+                                <th style="text-align: right;">Veiksmai</th>
+                            </tr>
+                        </thead>
+                        <tbody id="nodeQueueTableBody">
+                            <tr><td colspan="7" style="text-align: center; padding: 24px;">Kraunama kartotuvų užklausų eilė...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- 2. RAW PAKETŲ EILĖS APDOROJIMAS & WORKERIS -->
                 <div class="filter-card">
                     <div>
-                        <h4 style="color: #ffffff; font-size: 1rem; margin-bottom: 4px;">⚡ Eilės Apdorojimas Realiu Laiku</h4>
+                        <h4 style="color: #ffffff; font-size: 1rem; margin-bottom: 4px;">⚡ RAW Paketų Eilės Apdorojimas Realiu Laiku</h4>
                         <p style="color: var(--text-muted); font-size: 0.8rem;">Rankinis workerio paleidimas: apdoroja neapdorotus RAW paketus tiesiai per naršyklę.</p>
                     </div>
                     <div style="display: flex; gap: 8px;">
@@ -903,16 +1022,18 @@ $isLoggedIn = isAdminLoggedIn();
                     </div>
                 </div>
 
-                <div class="table-wrapper" style="padding: 16px;">
+                <div class="table-wrapper" style="padding: 16px; margin-bottom: 20px;">
                     <div style="font-size: 0.85rem; font-weight: 600; color: #ffffff; margin-bottom: 8px;">Apdorojimo rezultatas:</div>
-                    <pre id="queueOutput" class="json-viewer" style="height: 180px;">Paspauskite mygtuką aukščiau, kad paleistumėte eilės apdorojimą...</pre>
+                    <pre id="queueOutput" class="json-viewer" style="height: 140px;">Paspauskite mygtuką aukščiau, kad paleistumėte eilės apdorojimą...</pre>
                 </div>
 
+                <!-- 3. API NUORODOS -->
                 <div class="filter-card" style="display: block;">
                     <h4 style="color: #ffffff; font-size: 1rem; margin-bottom: 8px;">🔗 Sistemos API Nuorodos & ESP32 Integracija</h4>
                     <div style="display: flex; flex-direction: column; gap: 8px; font-size: 0.82rem;">
                         <div>• <b>/api/nodes</b>: <a href="../api/nodes" target="_blank" style="color: var(--accent-cyan);">Atidaryti viešą mazgų sąrašą (JSON)</a></div>
-                        <div>• <b>/api/repyters</b>: <a href="../api/repyters" target="_blank" style="color: var(--accent-cyan);">Atidaryti ESP32 stebimų kartotuvų sąrašą (JSON)</a> (Grąžina tik tuos, kur update=true)</div>
+                        <div>• <b>/api/repeater</b>: <a href="../api/repeater" target="_blank" style="color: var(--accent-cyan);">Atidaryti 1 sekantį kartotuvą eilėje (JSON)</a> (Grąžina viršutinį ir pažymi requested_date)</div>
+                        <div>• <b>/api/repyters</b>: <a href="../api/repyters" target="_blank" style="color: var(--accent-cyan);">Atidaryti ESP32 stebimų kartotuvų sąrašą (JSON)</a> (Grąžina visus, kur update=true)</div>
                         <div>• <b>/process_queue.php</b>: <a href="../process_queue.php?limit=20" target="_blank" style="color: var(--accent-cyan);">Atidaryti HTTP Cron Workerį</a> (Galima įsidėti į cPanel Cron kas minutę)</div>
                     </div>
                 </div>
@@ -1032,6 +1153,53 @@ $isLoggedIn = isAdminLoggedIn();
                             </div>
                         </div>
 
+                        <!-- Telemetrijos Užklausų Eilės & Stebėjimo Nustatymai -->
+                        <h4 style="color: #ffffff; font-size: 1rem; margin-top: 24px; margin-bottom: 16px; border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">
+                            📡 Telemetrijos Užklausų Eilės & Stebėjimo Nustatymai
+                        </h4>
+
+                        <!-- Automatinis naujų kartotuvų pridėjimas stebėjimui -->
+                        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 16px; margin-bottom: 20px;">
+                            <label style="display: flex; align-items: flex-start; gap: 12px; cursor: pointer;">
+                                <input type="checkbox" id="settingAutoAddNewRepeaters" style="width: 20px; height: 20px; margin-top: 2px;">
+                                <div>
+                                    <div style="font-size: 0.95rem; font-weight: 600; color: #ffffff;">
+                                        Naujus taškus pridėti stebėjimui automatiškai
+                                    </div>
+                                    <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
+                                        Jei įjungta, visi naujai aptikti kartotuvai (repeaters), gauti per tinklo advert pranešimus, bus automatiškai pridedami prie stebimų sąrašo (<code>update = true</code>) ir įtraukiami į telemetrijos atnaujinimo eilę.
+                                    </div>
+                                </div>
+                            </label>
+                        </div>
+
+                        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 16px; margin-bottom: 20px;">
+                            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
+                                <div style="max-width: 580px;">
+                                    <div style="font-size: 0.95rem; font-weight: 600; color: #ffffff;">
+                                        Maksimalus nesėkmingų bandymų (fail) limitas
+                                    </div>
+                                    <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
+                                        Kiek kartų iš eilės neatsakius mazgui į telemetrijos užklausą (timeout), jis nustoja būti imamas į <code>/api/repeater</code> ir <code>/api/repyters</code> atnaujinimų sąrašą.
+                                        <br><span style="color: var(--accent-cyan);">Numatyta reikšmė: <b>20</b>. Įveskite <b>0</b>, jei norite limitą išjungti (užklausti be apribojimų).</span>
+                                    </div>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="number" min="0" max="1000" step="1" id="settingMaxTelemetryFails" class="form-control" style="width: 100px; font-weight: 700; text-align: center; font-size: 1rem;" placeholder="20" required>
+                                    <span style="font-size: 0.82rem; color: var(--text-muted);">fail</span>
+                                </div>
+                            </div>
+
+                            <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.06); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                                <div style="font-size: 0.78rem; color: var(--text-dim);">
+                                    Reikia atblokuoti visus sustabdytus mazgus ir nuresetinti jų nesėkmingų bandymų skaičių į 0?
+                                </div>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="resetAllFailCounts()">
+                                    <span>🧹 Nuresetinti visų mazgų fail (0)</span>
+                                </button>
+                            </div>
+                        </div>
+
                         <!-- Išsaugojimas ir pranešimas -->
                         <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 24px;">
                             <div id="settingsFeedback" style="font-size: 0.85rem; font-weight: 500;"></div>
@@ -1092,6 +1260,21 @@ $isLoggedIn = isAdminLoggedIn();
                                 <input type="checkbox" id="editNodeIsRepeater" style="width: 16px; height: 16px;">
                                 <span>Mazgas yra kartotuvas</span>
                             </label>
+                        </div>
+
+                        <!-- Fail count valdymas mazgui -->
+                        <div id="editNodeFailSection" style="margin-top: 10px; padding: 12px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: var(--radius-md); display: flex; justify-content: space-between; align-items: center; gap: 12px;">
+                            <div>
+                                <div style="font-size: 0.86rem; font-weight: 600; color: #ffffff;" id="editNodeFailLabel">
+                                    Nesėkmingi bandymai (fail): 0
+                                </div>
+                                <div style="font-size: 0.72rem; color: var(--text-dim);" id="editNodeFailSub">
+                                    Jei pasiekia nustatytą limitą, mazgas sustabdomas nuo automatinių užklausų.
+                                </div>
+                            </div>
+                            <button type="button" class="btn btn-secondary btn-sm" id="btnResetActiveNodeFail" onclick="resetActiveEditNodeFail()" style="white-space: nowrap;">
+                                <span>🧹 Nuresetinti (0)</span>
+                            </button>
                         </div>
                     </div>
                     <div class="modal-footer">
@@ -1393,7 +1576,7 @@ $isLoggedIn = isAdminLoggedIn();
 
                     loadRawPackets(rawPage);
                 } else if (tab === 'tools') {
-                    // Eilės ir įrankių skirtukas
+                    loadNodeQueue();
                 } else if (tab === 'settings') {
                     loadSettings();
                 }
@@ -1433,6 +1616,7 @@ $isLoggedIn = isAdminLoggedIn();
             if (tabName === 'nodes') loadNodes();
             else if (tabName === 'telemetry') loadTelemetry(telPage);
             else if (tabName === 'raw') loadRawPackets(rawPage);
+            else if (tabName === 'tools') loadNodeQueue();
             else if (tabName === 'settings') loadSettings();
         }
 
@@ -1566,13 +1750,15 @@ $isLoggedIn = isAdminLoggedIn();
                 const hasLoc = (n.latitude && n.longitude && Math.abs(n.latitude) > 0.001);
                 const pass = n.password !== null && n.password !== undefined ? n.password : '';
                 const botId = n.bot_id || 'KLP';
+                const failCount = parseInt(n.telemetry_fail_count || 0, 10);
 
                 return `
                     <tr>
                         <td>
-                            <div style="display: flex; align-items: center; gap: 8px;">
+                            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                                 <span class="badge badge-blue" title="${escapeHtml(key)}">${id.toUpperCase()}</span>
                                 <span style="font-weight: 600; color: #ffffff;">${escapeHtml(name)}</span>
+                                ${failCount > 0 ? `<span class="badge badge-red" style="font-size: 0.68rem; font-weight: 700; padding: 1px 5px; cursor: pointer;" onclick="resetNodeFailCount('${id}', '${escapeHtml(name)}')" title="${failCount} nesėkmingi bandymai. Paspauskite, kad nuresetintumėte į 0.">⚠️ ${failCount} fail 🧹</span>` : ''}
                             </div>
                         </td>
                         <td>
@@ -1591,15 +1777,18 @@ $isLoggedIn = isAdminLoggedIn();
                             ${hasLoc ? `<span style="color:var(--accent-cyan); font-family:var(--font-mono);">${parseFloat(n.latitude).toFixed(3)}, ${parseFloat(n.longitude).toFixed(3)}</span>` : '<span style="color:var(--text-dim);">Nėra</span>'}
                         </td>
                         <td>
-                            <div style="font-size: 0.75rem;" title="Matytas tinkle: ${n.last_seen_at}">📡 ${formatRelativeTime(n.last_seen_at)}</div>
-                            <div style="font-size: 0.70rem; color: #a78bfa; margin-top: 2px;" title="Telemetrija atnaujinta: ${n.telemetry_updated_at || 'Nėra'}">
+                            <div style="font-size: 0.75rem;" title="Matytas tinkle (LT laiku): ${formatVilniusDate(n.last_seen_at)}">📡 ${formatRelativeTime(n.last_seen_at)}</div>
+                            <div style="font-size: 0.70rem; color: #a78bfa; margin-top: 2px;" title="Telemetrija atnaujinta (LT laiku): ${formatVilniusDate(n.telemetry_updated_at)}">
                                 ${n.telemetry_updated_at ? '⏱️ ' + formatRelativeTime(n.telemetry_updated_at) : '<span style="color:var(--text-dim);">⏱️ Nėra</span>'}
                             </div>
                         </td>
                         <td style="text-align: right; white-space: nowrap;">
-                            <button class="btn btn-secondary btn-sm" onclick="openEditNode('${key}')" title="Keisti nustatymus">⚙️ Nustatymai</button>
-                            <button class="btn btn-secondary btn-sm" onclick="filterTelemetryByNode('${id}')" title="Atidaryti telemetrijos įrašus">📊 Telemetrija</button>
-                            <button class="btn btn-secondary btn-sm" onclick="filterRawByNode('${id}')" title="Atidaryti RAW paketus">📦 RAW</button>
+                            <button class="btn btn-secondary btn-icon" onclick="openEditNode('${key}')" title="Keisti nustatymus">⚙️</button>
+                            ${failCount > 0 ? `
+                                <button class="btn btn-secondary btn-icon" style="margin-left: 3px;" onclick="resetNodeFailCount('${id}', '${escapeHtml(name)}')" title="Nuresetinti nesėkmingų bandymų (fail) skaičių į 0">🧹</button>
+                            ` : ''}
+                            <button class="btn btn-secondary btn-icon" style="margin-left: 3px;" onclick="filterTelemetryByNode('${id}')" title="Atidaryti telemetrijos įrašus">📊</button>
+                            <button class="btn btn-secondary btn-icon" style="margin-left: 3px;" onclick="filterRawByNode('${id}')" title="Atidaryti RAW paketus">📦</button>
                         </td>
                     </tr>
                 `;
@@ -1629,6 +1818,12 @@ $isLoggedIn = isAdminLoggedIn();
             document.getElementById('editNodeLon').value = node.longitude || '';
             document.getElementById('editNodeUpdate').checked = (node.update == 1 || node.update === true);
             document.getElementById('editNodeIsRepeater').checked = (node.is_repeater == 1 || node.is_repeater === true);
+
+            const failCnt = parseInt(node.telemetry_fail_count || 0, 10);
+            const failLabel = document.getElementById('editNodeFailLabel');
+            if (failLabel) {
+                failLabel.innerHTML = `Nesėkmingi bandymai (fail): <span style="color: ${failCnt > 0 ? '#ff6b81' : '#2ed573'}; font-weight: 700;">${failCnt}</span>`;
+            }
 
             document.getElementById('editNodeTitle').innerText = `Mazgo Nustatymai: ${node.node_name || node.node_id || ''}`;
             openModal('editNodeModal');
@@ -1756,7 +1951,7 @@ $isLoggedIn = isAdminLoggedIn();
                             RX: ${r.packets_recv ?? '-'} / TX: ${r.packets_sent ?? '-'}
                         </td>
                         <td style="font-size: 0.74rem;">
-                            <span title="${r.recorded_at}">${r.recorded_at}</span>
+                            <span title="Lietuvos laiku: ${formatVilniusDate(r.recorded_at)}">${formatVilniusDate(r.recorded_at)}</span>
                         </td>
                         <td style="text-align: right; white-space: nowrap;">
                             ${r.raw_packet_id ? `
@@ -1865,7 +2060,7 @@ $isLoggedIn = isAdminLoggedIn();
                         <td>
                             ${p.error_message ? `<span style="color:#ff6b81; font-size:0.75rem;" title="${escapeHtml(p.error_message)}">${escapeHtml(p.error_message.substring(0, 45))}...</span>` : '<span style="color:var(--text-dim);">-</span>'}
                         </td>
-                        <td style="font-size: 0.74rem;">${p.created_at}</td>
+                        <td style="font-size: 0.74rem;" title="Lietuvos laiku: ${formatVilniusDate(p.created_at)}">${formatVilniusDate(p.created_at)}</td>
                         <td style="text-align: right; white-space: nowrap;">
                             <button class="btn btn-success btn-sm" onclick="copyDebugInfo(${p.id})" title="Nukopijuoti visą paketo procesą ir duomenis derinimui su AI / Dev">📋 Kopijuoti derinimui</button>
                             <button class="btn btn-secondary btn-sm" onclick="inspectPacket(${p.id})">🔍 Peržiūrėti</button>
@@ -2069,6 +2264,461 @@ $isLoggedIn = isAdminLoggedIn();
             }
         }
 
+        // ==========================================
+        // KARTOTUVŲ TELEMETRIJOS UŽKLAUSŲ EILĖ (/api/repeater)
+        // ==========================================
+        let currentQueueData = [];
+        let queueFilterTimeout = null;
+
+        async function loadNodeQueue(forceRefresh = false) {
+            const tableBody = document.getElementById('nodeQueueTableBody');
+            const badge = document.getElementById('queueCountBadge');
+            if (!tableBody) return;
+
+            if (forceRefresh) {
+                tableBody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 24px; color: var(--text-muted);">🔄 Atnaujinama kartotuvų užklausų eilė...</td></tr>`;
+            }
+
+            const botId = document.getElementById('queueBotFilter')?.value || '';
+            const monitoredOnly = document.getElementById('queueMonitoredFilter')?.value ?? '1';
+            const search = document.getElementById('queueSearchInput')?.value || '';
+
+            const params = new URLSearchParams();
+            if (botId) params.set('bot_id', botId);
+            params.set('monitored_only', monitoredOnly);
+            if (search) params.set('search', search);
+
+            try {
+                const res = await fetch(`api.php?action=node_queue&${params.toString()}`);
+                const data = await res.json();
+
+                if (!data.success) {
+                    throw new Error(data.error || 'Nepavyko užkrauti eilės duomenų');
+                }
+
+                currentQueueData = data.queue || [];
+
+                // Atnaujiname botų pasirinkimą jei dar nėra
+                const botSelect = document.getElementById('queueBotFilter');
+                if (botSelect && data.bots && Array.isArray(data.bots)) {
+                    const currentVal = botSelect.value;
+                    const existingOptions = Array.from(botSelect.options).map(o => o.value);
+                    data.bots.forEach(b => {
+                        if (!existingOptions.includes(b)) {
+                            const opt = document.createElement('option');
+                            opt.value = b;
+                            opt.textContent = `Botas: ${b}`;
+                            botSelect.appendChild(opt);
+                        }
+                    });
+                    if (currentVal) botSelect.value = currentVal;
+                }
+
+                // Statistika
+                const stats = data.stats || {};
+                const qStatTotal = document.getElementById('qStatTotal');
+                const qStatPending = document.getElementById('qStatPending');
+                const qStatSuccess = document.getElementById('qStatSuccess');
+                const qStatTimeout = document.getElementById('qStatTimeout');
+                const qStatBlocked = document.getElementById('qStatBlocked');
+
+                if (qStatTotal) qStatTotal.innerText = stats.total ?? currentQueueData.length;
+                if (qStatPending) qStatPending.innerText = stats.pending_first ?? 0;
+                if (qStatSuccess) qStatSuccess.innerText = stats.success ?? 0;
+                if (qStatTimeout) qStatTimeout.innerText = stats.timeout ?? 0;
+                if (qStatBlocked) qStatBlocked.innerText = stats.blocked ?? 0;
+                if (badge) badge.innerText = `${currentQueueData.length} mazgų`;
+
+                renderNodeQueueTable();
+            } catch (err) {
+                console.error('Klaida kraunant eilę:', err);
+                if (tableBody) {
+                    tableBody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--accent-red); padding: 24px;">❌ Klaida užkraunant eilę: ${escapeHtml(err.message)}</td></tr>`;
+                }
+                if (badge) badge.innerText = 'Klaida';
+            }
+        }
+
+        function onQueueFilterChange() {
+            clearTimeout(queueFilterTimeout);
+            queueFilterTimeout = setTimeout(() => {
+                loadNodeQueue(false);
+            }, 250);
+        }
+
+        function onQueueStatusFilterChange() {
+            renderNodeQueueTable();
+        }
+
+        function renderNodeQueueTable() {
+            const tbody = document.getElementById('nodeQueueTableBody');
+            if (!tbody) return;
+
+            const statusFilter = document.getElementById('queueStatusFilter')?.value || '';
+
+            let list = currentQueueData;
+            if (statusFilter) {
+                if (statusFilter === 'blocked') {
+                    list = list.filter(item => item.is_blocked || item.attempt_status === 'blocked');
+                } else {
+                    list = list.filter(item => item.attempt_status === statusFilter && !item.is_blocked);
+                }
+            }
+
+            if (!list || list.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="7" style="text-align: center; padding: 32px; color: var(--text-muted);">
+                            Pagal pasirinktus filtrus mazgų eilėje nerasta.
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            tbody.innerHTML = list.map(item => {
+                const isBlocked = !!item.is_blocked;
+                const isNext = (!isBlocked && item.queue_pos === 1);
+                const posBadgeClass = isBlocked ? 'badge-red' : (isNext ? 'badge-green' : (item.queue_pos <= 3 ? 'badge-cyan' : 'badge-gray'));
+                const posLabel = isBlocked ? '⛔' : `#${item.queue_pos}`;
+
+                // Mazgo pavadinimas ir identifikatorius
+                const nameStr = escapeHtml(item.name || item.node_id);
+                const idStr = escapeHtml((item.node_id || '').toUpperCase());
+                const keyShort = item.public_key ? escapeHtml(item.public_key.substring(0, 10)) + '...' : '-';
+                const isMonitored = item.update;
+                const failCount = parseInt(item.telemetry_fail_count || 0, 10);
+                const maxFails = parseInt(item.max_telemetry_fails || 20, 10);
+
+                // Šaltinis
+                const botStr = escapeHtml(item.bot_id || 'KLP');
+
+                // Paskutinė užklausa (requested_date)
+                let reqHtml = '';
+                if (!item.requested_date) {
+                    reqHtml = `
+                        <div style="display: flex; flex-direction: column; gap: 3px;">
+                            <span class="badge badge-green" style="font-weight: 700; width: fit-content;" title="Mazgas dar neužklaustas arba jo eilė nuresetinta į NULL">
+                                🚀 NULL (Prioritetas)
+                            </span>
+                            <span style="font-size: 0.72rem; color: var(--accent-green);">Bus imamas iškart</span>
+                        </div>
+                    `;
+                } else {
+                    const reqDateFormatted = formatVilniusDate(item.requested_date);
+                    const rel = formatRelativeTime(item.requested_date_iso || item.requested_date);
+                    reqHtml = `
+                        <div style="display: flex; flex-direction: column; gap: 2px;">
+                            <span style="color: #ffffff; font-size: 0.82rem; font-family: var(--font-mono); font-weight: 500;">${escapeHtml(reqDateFormatted)}</span>
+                            <span style="color: var(--text-muted); font-size: 0.73rem;">⏱️ ${rel} <span style="color: var(--text-dim); font-size: 0.67rem;">(LT)</span></span>
+                        </div>
+                    `;
+                }
+
+                // Paskutinio bandymo rezultatas
+                let attemptBadge = '';
+                const priorTelemDate = item.telemetry_updated_at ? formatVilniusDate(item.telemetry_updated_at) : null;
+                const priorTelemRel = item.telemetry_updated_at ? formatRelativeTime(item.telemetry_updated_at_iso || item.telemetry_updated_at) : null;
+
+                if (isBlocked || item.attempt_status === 'blocked') {
+                    let priorTelemBox = '';
+                    if (priorTelemDate) {
+                        priorTelemBox = `
+                            <div style="margin-top: 4px; padding: 5px 8px; background: rgba(255, 177, 66, 0.12); border-left: 2px solid #ffb142; border-radius: 4px;">
+                                <div style="font-size: 0.69rem; color: #ffb142; font-weight: 600;">📡 Paskutinė gauta telemetrija:</div>
+                                <div style="font-size: 0.76rem; color: #ffffff; font-family: var(--font-mono); font-weight: 600;">${escapeHtml(priorTelemDate)}</div>
+                                <div style="font-size: 0.68rem; color: var(--text-muted);">⏱️ ${priorTelemRel} (LT laiku)</div>
+                            </div>
+                        `;
+                    }
+                    attemptBadge = `
+                        <div style="display: flex; flex-direction: column; gap: 3px;">
+                            <span class="badge badge-red" style="width: fit-content; background: #c23616;">⛔ Sustabdytas (Fail limitas)</span>
+                            <span style="font-size: 0.72rem; color: #ff6b81;">Viršytas limitas: <b>${failCount}/${maxFails} fail</b></span>
+                            <span style="font-size: 0.70rem; color: var(--text-muted);">Nebeimamas į /api/repeater užklausas</span>
+                            ${priorTelemBox}
+                        </div>
+                    `;
+                } else if (item.attempt_status === 'never') {
+                    attemptBadge = `
+                        <div style="display: flex; flex-direction: column; gap: 3px;">
+                            <span class="badge badge-green" style="width: fit-content;">🚀 Prioritetas (NULL)</span>
+                            <span style="font-size: 0.72rem; color: var(--text-muted);">Laukia 1-os užklausos per /api/repeater</span>
+                            ${priorTelemDate ? `
+                                <div style="margin-top: 4px; font-size: 0.71rem; color: var(--text-muted);">
+                                    📡 Ankstesnė: <b style="font-family: var(--font-mono); color: #ffffff;">${escapeHtml(priorTelemDate)}</b> (${priorTelemRel})
+                                </div>
+                            ` : ''}
+                        </div>
+                    `;
+                } else if (item.attempt_status === 'success') {
+                    attemptBadge = `
+                        <div style="display: flex; flex-direction: column; gap: 3px;">
+                            <span class="badge badge-green" style="width: fit-content;">✅ Gauta</span>
+                            <span style="font-size: 0.72rem; color: var(--accent-green);">📶 Telemetrija atsakė į užklausą</span>
+                            <div style="font-size: 0.72rem; color: var(--text-muted);" title="Lietuvos laiku">
+                                🕒 <span style="font-family: var(--font-mono); color: #ffffff;">${escapeHtml(priorTelemDate)}</span> (${priorTelemRel})
+                            </div>
+                        </div>
+                    `;
+                } else if (item.attempt_status === 'in_progress') {
+                    attemptBadge = `
+                        <div style="display: flex; flex-direction: column; gap: 3px;">
+                            <span class="badge badge-blue" style="width: fit-content;">⏳ Laukiama...</span>
+                            <span style="font-size: 0.72rem; color: var(--accent-cyan);">Užklausta, laukiama atsakymo eteryje</span>
+                            ${priorTelemDate ? `
+                                <div style="margin-top: 4px; font-size: 0.71rem; color: var(--text-muted);">
+                                    📡 Paskutinė gauta: <b style="font-family: var(--font-mono); color: #ffffff;">${escapeHtml(priorTelemDate)}</b> (${priorTelemRel})
+                                </div>
+                            ` : ''}
+                        </div>
+                    `;
+                } else {
+                    let priorTelemBox = '';
+                    if (priorTelemDate) {
+                        priorTelemBox = `
+                            <div style="margin-top: 4px; padding: 5px 8px; background: rgba(255, 177, 66, 0.12); border-left: 2px solid #ffb142; border-radius: 4px;">
+                                <div style="font-size: 0.69rem; color: #ffb142; font-weight: 600;">📡 Paskutinė gauta telemetrija:</div>
+                                <div style="font-size: 0.76rem; color: #ffffff; font-family: var(--font-mono); font-weight: 600;">${escapeHtml(priorTelemDate)}</div>
+                                <div style="font-size: 0.68rem; color: var(--text-muted);">⏱️ ${priorTelemRel} (LT laiku)</div>
+                            </div>
+                        `;
+                    } else {
+                        priorTelemBox = `
+                            <div style="font-size: 0.70rem; color: var(--text-dim); margin-top: 2px;">⚠️ Nėra jokios ankstesnės telemetrijos</div>
+                        `;
+                    }
+
+                    attemptBadge = `
+                        <div style="display: flex; flex-direction: column; gap: 3px;">
+                            <span class="badge badge-red" style="width: fit-content;">❌ Timeout ${failCount > 1 ? `(${failCount}x)` : ''}</span>
+                            <span style="font-size: 0.72rem; color: #ff6b81;">Neatsakė į paskutinę užklausą</span>
+                            ${priorTelemBox}
+                        </div>
+                    `;
+                }
+
+                // Paskutiniai rodmenys & Telemetrijos laikas
+                let telemetryHtml = '<span style="color: var(--text-dim); font-size: 0.78rem;">-</span>';
+                if (item.battery_v !== null || item.temperature_c !== null || priorTelemDate) {
+                    let bColor = 'var(--text-muted)';
+                    if (item.battery_v !== null) {
+                        bColor = item.battery_v < 3.4 ? '#ff5252' : (item.battery_v < 3.7 ? '#ffb142' : 'var(--accent-green)');
+                    }
+
+                    telemetryHtml = `
+                        <div style="display: flex; flex-direction: column; gap: 3px;">
+                            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                                ${item.battery_v !== null ? `<span style="font-size: 0.8rem; font-weight: 600; color: ${bColor};">🔋 ${Number(item.battery_v).toFixed(2)}V</span>` : ''}
+                                ${item.temperature_c !== null ? `<span style="font-size: 0.75rem; color: #ffffff;">🌡️ ${Number(item.temperature_c).toFixed(1)}°C</span>` : ''}
+                            </div>
+                            ${priorTelemDate ? `
+                                <div style="font-size: 0.72rem; color: var(--text-muted);" title="Lietuvos laiku: ${escapeHtml(priorTelemDate)}">
+                                    🕒 <span style="font-family: var(--font-mono); color: var(--accent-cyan); font-weight: 500;">${escapeHtml(priorTelemDate)}</span>
+                                    <span style="color: var(--text-dim); font-size: 0.68rem;">(${priorTelemRel})</span>
+                                </div>
+                            ` : '<span style="font-size: 0.7rem; color: var(--text-dim);">Laiko nėra</span>'}
+                        </div>
+                    `;
+                }
+
+                // Veiksmai
+                const nodeIdentifier = item.node_id || item.public_key;
+                const safeName = (item.name || item.node_id).replace(/'/g, "\\'");
+                const nodeFilterId = escapeHtml(item.node_id || (item.public_key ? item.public_key.substring(0, 4) : ''));
+
+                return `
+                    <tr style="${isBlocked ? 'background: rgba(232, 65, 24, 0.08);' : (isNext ? 'background: rgba(0, 210, 255, 0.04);' : '')}">
+                        <td style="text-align: center;">
+                            <span class="badge ${posBadgeClass}" style="font-weight: 700; white-space: nowrap;" title="${isBlocked ? `Mazgas sustabdytas (${failCount}/${maxFails} fail)` : `Eilės pozicija #${item.queue_pos}`}">
+                                ${posLabel}
+                            </span>
+                        </td>
+                        <td>
+                            <div style="display: flex; flex-direction: column; gap: 2px;">
+                                <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                                    <span style="font-weight: 600; color: #ffffff; font-size: 0.88rem;">${nameStr}</span>
+                                    <span class="badge badge-blue" style="font-size: 0.7rem;">${idStr}</span>
+                                    ${isBlocked ? `<span class="badge badge-red" style="font-size: 0.68rem; font-weight: 700; padding: 1px 5px; background: #e84118;" title="Mazgas sustabdytas! Pasiekė ${failCount} fail (limitas: ${maxFails})">⛔ ${failCount} fail (Sustabdytas)</span>` : (failCount > 0 ? `<span class="badge badge-red" style="font-size: 0.68rem; font-weight: 700; padding: 1px 5px; cursor: pointer;" onclick="resetNodeFailCount('${escapeHtml(nodeIdentifier)}', '${safeName}')" title="${failCount} nesėkmingi bandymai. Paspauskite, kad nuresetintumėte į 0.">⚠️ ${failCount} fail 🧹</span>` : '')}
+                                    ${!isMonitored ? '<span class="badge badge-gray" style="font-size: 0.65rem;" title="update=0 (Išjungta)">Neaktyvus</span>' : ''}
+                                </div>
+                                <div style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-dim);" title="Viešasis raktas: ${escapeHtml(item.public_key || '')}">
+                                    🔑 ${keyShort}
+                                </div>
+                            </div>
+                        </td>
+                        <td>
+                            <span class="badge badge-purple" title="ESP32 Bot šaltinis">
+                                🤖 ${botStr}
+                            </span>
+                        </td>
+                        <td>
+                            ${reqHtml}
+                        </td>
+                        <td>
+                            ${attemptBadge}
+                        </td>
+                        <td>
+                            ${telemetryHtml}
+                        </td>
+                        <td style="text-align: right; white-space: nowrap;">
+                            <button type="button" class="btn btn-secondary btn-icon" 
+                                onclick="resetSingleRequestedDate('${escapeHtml(nodeIdentifier)}', '${safeName}')"
+                                title="Nustatyti į eilės pradžią (requested_date = NULL, fail = 0)">
+                                🔄
+                            </button>
+                            ${failCount > 0 ? `
+                                <button type="button" class="btn btn-secondary btn-icon" style="margin-left: 3px; color: ${isBlocked ? '#ff6b81' : 'inherit'}; border-color: ${isBlocked ? '#ff6b81' : ''};" 
+                                    onclick="resetNodeFailCount('${escapeHtml(nodeIdentifier)}', '${safeName}')" 
+                                    title="Nuresetinti nesėkmingų bandymų (fail) skaičių į 0 (${failCount} fail)">
+                                    🧹
+                                </button>
+                            ` : ''}
+                            <button type="button" class="btn btn-secondary btn-icon" style="margin-left: 3px;"
+                                onclick="filterTelemetryByNode('${nodeFilterId}')" 
+                                title="Rodyti telemetrijos įrašus">
+                                📊
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-icon" style="margin-left: 3px;"
+                                onclick="filterRawByNode('${nodeFilterId}')" 
+                                title="Rodyti RAW paketus">
+                                📦
+                            </button>
+                            ${item.public_key ? `
+                                <button type="button" class="btn btn-secondary btn-icon" style="margin-left: 3px;"
+                                    onclick="openEditNode('${escapeHtml(item.public_key)}')"
+                                    title="Redaguoti mazgo nustatymus">
+                                    ⚙️
+                                </button>
+                            ` : ''}
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        async function resetSingleRequestedDate(identifier, nodeName) {
+            try {
+                const res = await fetch('api.php?action=reset_requested_date', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ identifier })
+                });
+                const data = await res.json();
+                if (!data.success) {
+                    throw new Error(data.error || 'Nepavyko nuresetinti mazgo užklausos datos');
+                }
+
+                showToast(`🚀 ${nodeName || identifier} nukreiptas į eilės pradžią (fail nuresetintas į 0)!`, 'success');
+                await loadNodeQueue(false);
+            } catch (err) {
+                alert('Klaida: ' + err.message);
+            }
+        }
+
+        async function resetAllRequestedDates() {
+            const botFilter = document.getElementById('queueBotFilter')?.value || '';
+            const monitoredFilter = document.getElementById('queueMonitoredFilter')?.value === '1';
+
+            let msg = 'Ar tikrai norite nuresetinti visų mazgų requested_date datą į NULL?\n\nVisi mazgai bus imami nuo pradžių sekantiems telemetrijos atnaujinimams ir jų fail skaičiai bus atstatyti į 0.';
+            if (botFilter) {
+                msg = `Ar tikrai norite nuresetinti boto "${botFilter}" mazgų requested_date datą į NULL?`;
+            }
+
+            if (!confirm(msg)) return;
+
+            try {
+                const res = await fetch('api.php?action=reset_all_requested_dates', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        bot_id: botFilter || null,
+                        monitored_only: monitoredFilter
+                    })
+                });
+                const data = await res.json();
+                if (!data.success) {
+                    throw new Error(data.error || 'Nepavyko nuresetinti eilės');
+                }
+
+                showToast(data.message || 'Eilė sėkmingai nuresetinta!', 'success');
+                await loadNodeQueue(false);
+            } catch (err) {
+                alert('Klaida nuresetinant eilę: ' + err.message);
+            }
+        }
+
+        async function resetNodeFailCount(identifier, nodeName) {
+            try {
+                const res = await fetch('api.php?action=reset_node_fail_count', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ identifier })
+                });
+                const data = await res.json();
+                if (!data.success) {
+                    throw new Error(data.error || 'Nepavyko nuresetinti nesėkmingų bandymų');
+                }
+
+                showToast(`🧹 ${nodeName || identifier} fail skaičius atstatytas į 0! Mazgas vėl aktyvus eilėje.`, 'success');
+                if (currentTab === 'queue') {
+                    await loadNodeQueue(false);
+                } else if (currentTab === 'nodes') {
+                    await loadNodes();
+                } else {
+                    await loadNodeQueue(false);
+                }
+            } catch (err) {
+                alert('Klaida: ' + err.message);
+            }
+        }
+
+        async function resetAllFailCounts() {
+            const botFilter = document.getElementById('queueBotFilter')?.value || '';
+            let msg = 'Ar tikrai norite nuresetinti VISŲ mazgų nesėkmingų bandymų (fail) skaičių į 0?\n\nVisi anksčiau sustabdyti mazgai vėl taps tinkami telemetrijos užklausoms.';
+            if (botFilter) {
+                msg = `Ar tikrai norite nuresetinti boto "${botFilter}" mazgų fail skaičių į 0?`;
+            }
+
+            if (!confirm(msg)) return;
+
+            try {
+                const res = await fetch('api.php?action=reset_all_fail_counts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        bot_id: botFilter || null
+                    })
+                });
+                const data = await res.json();
+                if (!data.success) {
+                    throw new Error(data.error || 'Nepavyko nuresetinti fail skaičių');
+                }
+
+                showToast(data.message || 'Visų mazgų fail skaičius nuresetintas į 0!', 'success');
+                if (currentTab === 'queue') {
+                    await loadNodeQueue(false);
+                } else if (currentTab === 'nodes') {
+                    await loadNodes();
+                } else {
+                    await loadNodeQueue(false);
+                }
+            } catch (err) {
+                alert('Klaida: ' + err.message);
+            }
+        }
+
+        async function resetActiveEditNodeFail() {
+            const key = document.getElementById('editNodePublicKey')?.value;
+            const name = document.getElementById('editNodeName')?.value || key;
+            if (!key) return;
+            await resetNodeFailCount(key, name);
+            const failLabel = document.getElementById('editNodeFailLabel');
+            if (failLabel) {
+                failLabel.innerHTML = `Nesėkmingi bandymai (fail): <span style="color: #2ed573; font-weight: 700;">0</span>`;
+            }
+        }
+
         // 4. EILĖS APDOROJIMAS
         async function runQueueBatch(limit = 20) {
             const out = document.getElementById('queueOutput');
@@ -2153,13 +2803,53 @@ $isLoggedIn = isAdminLoggedIn();
 
         function formatRelativeTime(dateStr) {
             if (!dateStr) return 'Nematytas';
-            const date = new Date(dateStr.replace(' ', 'T'));
-            const now = new Date();
-            const diffSec = Math.max(0, Math.floor((now - date) / 1000));
-            if (diffSec < 60) return `prieš ${diffSec}s`;
-            if (diffSec < 3600) return `prieš ${Math.floor(diffSec / 60)} min.`;
-            if (diffSec < 86400) return `prieš ${Math.floor(diffSec / 3600)} val.`;
-            return `prieš ${Math.floor(diffSec / 86400)} d.`;
+            try {
+                let timestamp;
+                if (typeof dateStr === 'string' && (dateStr.includes('T') || dateStr.includes('+') || dateStr.includes('Z'))) {
+                    timestamp = new Date(dateStr).getTime();
+                } else if (typeof dateStr === 'string') {
+                    timestamp = new Date(dateStr.replace(' ', 'T')).getTime();
+                } else if (dateStr instanceof Date) {
+                    timestamp = dateStr.getTime();
+                } else {
+                    timestamp = Number(dateStr);
+                }
+                if (isNaN(timestamp)) return dateStr;
+                const now = Date.now();
+                const diffSec = Math.max(0, Math.floor((now - timestamp) / 1000));
+                if (diffSec < 60) return `prieš ${diffSec}s`;
+                if (diffSec < 3600) return `prieš ${Math.floor(diffSec / 60)} min.`;
+                if (diffSec < 86400) return `prieš ${Math.floor(diffSec / 3600)} val.`;
+                return `prieš ${Math.floor(diffSec / 86400)} d.`;
+            } catch (e) {
+                return dateStr;
+            }
+        }
+
+        // Užtikrina laiko rodymą Lietuvos laiko zonoje (Europe/Vilnius)
+        function formatVilniusDate(dateStr, includeSeconds = true) {
+            if (!dateStr) return '-';
+            try {
+                // Jei formatas jau "YYYY-MM-DD HH:mm:ss" be laiko zonos, jis jau yra Lietuvos laiku
+                if (typeof dateStr === 'string' && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?$/.test(dateStr.trim())) {
+                    const clean = dateStr.trim().replace('T', ' ');
+                    return includeSeconds ? clean : clean.substring(0, 16);
+                }
+                const d = new Date(dateStr);
+                if (isNaN(d.getTime())) return dateStr;
+                return d.toLocaleString('lt-LT', {
+                    timeZone: 'Europe/Vilnius',
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: includeSeconds ? '2-digit' : undefined,
+                    hour12: false
+                }).replace(',', '');
+            } catch (e) {
+                return dateStr;
+            }
         }
 
         function formatUptime(seconds) {
@@ -2203,6 +2893,7 @@ $isLoggedIn = isAdminLoggedIn();
                 const latMaxEl = document.getElementById('settingLtLatMax');
                 const lonMinEl = document.getElementById('settingLtLonMin');
                 const lonMaxEl = document.getElementById('settingLtLonMax');
+                const maxFailsEl = document.getElementById('settingMaxTelemetryFails');
 
                 if (enabledEl) enabledEl.checked = !!currentSettings.filter_lithuania_enabled;
                 if (noCoordsEl) noCoordsEl.checked = !!currentSettings.filter_lithuania_include_no_coords;
@@ -2210,6 +2901,10 @@ $isLoggedIn = isAdminLoggedIn();
                 if (latMaxEl) latMaxEl.value = currentSettings.lithuania_lat_max ?? 56.4500;
                 if (lonMinEl) lonMinEl.value = currentSettings.lithuania_lon_min ?? 20.9000;
                 if (lonMaxEl) lonMaxEl.value = currentSettings.lithuania_lon_max ?? 26.8500;
+                if (maxFailsEl) maxFailsEl.value = currentSettings.max_telemetry_fails ?? 20;
+
+                const autoAddRepEl = document.getElementById('settingAutoAddNewRepeaters');
+                if (autoAddRepEl) autoAddRepEl.checked = !!currentSettings.auto_add_new_repeaters;
 
                 // Statistika
                 const stTotal = document.getElementById('stTotalNodes');
@@ -2272,7 +2967,9 @@ $isLoggedIn = isAdminLoggedIn();
                     lithuania_lat_min: parseFloat(document.getElementById('settingLtLatMin').value),
                     lithuania_lat_max: parseFloat(document.getElementById('settingLtLatMax').value),
                     lithuania_lon_min: parseFloat(document.getElementById('settingLtLonMin').value),
-                    lithuania_lon_max: parseFloat(document.getElementById('settingLtLonMax').value)
+                    lithuania_lon_max: parseFloat(document.getElementById('settingLtLonMax').value),
+                    max_telemetry_fails: parseInt(document.getElementById('settingMaxTelemetryFails')?.value || '20', 10),
+                    auto_add_new_repeaters: document.getElementById('settingAutoAddNewRepeaters')?.checked ?? false
                 };
 
                 const res = await fetch('api.php?action=save_settings', {
