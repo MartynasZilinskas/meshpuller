@@ -4,18 +4,21 @@
 #include <Arduino.h>
 
 // ================================================================================
-// ⚙️ PAGRINDINIAI NUSTATYMAI (CONFIG)
+// ⚙️ NUMATYTIEJI NUSTATYMAI (DEFAULTS IŠ CONFIG.H)
+// Šios reikšmės naudojamos kaip numatytosios (default), jei vidinėje NVS atmintyje
+// vartotojas dar neišsaugojo savo nustatymų per Web sąsają arba po nustatymų atstatymo.
 // ================================================================================
 
-// 1. Wi-Fi nustatymai
-const char *WIFI_SSID = "2.4GHz";
-const char *WIFI_PASSWORD = "37810200438";
+// 1. Wi-Fi numatytieji nustatymai
+const char *DEFAULT_WIFI_SSID = "2.4GHz";
+const char *DEFAULT_WIFI_PASSWORD = "37810200438";
 
-// const char *WIFI_SSID = "Nerijus’s iPhone";
-// const char *WIFI_PASSWORD = "kodas123";
+// 1b. Wi-Fi Access Point (AP) prieigos taško numatytieji nustatymai
+const char *DEFAULT_AP_SSID = "MeshPuller";
+const char *DEFAULT_AP_PASSWORD = ""; // Tuščias = atviras AP patogiam prisijungimui (arba pvz. "12345678")
+const unsigned long AP_WAIT_WINDOW_MS = 60 * 1000UL; // Paleidus laukiama 1 min., ar kas nors prisijungs prie AP konfigūravimui
 
-// 1b. Laiko juosta (Lietuvos laikas: EET/EEST, automatinis žiemos/vasaros
-// laikas)
+// 1c. Laiko juosta (Lietuvos laikas: EET/EEST, automatinis žiemos/vasaros laikas)
 const char *TIMEZONE_STRING = "EET-2EEST,M3.5.0/3,M10.5.0/4";
 
 // 2. API Endpoint
@@ -25,10 +28,8 @@ const char *API_ENDPOINT_RAW =
 const char *API_AUTH_KEY =
     ""; // Pvz.: "Bearer TAVO_TOKENAS" (jei nereikia - palikti "")
 
-// 2b. ESP32 Boto identifikatorius (3 ženklų kodas, pvz. "KLP", "VNO", "KAU")
-// Siunčiamas su kiekviena API užklausa, kad serveryje būtų galima atskirti, iš
-// kurio ESP32 atėjo paketas
-const char *BOT_ID = "KLP";
+// 2b. ESP32 Boto identifikatorius (numatytasis)
+const char *DEFAULT_BOT_ID = "KLP";
 
 // 3. Stebimo kartotuvo gavimo URL (iš kur prieš kiekvieną ciklą parsiunčiamas
 // 1 sekantis atnaujinamas kartotuvas pagal eilę)
@@ -57,66 +58,50 @@ enum WaitTarget {
   WAIT_TELEMETRY = 3
 };
 
-// Atsakymo laukimo laikas (milisekundėmis) po kiekvienos užklausos tiesioginiam
-// kartotuvui:
-const unsigned long REPEATER_REPLY_TIMEOUT_MS = 12000;
+// Numatytieji atsakymo laukimo laikai (milisekundėmis):
+const unsigned long DEFAULT_REPEATER_REPLY_TIMEOUT_MS = 12000;
+const unsigned long DEFAULT_REPEATER_REMOTE_REPLY_TIMEOUT_MS = 30000;
+const unsigned long DEFAULT_INTER_REQUEST_DELAY_MS = 10000;
+const unsigned long DEFAULT_REPEATER_COOLDOWN_MS = 10000;
 
-// Atsakymo laukimo laikas nutolusiems kartotuvams per kelis šuolius (multi-hop
-// / FLOOD): Būtina 25-35 s, nes paketas turi nukeliauti per 2-4 tarpinius
-// kartotuvus ir grįžti atgal
-const unsigned long REPEATER_REMOTE_REPLY_TIMEOUT_MS = 30000;
-
-// Pauzė (milisekundėmis) tarp atskirų užklausų laukimo (pvz. po status prieš
-// telemetriją):
-const unsigned long INTER_REQUEST_DELAY_MS = 10000;
-
-// Pauzė (milisekundėmis) tarp kartotuvų apklausos (po API išsiuntimo prieš
-// sekantį kartotuvą):
-const unsigned long REPEATER_COOLDOWN_MS = 10000;
-
-// ESP32 Mazgo Ed25519 Raktai (Mūsų tapatybė tinkle)
-const char *MY_SEED_HEX =
+// Numatytieji ESP32 Mazgo Ed25519 Raktai (Mūsų tapatybė tinkle)
+const char *DEFAULT_MY_SEED_HEX =
     "4a9232cb075ea937e5ff59e14eb89b595acfc82e9ccf4d7347372bff56393e09";
-const char *MY_PUBKEY_HEX =
+const char *DEFAULT_MY_PUBKEY_HEX =
     "0bbd84b028bdf755edd8f30c6f67839c3f81846c9f0079f377ea32a1e93410f3";
-const char *MY_PRVKEY_HEX =
+const char *DEFAULT_MY_PRVKEY_HEX =
     "4a9232cb075ea937e5ff59e14eb89b595acfc82e9ccf4d7347372bff56393e09"
     "0bbd84b028bdf755edd8f30c6f67839c3f81846c9f0079f377ea32a1e93410f3";
 
-// Užklausų ciklo periodiškumas (milisekundėmis): kas 1 valandą (3600000 ms)
-const unsigned long TELEMETRY_REQUEST_INTERVAL_MS = 60000;
+// Numatytasis užklausų ciklo periodiškumas (milisekundėmis): kas 1 minutę (60000 ms)
+const unsigned long DEFAULT_TELEMETRY_REQUEST_INTERVAL_MS = 60000;
 
 // ================================================================================
 // 🌐 MESHCORE MARŠRUTIZAVIMO IR KELIO NUSTATYMAI (ROUTING, PATH & SCOPE)
 // ================================================================================
+const uint8_t DEFAULT_PATH_HASH_BITS = 16; // 16 bitų (2 baitai)
+const bool DEFAULT_ENABLE_SCOPE = false;
+const char *DEFAULT_SCOPE_NAME = "lt";
+const uint16_t SCOPE_CODE_1 = 0x0000;
+const uint16_t SCOPE_CODE_2 = 0x0000;
 
-// 1. Mazgų kelio (Path) hash ilgis bitais:
-// Nurodo, kelių bitų (baitų) mazgo identifikatoriaus hash naudojamas paketo
-// maršrute:
-//   8  -> 1 baitas (8 bitai)  – MeshCore standartas (iki 254 unikalių ID)
-//   16 -> 2 baitai (16 bitų) – Rekomenduojama didesniuose tinkluose (mažiau
-//   kolizijų, 65536 ID) 24 -> 3 baitai (24 bitai) – Maksimalus tikslumas (16
-//   mln. ID)
-const uint8_t PATH_HASH_BITS = 16; // 16 bitų (2 baitai) – Standartas Lietuvos
-                                   // MeshCore tinkle (B9DD, 2BBD ir kt.)
-
-// 2. Regioninio Scope (potinklio / Scoped Flood) nustatymai:
-// Jei ENABLE_SCOPE = true:
-//   - Užklausų paketams naudojamas ROUTE_TYPE_TRANSPORT_FLOOD (vietoj FLOOD).
-//   - Prie paketo pridedami 4 baitų Transport kodai, todėl paketus
-//   retransliuoja TIK tie
-//     kartotuvai, kurie sukonfigūruoti tam pačiam Scope / Regionui (pvz.
-//     #Europe, vilnius ir t.t.).
-// Jei ENABLE_SCOPE = false:
-//   - Siunčiami įprasti unscoped paketai (visi pasiekiami kartotuvai).
-const bool ENABLE_SCOPE = false;
-const char *SCOPE_NAME = "lt"; // Scope/regiono tekstinis vardas (pvz.
-                               // "vilnius", "lithuania", "#Europe")
-const uint16_t SCOPE_CODE_1 =
-    0x0000; // Pasirinktinis transport kodas 1 (jei 0x0000 - apskaičiuojamas
-            // automatiškai iš SCOPE_NAME)
-const uint16_t SCOPE_CODE_2 =
-    0x0000; // Transport kodas 2 (rezervuotas / papildomas)
+// ================================================================================
+// 🚀 AKTYVŪS NUSTATYMAI (KINTAMIEJI, UŽKRAUNAMI IŠ NVS ARBA DEFAULT_*)
+// ================================================================================
+extern String WIFI_SSID;
+extern String WIFI_PASSWORD;
+extern String BOT_ID;
+extern unsigned long REPEATER_REPLY_TIMEOUT_MS;
+extern unsigned long REPEATER_REMOTE_REPLY_TIMEOUT_MS;
+extern unsigned long INTER_REQUEST_DELAY_MS;
+extern unsigned long REPEATER_COOLDOWN_MS;
+extern String MY_SEED_HEX;
+extern String MY_PUBKEY_HEX;
+extern String MY_PRVKEY_HEX;
+extern unsigned long TELEMETRY_REQUEST_INTERVAL_MS;
+extern uint8_t PATH_HASH_BITS;
+extern bool ENABLE_SCOPE;
+extern String SCOPE_NAME;
 
 // 4. Telemetrijos Duomenų Filtrai (Įjungti/Išjungti duomenų laukus iš siunčiamo
 // JSON)

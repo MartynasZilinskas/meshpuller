@@ -14,6 +14,7 @@
 #include <ArduinoJson.h>
 #include "config.h"
 #include "MeshCrypto.h"
+#include "WebConfigPortal.h"
 
 // ================================================================================
 // 📡 MESHCORE PROTOKOLO KONSTANTOS
@@ -189,6 +190,13 @@ void setup() {
   Serial.begin(115200);
   delay(1500);
 
+  // 0. Užkrauname nustatymus iš NVS atminties (arba paimame numatytuosius iš config.h)
+  initConfigNVS();
+
+  // 1. Inicijuojame Wi-Fi AP ('MeshPuller') ir laukiame 1 minutę, ar kas nors prisijungs
+  initWebConfigPortal();
+  waitForApClients(AP_WAIT_WINDOW_MS);
+
   Serial.println("\n========================================================");
   Serial.println("  Seeed Studio XIAO ESP32-S3 MeshCore Telemetry Bot");
   Serial.println("========================================================");
@@ -200,18 +208,18 @@ void setup() {
   Serial.printf("[Info] API Bazinis URL: %s\n", API_BASE_URL);
   Serial.printf("  * RAW trafiko endpoint:  %s%s (visi įrašai siunčiami čia ir apdorojami serveryje)\n", API_BASE_URL, API_ENDPOINT_RAW);
   Serial.printf("[Info] Mazgų kelio (Path) hash: %u bitai (%u baitai)\n", PATH_HASH_BITS, (unsigned int)(PATH_HASH_BITS / 8));
-  Serial.printf("[Info] ESP32 Boto Identifikatorius (BOT_ID): '%s'\n", BOT_ID);
+  Serial.printf("[Info] ESP32 Boto Identifikatorius (BOT_ID): '%s'\n", BOT_ID.c_str());
   if (ENABLE_SCOPE) {
     Serial.printf("[Info] Regioninis Scope: ĮJUNGTAS ('%s' -> Code1: 0x%04X, Code2: 0x%04X)\n",
-                  SCOPE_NAME, getScopeTransportCode1(), SCOPE_CODE_2);
+                  SCOPE_NAME.c_str(), getScopeTransportCode1(), SCOPE_CODE_2);
   } else {
     Serial.println("[Info] Regioninis Scope: IŠJUNGTAS (Unscoped flood)");
   }
 
-  // 1. Generuojame unikalų ESP32 mazgo raktą (tik save – kartotuvų raktai generuojami po JSON parsisiuntimo)
+  // 2. Generuojame unikalų ESP32 mazgo raktą (tik save – kartotuvų raktai generuojami po JSON parsisiuntimo)
   generateSelfIdentity();
 
-  // 2. Wi-Fi ryšys ir NTP laikas
+  // 3. Wi-Fi ryšys ir NTP laikas
   connectToWiFi();
   delay(200);
 
@@ -243,6 +251,9 @@ void setup() {
 // 🔄 MAIN LOOP
 // ================================================================================
 void loop() {
+  // Aptarnaujame Web konfigūracijos portalą
+  handleWebConfigPortal();
+
   // 1. Klausomės eterio (jei kartotuvas atsiunčia paketą, pvz. ADVERT)
   if (receivedFlag) {
     receivedFlag = false;
@@ -279,7 +290,8 @@ void yieldDelay(unsigned long ms) {
       processIncomingPacket(0);
       radio.startReceive();
     }
-    delay(15);
+    handleWebConfigPortal();
+    delay(10);
   }
 }
 
@@ -468,10 +480,10 @@ void initLoRa() {
 // 🔑 ESP32 IDENTITETO GENERAVIMAS IR KRIPTOGRAFINIS RYŠYS
 // ================================================================================
 void generateSelfIdentity() {
-  // Užkrauname vartotojo nurodytus ESP32 Ed25519 raktus iš config.h
+  // Užkrauname vartotojo nurodytus ESP32 Ed25519 raktus iš nustatymų
   uint8_t seed[SEED_SIZE];
   size_t seedLen = 0;
-  if (hexStringToBytes(MY_SEED_HEX, seed, SEED_SIZE, seedLen) && seedLen == SEED_SIZE) {
+  if (hexStringToBytes(MY_SEED_HEX.c_str(), seed, SEED_SIZE, seedLen) && seedLen == SEED_SIZE) {
     MeshCrypto::generateKeypair(myPublicKey, myPrivateKey, seed);
   } else {
     uint8_t mac[6];
@@ -480,6 +492,8 @@ void generateSelfIdentity() {
     MeshCrypto::generateKeypair(myPublicKey, myPrivateKey, seed);
   }
   myNodeHash = myPublicKey[0];
+  MY_PUBKEY_HEX = bytesToHexString(myPublicKey, PUB_KEY_SIZE);
+  MY_PRVKEY_HEX = bytesToHexString(myPrivateKey, PRV_KEY_SIZE);
 
   Serial.println("\n[MeshCore Kriptografija - Mūsų Tapatybė]");
   Serial.printf("  * Mūsų ESP32 Mazgo Hash: %02X\n", myNodeHash);
@@ -626,11 +640,11 @@ uint8_t getPathLengthByte(uint8_t hops) {
 // Apskaičiuoja 16 bitų Transport Code 1 iš SCOPE_NAME (arba grąžina fiksuotą SCOPE_CODE_1)
 uint16_t getScopeTransportCode1() {
   if (SCOPE_CODE_1 != 0x0000) return SCOPE_CODE_1;
-  if (SCOPE_NAME == nullptr || strlen(SCOPE_NAME) == 0) return 0x0000;
+  if (SCOPE_NAME.length() == 0) return 0x0000;
   uint8_t hash[32];
   const mbedtls_md_info_t* mdInfo = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
   if (mdInfo != nullptr) {
-    mbedtls_md(mdInfo, (const unsigned char*)SCOPE_NAME, strlen(SCOPE_NAME), hash);
+    mbedtls_md(mdInfo, (const unsigned char*)SCOPE_NAME.c_str(), SCOPE_NAME.length(), hash);
     return (uint16_t)(hash[0] | (hash[1] << 8));
   }
   return 0x0000;
@@ -1109,7 +1123,11 @@ void scanWiFiNetworks() {
   Serial.println("\n========================================================");
   Serial.println("[Wi-Fi Skenavimas] Ieškoma pasiekiamų Wi-Fi tinklų...");
   Serial.println("========================================================");
-  WiFi.mode(WIFI_STA);
+  if (!isWebConfigAPActive()) {
+    WiFi.mode(WIFI_STA);
+  } else {
+    WiFi.mode(WIFI_AP_STA);
+  }
   WiFi.disconnect();
   delay(100);
 
@@ -1149,21 +1167,21 @@ void connectToWiFi() {
   // Prieš jungiantis nuskaitome ir išvedame pasiekiamų Wi-Fi tinklų sąrašą
   scanWiFiNetworks();
 
-  // Pilnai atjungiame ir išvalome ankstesnę būseną (išvengiama "wifi:sta is connecting" klaidos)
-  WiFi.disconnect(true, true);
-  delay(300);
+  // Atjungiame stotį (STA), bet išlaikome AP režimą (WIFI_AP_STA)
+  WiFi.disconnect(false);
+  delay(200);
 
-  Serial.printf("\n[Wi-Fi] Jungiamasi prie tinklo '%s'...", WIFI_SSID);
-  WiFi.mode(WIFI_STA);
+  Serial.printf("\n[Wi-Fi] Jungiamasi prie tinklo '%s'...", WIFI_SSID.c_str());
   WiFi.setSleep(false); // Užtikrina stabilų ryšį su iPhone Hotspot
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.begin(WIFI_SSID.c_str(), WIFI_PASSWORD.c_str());
 
   // iPhone Hotspot gali užtrukti ilgiau išduodant IP (laukiama iki 20 sekundžių)
   int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+  while (WiFi.status() != WL_CONNECTED && attempts < 30) {
     delay(500);
     Serial.print(".");
     attempts++;
+    handleWebConfigPortal();
   }
 
   if (WiFi.status() == WL_CONNECTED) {
@@ -1281,23 +1299,7 @@ void sendToAPI(const JsonDocument& doc) {
 // 🛠️ PAGALBINĖS FUNKCIJOS
 // ================================================================================
 
-// Hex eilutės konvertavimas į baitų masyvą
-bool hexStringToBytes(const char* hexStr, uint8_t* outBytes, size_t maxLen, size_t &outLen) {
-  if (hexStr == nullptr) return false;
-  if (strncmp(hexStr, "0x", 2) == 0 || strncmp(hexStr, "0X", 2) == 0) {
-    hexStr += 2;
-  }
 
-  size_t hexLen = strlen(hexStr);
-  if (hexLen % 2 != 0 || (hexLen / 2) > maxLen) return false;
-
-  outLen = hexLen / 2;
-  for (size_t i = 0; i < outLen; i++) {
-    char byteStr[3] = { hexStr[i * 2], hexStr[i * 2 + 1], '\0' };
-    outBytes[i] = (uint8_t)strtoul(byteStr, nullptr, 16);
-  }
-  return true;
-}
 
 // Baitų masyvo spausdinimas heksadecimaliu formatu į Serial
 void printHexBuffer(const uint8_t* buf, size_t len) {
