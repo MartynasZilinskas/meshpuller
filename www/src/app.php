@@ -70,6 +70,14 @@ $isSingleRepeaterEndpoint = (
     in_array(basename($_SERVER['SCRIPT_FILENAME'] ?? ''), ['repeater.php', 'repyter.php'])
 );
 
+// Nustatome ar kreipiamasi į /api/telemetry arba /telemetry endpointą (telemetrijos istorija grafikams)
+$isTelemetryEndpoint = (
+    preg_match('#/(api/)?telemetry(\.php)?$#', $path) || 
+    (isset($_GET['endpoint']) && $_GET['endpoint'] === 'telemetry') ||
+    (isset($_GET['action']) && $_GET['action'] === 'telemetry') ||
+    basename($_SERVER['SCRIPT_FILENAME'] ?? '') === 'telemetry.php'
+);
+
 // -----------------------------------------------------------------------------
 // 📡 ENDPOINT: GET /api/api/repeater (arba /api/repeater)
 // Grąžina TIK 1 kartotuvą pagal requested_date prioritetą (tuščia data -> seniausia data)
@@ -80,7 +88,7 @@ $isSingleRepeaterEndpoint = (
 //   "public_id": "b9ddd788b7a59eab40eaa49a2534fa9e7fc0ef7d920ef4811139998cddd631db",
 //   "password": "hello",
 //   "isDirect": false,
-//   "status": true,
+//   "status": false,
 //   "telemetry": true,
 //   "requested_date": "2026-10-02 19:20:00"
 // }
@@ -126,6 +134,9 @@ if ($isSingleRepeaterEndpoint) {
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
         exit;
     }
+
+    // Priverstinai nustatome status: false, kad ESP32 botas siųstų TIK telemetrijos užklausą (be GET_STATUS)
+    $repeater['status'] = false;
 
     // Jei klientas paprašo formato kaip masyvo per ?format=array:
     $wantsArray = (isset($_GET['format']) && strtolower($_GET['format']) === 'array');
@@ -230,14 +241,68 @@ if ($isNodesEndpoint) {
     }
 
     echo json_encode([
-        'success'         => true,
-        'endpoint'        => '/api/nodes',
-        'filter'          => $all ? 'all_nodes' : 'repeaters_only',
-        'telemetry_only'  => $telemetryOnly,
-        'count'           => count($repeaters),
-        'repeaters'       => $repeaters,
-        'nodes'           => $repeaters,
-        'timestamp'       => date('Y-m-d H:i:s'),
+        'success'              => true,
+        'endpoint'             => '/api/nodes',
+        'filter'               => $all ? 'all_nodes' : 'repeaters_only',
+        'telemetry_only'       => $telemetryOnly,
+        'telemetry_chart_days' => $repository ? (int)$repository->getSetting('telemetry_chart_days', 7) : 7,
+        'count'                => count($repeaters),
+        'repeaters'            => $repeaters,
+        'nodes'                => $repeaters,
+        'timestamp'            => date('Y-m-d H:i:s'),
+    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// -----------------------------------------------------------------------------
+// 📈 ENDPOINT: GET /api/telemetry (arba /telemetry)
+// Grąžina mazgo telemetrijos istoriją (temperatūrą ir baterijos įtampą/srovę) grafikams.
+// Parametrai:
+//   node_id (arba node, public_key) - mazgo identifikatorius
+//   days - dienų skaičius (numatytai: 'telemetry_chart_days' nustatymas, pvz. 7)
+// -----------------------------------------------------------------------------
+if ($isTelemetryEndpoint) {
+    if ($method !== 'GET') {
+        http_response_code(405);
+        echo json_encode([
+            'success' => false,
+            'error'   => 'Metodas nepalaikomas. /api/telemetry priima tik GET užklausas.'
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if (!$dbConnected || !$repository) {
+        http_response_code(500);
+        echo json_encode([
+            'success' => false,
+            'error'   => 'Duomenų bazė nepasiekiama: ' . $dbError
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $nodeId = $_GET['node_id'] ?? ($_GET['node'] ?? ($_GET['public_key'] ?? null));
+    $days = (isset($_GET['days']) && is_numeric($_GET['days'])) ? (int)$_GET['days'] : null;
+
+    if (empty($nodeId)) {
+        // Bendras filtruotas telemetrijos sąrašas
+        $limit = max(1, min(500, (int)($_GET['limit'] ?? 50)));
+        $offset = max(0, (int)($_GET['offset'] ?? 0));
+        $result = $repository->getFilteredTelemetry([], $limit, $offset);
+        echo json_encode(array_merge(['success' => true], $result), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $history = $repository->getNodeTelemetryHistory((string)$nodeId, $days);
+
+    echo json_encode([
+        'success'              => true,
+        'endpoint'             => '/api/telemetry',
+        'node_id'              => (string)$nodeId,
+        'days'                 => $history['days'],
+        'telemetry_chart_days' => $history['days'],
+        'count'                => count($history['records']),
+        'records'              => $history['records'],
+        'timestamp'            => date('Y-m-d H:i:s'),
     ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
     exit;
 }

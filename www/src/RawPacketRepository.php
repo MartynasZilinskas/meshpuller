@@ -2061,7 +2061,7 @@ SQL;
                             'public_id' => $pubId,
                             'password'  => $password,
                             'isDirect'  => false,
-                            'status'    => true,
+                            'status'    => false,
                             'telemetry' => true,
                             'bot_id'    => $row['bot_id'] ?? null,
                         ];
@@ -2143,7 +2143,7 @@ SQL;
                     'public_id' => 'b9ddd788b7a59eab40eaa49a2534fa9e7fc0ef7d920ef4811139998cddd631db',
                     'password'  => '',
                     'isDirect'  => false,
-                    'status'    => true,
+                    'status'    => false,
                     'telemetry' => true,
                 ],
                 [
@@ -2151,7 +2151,7 @@ SQL;
                     'public_id' => '1bbd45c1ae2b2241ae997f0723066461bc8b0283abeee165d67ef9b35e9afb64',
                     'password'  => '',
                     'isDirect'  => false,
-                    'status'    => true,
+                    'status'    => false,
                     'telemetry' => true,
                 ],
                 [
@@ -2159,7 +2159,7 @@ SQL;
                     'public_id' => 'f9f86539d970c347818e4e6c8da7e9181b0fc502b9b3ee1a2f7b4358a352a38c',
                     'password'  => '',
                     'isDirect'  => false,
-                    'status'    => true,
+                    'status'    => false,
                     'telemetry' => true,
                 ]
             ];
@@ -2307,7 +2307,7 @@ SQL;
                         'public_id'            => $pubId,
                         'password'             => $password,
                         'isDirect'             => false,
-                        'status'               => true,
+                        'status'               => false,
                         'telemetry'            => true,
                         'bot_id'               => $row['bot_id'] ?? null,
                         'requested_date'       => $row['requested_date'] ?? date('Y-m-d H:i:s'),
@@ -2384,7 +2384,7 @@ SQL;
                     'public_id'            => $pubId,
                     'password'             => $password,
                     'isDirect'             => false,
-                    'status'               => true,
+                    'status'               => false,
                     'telemetry'            => true,
                     'bot_id'               => $row['bot_id'] ?? null,
                     'requested_date'       => $now,
@@ -2960,6 +2960,102 @@ SQL;
             'total' => $totalCount,
             'limit' => $limit,
             'offset' => $offset,
+            'records' => $records
+        ];
+    }
+
+    /**
+     * Grąžina konkretaus mazgo telemetrijos istoriją (temperatūrą ir baterijos įtampą/srovę) grafikui.
+     * Laikotarpis nustatomas dienomis (jei nenurodyta, imamas iš sistemos nustatymo 'telemetry_chart_days', numatytai 7 d.).
+     */
+    public function getNodeTelemetryHistory(string $nodeIdentifier, ?int $days = null): array
+    {
+        if (!$this->pdo) {
+            return ['days' => 7, 'records' => []];
+        }
+
+        $chartDays = ($days !== null && $days > 0) ? min(365, $days) : (int)$this->getSetting('telemetry_chart_days', 7);
+        if ($chartDays <= 0) {
+            $chartDays = 7;
+        }
+
+        $clean = trim(strtolower($nodeIdentifier));
+        $resolvedNodeId = $clean;
+        $resolvedPubKey = $clean;
+
+        // Bandome išsiaiškinti pilną mazgo tapatybę iš 'nodes' lentelės
+        try {
+            $nStmt = $this->pdo->prepare("SELECT node_id, public_key, node_name FROM nodes WHERE LOWER(node_id) = :id1 OR LOWER(public_key) = :id2 OR LOWER(public_key) LIKE :id3 OR LOWER(node_name) = :id4 LIMIT 1");
+            $nStmt->execute([
+                ':id1' => $clean,
+                ':id2' => $clean,
+                ':id3' => $clean . '%',
+                ':id4' => $clean,
+            ]);
+            $nodeRow = $nStmt->fetch(\PDO::FETCH_ASSOC);
+            if ($nodeRow) {
+                if (!empty($nodeRow['node_id'])) $resolvedNodeId = strtolower($nodeRow['node_id']);
+                if (!empty($nodeRow['public_key'])) $resolvedPubKey = strtolower($nodeRow['public_key']);
+            }
+        } catch (\Throwable $e) {}
+
+        $fromDate = date('Y-m-d H:i:s', strtotime("-{$chartDays} days"));
+
+        $sql = "SELECT recorded_at, battery_v, battery_mv, temperature_c 
+                FROM telemetry 
+                WHERE (LOWER(node_id) = :nid OR LOWER(public_key) = :pkey OR LOWER(node_id) = :pkey_prefix)
+                  AND recorded_at >= :from_date
+                  AND (battery_v IS NOT NULL OR battery_mv IS NOT NULL OR temperature_c IS NOT NULL)
+                ORDER BY recorded_at ASC 
+                LIMIT 2000";
+
+        $records = [];
+        $tz = new \DateTimeZone('Europe/Vilnius');
+
+        try {
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute([
+                ':nid'         => $resolvedNodeId,
+                ':pkey'        => $resolvedPubKey,
+                ':pkey_prefix' => substr($resolvedPubKey, 0, 4),
+                ':from_date'   => $fromDate,
+            ]);
+            $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC) ?: [];
+
+            foreach ($rows as $r) {
+                $rawDate = $r['recorded_at'];
+                $timeFormatted = $rawDate;
+                $timeShort = $rawDate;
+                $iso = $rawDate;
+
+                try {
+                    $dt = new \DateTime($rawDate, $tz);
+                    $dt->setTimezone($tz);
+                    $timeFormatted = $dt->format('Y-m-d H:i');
+                    $timeShort = $dt->format('m-d H:i');
+                    $iso = $dt->format(\DateTimeInterface::ATOM);
+                } catch (\Throwable $e) {}
+
+                $battV = ($r['battery_v'] !== null) 
+                    ? (float)$r['battery_v'] 
+                    : (($r['battery_mv'] !== null) ? round(((int)$r['battery_mv']) / 1000.0, 2) : null);
+
+                $tempC = ($r['temperature_c'] !== null) ? (float)$r['temperature_c'] : null;
+
+                $records[] = [
+                    'time'          => $timeFormatted,
+                    'time_short'    => $timeShort,
+                    'iso'           => $iso,
+                    'battery_v'     => $battV,
+                    'temperature_c' => $tempC,
+                ];
+            }
+        } catch (\Throwable $e) {
+            return ['days' => $chartDays, 'records' => [], 'error' => $e->getMessage()];
+        }
+
+        return [
+            'days'    => $chartDays,
             'records' => $records
         ];
     }

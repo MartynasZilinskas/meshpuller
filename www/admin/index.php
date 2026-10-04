@@ -1201,6 +1201,24 @@ $isLoggedIn = isAdminLoggedIn();
                             <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
                                 <div style="max-width: 580px;">
                                     <div style="font-size: 0.95rem; font-weight: 600; color: #ffffff;">
+                                        Statistikos grafiko periodas žemėlapyje
+                                    </div>
+                                    <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
+                                        Kelių dienų temperatūros ir elektros įtampos/srovės kitimo kreivė atvaizduojama žemėlapyje paspaudus ant mazgo kortelės.
+                                        <br><span style="color: var(--accent-cyan);">Numatyta reikšmė: <b>7</b> d. (savaitės statistika). Galite nurodyti pvz. 1, 3, 7, 14 ar 30 dienų.</span>
+                                    </div>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="number" min="1" max="365" step="1" id="settingTelemetryChartDays" class="form-control" style="width: 100px; font-weight: 700; text-align: center; font-size: 1rem;" placeholder="7" required>
+                                    <span style="font-size: 0.82rem; color: var(--text-muted);">d.</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 16px; margin-bottom: 20px;">
+                            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
+                                <div style="max-width: 580px;">
+                                    <div style="font-size: 0.95rem; font-weight: 600; color: #ffffff;">
                                         Maksimalus nesėkmingų bandymų (fail) limitas
                                     </div>
                                     <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
@@ -2407,6 +2425,8 @@ $isLoggedIn = isAdminLoggedIn();
             tbody.innerHTML = list.map(item => {
                 const isBlocked = !!item.is_blocked;
                 const isRateLimited = !!item.is_rate_limited && !isBlocked;
+                const failCount = parseInt(item.telemetry_fail_count || 0, 10);
+                const maxFails = parseInt(item.max_telemetry_fails || 20, 10);
                 const isNext = (!isBlocked && !isRateLimited && item.queue_pos === 1);
                 const posBadgeClass = isBlocked ? 'badge-red' : (isRateLimited ? 'badge-amber' : (isNext ? 'badge-green' : (item.queue_pos <= 3 ? 'badge-cyan' : 'badge-gray')));
                 const posLabel = isBlocked ? '⛔' : (isRateLimited ? '⏳' : `#${item.queue_pos}`);
@@ -2421,8 +2441,6 @@ $isLoggedIn = isAdminLoggedIn();
                 const idStr = escapeHtml((item.node_id || '').toUpperCase());
                 const keyShort = item.public_key ? escapeHtml(item.public_key.substring(0, 10)) + '...' : '-';
                 const isMonitored = item.update;
-                const failCount = parseInt(item.telemetry_fail_count || 0, 10);
-                const maxFails = parseInt(item.max_telemetry_fails || 20, 10);
 
                 // Šaltinis
                 const botStr = escapeHtml(item.bot_id || 'KLP');
@@ -2943,6 +2961,7 @@ $isLoggedIn = isAdminLoggedIn();
                 const lonMaxEl = document.getElementById('settingLtLonMax');
                 const maxFailsEl = document.getElementById('settingMaxTelemetryFails');
                 const minIntervalEl = document.getElementById('settingMinTelemetryIntervalMins');
+                const chartDaysEl = document.getElementById('settingTelemetryChartDays');
 
                 if (enabledEl) enabledEl.checked = !!currentSettings.filter_lithuania_enabled;
                 if (noCoordsEl) noCoordsEl.checked = !!currentSettings.filter_lithuania_include_no_coords;
@@ -2952,6 +2971,7 @@ $isLoggedIn = isAdminLoggedIn();
                 if (lonMaxEl) lonMaxEl.value = currentSettings.lithuania_lon_max ?? 26.8500;
                 if (maxFailsEl) maxFailsEl.value = currentSettings.max_telemetry_fails ?? 20;
                 if (minIntervalEl) minIntervalEl.value = currentSettings.min_telemetry_interval_mins ?? 60;
+                if (chartDaysEl) chartDaysEl.value = currentSettings.telemetry_chart_days ?? 7;
 
                 const autoAddRepEl = document.getElementById('settingAutoAddNewRepeaters');
                 if (autoAddRepEl) autoAddRepEl.checked = !!currentSettings.auto_add_new_repeaters;
@@ -3020,6 +3040,7 @@ $isLoggedIn = isAdminLoggedIn();
                     lithuania_lon_max: parseFloat(document.getElementById('settingLtLonMax').value),
                     max_telemetry_fails: parseInt(document.getElementById('settingMaxTelemetryFails')?.value || '20', 10),
                     min_telemetry_interval_mins: parseInt(document.getElementById('settingMinTelemetryIntervalMins')?.value || '60', 10),
+                    telemetry_chart_days: parseInt(document.getElementById('settingTelemetryChartDays')?.value || '7', 10),
                     auto_add_new_repeaters: document.getElementById('settingAutoAddNewRepeaters')?.checked ?? false
                 };
 

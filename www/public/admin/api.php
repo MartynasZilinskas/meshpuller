@@ -195,6 +195,9 @@ if ($action === 'save_settings') {
         if (isset($data['min_telemetry_interval_mins']) && is_numeric($data['min_telemetry_interval_mins'])) {
             $newSettings['min_telemetry_interval_mins'] = max(0, (int)$data['min_telemetry_interval_mins']);
         }
+        if (isset($data['telemetry_chart_days']) && is_numeric($data['telemetry_chart_days'])) {
+            $newSettings['telemetry_chart_days'] = max(1, min(365, (int)$data['telemetry_chart_days']));
+        }
         if (isset($data['auto_add_new_repeaters'])) {
             $newSettings['auto_add_new_repeaters'] = ($data['auto_add_new_repeaters'] === true || $data['auto_add_new_repeaters'] === '1' || $data['auto_add_new_repeaters'] === 1);
         }

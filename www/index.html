@@ -757,8 +757,9 @@
         }
 
         .popup-card {
-            min-width: 240px;
-            padding: 8px 6px;
+            width: 320px;
+            max-width: calc(100vw - 44px);
+            padding: 4px 2px;
             font-family: var(--font-sans);
         }
 
@@ -773,27 +774,27 @@
             font-family: var(--font-mono);
             font-size: 0.72rem;
             color: var(--accent-cyan);
-            margin-bottom: 10px;
+            margin-bottom: 8px;
         }
 
         .popup-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 8px;
-            margin-bottom: 12px;
+            margin-bottom: 8px;
         }
 
         .popup-stat {
             background: #1e1e1e;
             border: 1px solid var(--border-color);
             border-radius: var(--radius-sm);
-            padding: 8px;
+            padding: 6px 8px;
             text-align: center;
         }
 
         .popup-stat-val {
             font-family: var(--font-mono);
-            font-size: 0.98rem;
+            font-size: 0.95rem;
             font-weight: 700;
         }
 
@@ -804,11 +805,20 @@
             margin-top: 2px;
         }
 
+        .popup-chart-box {
+            margin-top: 6px;
+            border-top: 1px solid var(--border-color);
+            padding-top: 8px;
+            background: rgba(0, 0, 0, 0.22);
+            border-radius: var(--radius-sm);
+            padding: 8px 6px;
+        }
+
         .popup-footer {
             font-size: 0.70rem;
             color: var(--text-dim);
             border-top: 1px solid var(--border-color);
-            padding-top: 8px;
+            padding-top: 6px;
             display: flex;
             justify-content: space-between;
         }
@@ -1431,16 +1441,19 @@
                 <!-- Detalios informacijos sąrašas -->
                 <div class="sheet-details-list">
                     <div class="sheet-detail-item">
-                        <span class="detail-label">📍 Koordinatės</span>
-                        <span class="detail-value" id="sheetCoordsVal">55.703, 21.144</span>
-                    </div>
-                    <div class="sheet-detail-item">
-                        <span class="detail-label">⏱️ Telemetrija</span>
+                        <span class="detail-label">⏱️ Paskutinė telemetrija</span>
                         <span class="detail-value highlight" id="sheetTelemVal">prieš 2 min.</span>
                     </div>
-                    <div class="sheet-detail-item">
-                        <span class="detail-label">📡 Paskutinį kartą matytas</span>
-                        <span class="detail-value" id="sheetLastSeenVal">prieš 5 min.</span>
+                </div>
+
+                <!-- Telemetrijos grafikas mobiliajame skydelyje -->
+                <div class="sheet-chart-box" style="margin-top: 14px; background: rgba(0, 0, 0, 0.25); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 12px 10px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px;">
+                        <span style="font-size: 0.82rem; font-weight: 600; color: #ffffff;" id="sheetChartTitle">📈 Savaitės statistikos grafikas</span>
+                        <span style="font-size: 0.70rem; color: var(--text-dim);" id="sheetChartSub">Kraunama...</span>
+                    </div>
+                    <div style="position: relative; height: 160px; width: 100%;">
+                        <canvas id="sheetTelemetryChart"></canvas>
                     </div>
                 </div>
 
@@ -1459,6 +1472,8 @@
 
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 
     <script>
         let repeaters = [];
@@ -1468,6 +1483,223 @@
         let markersMap = {}; // node_id -> leaflet marker
         let currentMobileView = 'map'; // 'map' arba 'list'
         let selectedMobileNode = null; // aktyvus mazgas mobiliam bottom sheet
+        let telemetryChartDays = 7;
+        const activeCharts = {};
+
+        function destroyChart(canvasId) {
+            if (activeCharts[canvasId]) {
+                try {
+                    activeCharts[canvasId].destroy();
+                } catch (e) {}
+                delete activeCharts[canvasId];
+            }
+        }
+
+        async function loadAndRenderNodeChart(canvasId, subId, nodeId, days) {
+            const canvas = document.getElementById(canvasId);
+            const sub = document.getElementById(subId);
+            if (!canvas) return;
+
+            destroyChart(canvasId);
+
+            if (sub) {
+                sub.innerText = 'Kraunama...';
+                sub.style.color = 'var(--text-dim)';
+            }
+
+            try {
+                const chartPeriodDays = days || telemetryChartDays || 7;
+                const endpoints = [
+                    `/api/telemetry?node_id=${encodeURIComponent(nodeId)}&days=${chartPeriodDays}&_t=${Date.now()}`,
+                    `/telemetry.php?node_id=${encodeURIComponent(nodeId)}&days=${chartPeriodDays}&_t=${Date.now()}`,
+                    `api/telemetry?node_id=${encodeURIComponent(nodeId)}&days=${chartPeriodDays}&_t=${Date.now()}`
+                ];
+
+                let data = null;
+                for (const url of endpoints) {
+                    try {
+                        const res = await fetch(url, { cache: 'no-store' });
+                        if (res.ok) {
+                            data = await res.json();
+                            break;
+                        }
+                    } catch (e) {}
+                }
+
+                if (!data || !data.records || data.records.length === 0) {
+                    if (sub) {
+                        sub.innerText = 'Nėra duomenų';
+                        sub.style.color = 'var(--text-dim)';
+                    }
+                    const ctx = canvas.getContext('2d');
+                    if (ctx) {
+                        ctx.clearRect(0, 0, canvas.width, canvas.height);
+                        ctx.font = '11px sans-serif';
+                        ctx.fillStyle = '#777777';
+                        ctx.textAlign = 'center';
+                        ctx.fillText('Nėra telemetrijos istorijos šiam periodui', canvas.width / 2, canvas.height / 2);
+                    }
+                    return;
+                }
+
+                const records = data.records;
+                if (sub) {
+                    sub.innerText = `${records.length} įr. (${chartPeriodDays} d.)`;
+                    sub.style.color = 'var(--accent-cyan)';
+                }
+
+                const labels = records.map(r => r.time_short || r.time);
+                const tempData = records.map(r => r.temperature_c);
+                const voltData = records.map(r => r.battery_v);
+
+                const hasTemp = tempData.some(v => v !== null && v !== undefined);
+                const hasVolt = voltData.some(v => v !== null && v !== undefined);
+
+                const datasets = [];
+
+                if (hasTemp) {
+                    datasets.push({
+                        label: 'Temperatūra (°C)',
+                        data: tempData,
+                        borderColor: '#00d2ff',
+                        backgroundColor: 'rgba(0, 210, 255, 0.12)',
+                        borderWidth: 2,
+                        pointRadius: records.length > 30 ? 0 : 2,
+                        pointHoverRadius: 5,
+                        pointBackgroundColor: '#00d2ff',
+                        tension: 0.25,
+                        fill: false,
+                        yAxisID: 'yTemp'
+                    });
+                }
+
+                if (hasVolt) {
+                    datasets.push({
+                        label: 'Įtampa / srovė (V)',
+                        data: voltData,
+                        borderColor: '#2ed573',
+                        backgroundColor: 'rgba(46, 213, 115, 0.12)',
+                        borderWidth: 2,
+                        pointRadius: records.length > 30 ? 0 : 2,
+                        pointHoverRadius: 5,
+                        pointBackgroundColor: '#2ed573',
+                        tension: 0.25,
+                        fill: false,
+                        yAxisID: 'yVolt'
+                    });
+                }
+
+                if (datasets.length === 0) {
+                    if (sub) sub.innerText = 'Trūksta rodmenų';
+                    return;
+                }
+
+                const ctx = canvas.getContext('2d');
+                activeCharts[canvasId] = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: datasets
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        animation: { duration: 300 },
+                        interaction: {
+                            mode: 'index',
+                            intersect: false
+                        },
+                        plugins: {
+                            legend: {
+                                display: true,
+                                position: 'top',
+                                align: 'end',
+                                labels: {
+                                    boxWidth: 8,
+                                    boxHeight: 8,
+                                    color: '#cccccc',
+                                    font: { size: 10, family: 'sans-serif' },
+                                    padding: 6
+                                }
+                            },
+                            tooltip: {
+                                backgroundColor: '#252525',
+                                titleColor: '#ffffff',
+                                bodyColor: '#e0e0e0',
+                                borderColor: '#444444',
+                                borderWidth: 1,
+                                padding: 8,
+                                displayColors: true,
+                                callbacks: {
+                                    title: function(items) {
+                                        if (!items || !items.length) return '';
+                                        const idx = items[0].dataIndex;
+                                        return records[idx] ? records[idx].time : items[0].label;
+                                    },
+                                    label: function(context) {
+                                        let label = context.dataset.label || '';
+                                        if (label) label += ': ';
+                                        if (context.parsed.y !== null) {
+                                            label += (context.dataset.yAxisID === 'yTemp')
+                                                ? context.parsed.y.toFixed(1) + ' °C'
+                                                : context.parsed.y.toFixed(2) + ' V';
+                                        }
+                                        return label;
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                ticks: {
+                                    color: '#888888',
+                                    maxTicksLimit: 5,
+                                    font: { size: 9, family: 'monospace' }
+                                },
+                                grid: {
+                                    color: 'rgba(255, 255, 255, 0.05)'
+                                }
+                            },
+                            yTemp: {
+                                type: 'linear',
+                                display: hasTemp,
+                                position: 'left',
+                                title: { display: false },
+                                ticks: {
+                                    color: '#00d2ff',
+                                    font: { size: 9, family: 'monospace' },
+                                    callback: function(v) { return v + '°'; }
+                                },
+                                grid: {
+                                    color: 'rgba(255, 255, 255, 0.05)'
+                                }
+                            },
+                            yVolt: {
+                                type: 'linear',
+                                display: hasVolt,
+                                position: 'right',
+                                title: { display: false },
+                                ticks: {
+                                    color: '#2ed573',
+                                    font: { size: 9, family: 'monospace' },
+                                    callback: function(v) { return v.toFixed(1) + 'V'; }
+                                },
+                                grid: {
+                                    drawOnChartArea: false
+                                }
+                            }
+                        }
+                    }
+                });
+
+            } catch (err) {
+                console.error('Klaida piešiant telemetrijos grafiką:', err);
+                if (sub) {
+                    sub.innerText = 'Klaida';
+                    sub.style.color = 'var(--accent-red)';
+                }
+            }
+        }
 
         // Mazgo telemetrijos tikrinimas: ar turi realius baterijos arba temperatūros rodmenis
         function hasNodeTelemetry(node) {
@@ -1626,20 +1858,27 @@
             tempEl.style.color = 'var(--accent-cyan)';
             document.getElementById('sheetTempSub').innerText = telemTime ? `Atnaujinta: ${formatRelativeTime(telemTime)}` : 'Nėra duomenų';
 
-            document.getElementById('sheetCoordsVal').innerText = hasValidCoords ? `${parseFloat(lat).toFixed(5)}, ${parseFloat(lon).toFixed(5)}` : 'Nėra koordinačių';
-            document.getElementById('sheetTelemVal').innerText = telemTime ? `${formatRelativeTime(telemTime)} (${formatLithuanianTime(telemTime)})` : 'Nėra telemetrijos';
-            document.getElementById('sheetLastSeenVal').innerText = lastSeen ? `${formatRelativeTime(lastSeen)} (${formatLithuanianDateTime(lastSeen)})` : 'Nematytas';
+            const telemValEl = document.getElementById('sheetTelemVal');
+            if (telemValEl) {
+                telemValEl.innerText = telemTime ? `${formatRelativeTime(telemTime)} (${formatLithuanianTime(telemTime)})` : 'Nėra telemetrijos';
+            }
 
             const navBtn = document.getElementById('sheetNavBtn');
             if (navBtn) {
                 navBtn.style.display = hasValidCoords ? 'flex' : 'none';
             }
 
+            const chartTitleEl = document.getElementById('sheetChartTitle');
+            if (chartTitleEl) chartTitleEl.innerText = `📈 ${telemetryChartDays} d. statistikos grafikas`;
+
+            loadAndRenderNodeChart('sheetTelemetryChart', 'sheetChartSub', nodeId, telemetryChartDays);
+
             const sheet = document.getElementById('mobileInfoSheet');
             if (sheet) sheet.classList.add('active');
         }
 
         function closeMobileSheet() {
+            destroyChart('sheetTelemetryChart');
             const sheet = document.getElementById('mobileInfoSheet');
             if (sheet) sheet.classList.remove('active');
         }
@@ -1734,6 +1973,9 @@
                 }
 
                 if (response && (response.repeaters || response.nodes)) {
+                    if (response.telemetry_chart_days) {
+                        telemetryChartDays = parseInt(response.telemetry_chart_days, 10);
+                    }
                     const rawList = response.repeaters || response.nodes || [];
                     if (!hideNoTelemetry) {
                         allLoadedNodes = rawList;
@@ -1942,7 +2184,7 @@
                                     <div class="popup-stat-val" style="color: ${battStyle.class === 'crit' ? '#ef4444' : '#10b981'};">
                                         ${battV !== null ? parseFloat(battV).toFixed(2) + ' V' : 'N/A'}
                                     </div>
-                                    <div class="popup-stat-lbl">🔋 Baterija</div>
+                                    <div class="popup-stat-lbl">🔋 Srovė / Įtampa</div>
                                 </div>
                                 <div class="popup-stat">
                                     <div class="popup-stat-val" style="color: var(--accent-cyan);">
@@ -1952,13 +2194,20 @@
                                 </div>
                             </div>
 
-                            <div class="popup-footer" style="flex-direction: column; gap: 5px; align-items: stretch;">
-                                <div style="display:flex; justify-content:space-between; align-items:center;">
-                                    <span>📍 ${parseFloat(lat).toFixed(5)}, ${parseFloat(lon).toFixed(5)}</span>
-                                    <span title="${formatLithuanianDateTime(lastSeen)}">📡 Matytas: ${formatRelativeTime(lastSeen)}</span>
+                            <!-- Telemetrijos grafiko sekcija -->
+                            <div class="popup-chart-box">
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
+                                    <span style="font-size: 0.74rem; font-weight: 600; color: #ffffff;">📈 ${telemetryChartDays} d. statistikos grafikas</span>
+                                    <span style="font-size: 0.68rem; color: var(--text-dim);" id="popup-chart-sub-${nodeId}">Kraunama...</span>
                                 </div>
-                                <div style="font-size: 0.72rem; color: #a78bfa; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 4px; display:flex; justify-content:space-between;" title="${formatLithuanianDateTime(telemTime)}">
-                                    <span>⏱️ Telemetrija:</span>
+                                <div style="position: relative; height: 140px; width: 100%;">
+                                    <canvas id="popup-chart-${nodeId}"></canvas>
+                                </div>
+                            </div>
+
+                            <div class="popup-footer" style="flex-direction: column; gap: 4px; align-items: stretch; margin-top: 6px;">
+                                <div style="font-size: 0.72rem; color: #a78bfa; display:flex; justify-content:space-between;" title="${formatLithuanianDateTime(telemTime)}">
+                                    <span>⏱️ Paskutinė telemetrija:</span>
                                     <strong>${telemTime ? formatRelativeTime(telemTime) + ' (' + formatLithuanianTime(telemTime, false) + ')' : 'Nėra duomenų'}</strong>
                                 </div>
                             </div>
@@ -1992,12 +2241,18 @@
                             card.classList.add('active');
                             card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
                         }
+
+                        // Užkrauname ir nubraižome telemetrijos grafiką
+                        setTimeout(() => {
+                            loadAndRenderNodeChart(`popup-chart-${nodeId}`, `popup-chart-sub-${nodeId}`, nodeId, telemetryChartDays);
+                        }, 50);
                     });
 
-                    // Kai uždaromas didelis langas (popup): grąžiname mažąjį preview burbulą
+                    // Kai uždaromas didelis langas (popup): grąžiname mažąjį preview burbulą ir sunaikiname grafiką
                     marker.on('popupclose', () => {
                         const el = marker.getElement();
                         if (el) el.classList.remove('popup-open');
+                        destroyChart(`popup-chart-${nodeId}`);
                     });
                     
                     markersGroup.addLayer(marker);
