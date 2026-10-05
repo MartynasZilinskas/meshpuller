@@ -839,4 +839,46 @@ class MeshCoreDecoder
         }
         return $val;
     }
+
+    /**
+     * Greitai ištraukia krovinio (payload) heksą iš neapdoroto paketo be pilno dešifravimo.
+     * Naudojama dublikatų aptikimui (deduplication) serveryje.
+     */
+    public static function extractPayloadHex(string $rawHex): ?string
+    {
+        $clean = preg_replace('/[^0-9A-Fa-f]/', '', $rawHex);
+        if (strlen($clean) < 4 || (strlen($clean) % 2) !== 0) {
+            return null;
+        }
+        $rawBytes = hex2bin($clean);
+        if (!$rawBytes) {
+            return null;
+        }
+        $totalLen = strlen($rawBytes);
+        $headerByte = ord($rawBytes[0]);
+        $routeType = $headerByte & 0x03;
+        $hasTransportCodes = ($routeType === self::ROUTE_TYPE_TRANSPORT_FLOOD || $routeType === self::ROUTE_TYPE_TRANSPORT_DIRECT);
+        $offset = 1;
+        if ($hasTransportCodes) {
+            $offset += 4;
+        }
+        if ($totalLen < $offset + 1) {
+            return null;
+        }
+        $pathLenByte = ord($rawBytes[$offset]);
+        $offset += 1;
+
+        $pathHashSize = (($pathLenByte >> 6) & 0x03) + 1;
+        $pathHopCount = $pathLenByte & 0x3F;
+        $pathByteLength = $pathHopCount * $pathHashSize;
+        $remaining = $totalLen - $offset;
+        if ($pathHashSize > 3 || $pathByteLength > $remaining) {
+            $pathByteLength = min($pathLenByte, $remaining);
+        }
+        $offset += $pathByteLength;
+        if ($offset >= $totalLen) {
+            return null;
+        }
+        return strtoupper(bin2hex(substr($rawBytes, $offset)));
+    }
 }

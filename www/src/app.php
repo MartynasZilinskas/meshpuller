@@ -110,27 +110,23 @@ if ($isSingleRepeaterEndpoint) {
         $requestedBotId = strtoupper(substr(trim((string)$_SERVER['HTTP_X_BOT_ID']), 0, 16));
     }
 
-    $repeater = ($repository) ? $repository->getNextRepeaterToRequest($requestedBotId) : null;
-
-    // Atsarginis variantas iš repeaters.json failo naudojamas TIK jei DB visiškai tuščia (0 mazgų) arba nepasiekiama:
-    if (!$repeater && (!$repository || !$repository->hasAnyNodes())) {
-        $repFile = __DIR__ . '/../repeaters.json';
-        if (file_exists($repFile)) {
-            $fl = json_decode(file_get_contents($repFile), true) ?: [];
-            if (!empty($fl[0])) {
-                $repeater = $fl[0];
-            }
-        }
+    // Be bot_id jokie kartotuvai neatiduodami
+    if (empty($requestedBotId)) {
+        http_response_code(400);
+        echo json_encode([
+            'success' => false,
+            'error'   => 'Nenurodytas boto identifikatorius. Privaloma nurodyti ?bot_id=... parametrą arba X-Bot-ID antraštę (pvz. ?bot_id=KLP).'
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
     }
+
+    $repeater = ($repository) ? $repository->getNextRepeaterToRequest($requestedBotId) : null;
 
     if (!$repeater) {
         http_response_code(404);
-        $err = $requestedBotId 
-            ? "Nėra aktyvių kartotuvų eilėje botui '{$requestedBotId}' (visi atjungti, update=false arba viršijo nesėkmingų bandymų limitą)."
-            : "Nėra aktyvių kartotuvų eilėje (visi atjungti, update=false arba viršijo nesėkmingų bandymų limitą).";
         echo json_encode([
             'success' => false,
-            'error'   => $err
+            'error'   => "Nėra aktyvių kartotuvų eilėje botui '{$requestedBotId}' (visi atjungti, update=false arba viršijo nesėkmingų bandymų limitą)."
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
         exit;
     }
@@ -153,7 +149,7 @@ if ($isSingleRepeaterEndpoint) {
 //     "public_id": "b9ddd788b7a59eab40eaa49a2534fa9e7fc0ef7d920ef4811139998cddd631db",
 //     "password": "hello",
 //     "isDirect": false,
-//     "status": true,
+//     "status": false,
 //     "telemetry": true
 //   },
 //   ...
@@ -176,15 +172,17 @@ if ($isRepytersEndpoint) {
         $requestedBotId = strtoupper(substr(trim((string)$_SERVER['HTTP_X_BOT_ID']), 0, 16));
     }
 
-    $repeatersList = ($repository) ? $repository->getMonitoredRepeaters($requestedBotId) : [];
-
-    // Jei $repository nebuvo sukurtas dėl DB klaidos, perskaitome tiesiai iš failo:
-    if (empty($repeatersList)) {
-        $repFile = __DIR__ . '/../repeaters.json';
-        if (file_exists($repFile)) {
-            $repeatersList = json_decode(file_get_contents($repFile), true) ?: [];
-        }
+    // Be bot_id jokie kartotuvai neatiduodami
+    if (empty($requestedBotId)) {
+        http_response_code(400);
+        echo json_encode([
+            'success' => false,
+            'error'   => 'Nenurodytas boto identifikatorius. Privaloma nurodyti ?bot_id=... parametrą arba X-Bot-ID antraštę (pvz. ?bot_id=KLP).'
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
     }
+
+    $repeatersList = ($repository) ? $repository->getMonitoredRepeaters($requestedBotId) : [];
 
     echo json_encode($repeatersList, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;

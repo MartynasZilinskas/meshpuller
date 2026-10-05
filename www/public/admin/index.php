@@ -918,7 +918,7 @@ $isLoggedIn = isAdminLoggedIn();
                             </p>
                         </div>
                         <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                            <a href="../api/repeater" target="_blank" class="btn btn-secondary btn-sm" style="text-decoration: none;" title="Pasižiūrėti sekantį kartotuvą JSON formatu">
+                            <a id="btnQueueRepeaterLink" href="../api/repeater?bot_id=KLP" target="_blank" class="btn btn-secondary btn-sm" style="text-decoration: none;" title="Pasižiūrėti sekantį kartotuvą JSON formatu">
                                 <span>🎯 /api/repeater</span>
                             </a>
                             <button type="button" class="btn btn-secondary btn-sm" onclick="resetAllRequestedDates()" title="Išvalyti visų mazgų requested_date datą į NULL">
@@ -942,6 +942,10 @@ $isLoggedIn = isAdminLoggedIn();
                         <div class="stat-box green">
                             <div class="val" id="qStatPending">-</div>
                             <div class="lbl">🚀 Prioritetas (NULL)</div>
+                        </div>
+                        <div class="stat-box cyan">
+                            <div class="val" id="qStatInProgress">-</div>
+                            <div class="lbl">⏳ Laukiama eteryje</div>
                         </div>
                         <div class="stat-box blue">
                             <div class="val" id="qStatSuccess">-</div>
@@ -989,6 +993,7 @@ $isLoggedIn = isAdminLoggedIn();
                                 <option value="rate_limited">⏳ Atnaujinta neseniai (Pauzė)</option>
                                 <option value="in_progress">⏳ Laukiama...</option>
                                 <option value="timeout">❌ Neatsakė / Timeout</option>
+                                <option value="retry_cooldown">⏳ Timeout (Pauzė)</option>
                                 <option value="blocked">⛔ Sustabdyti (Fail limitas)</option>
                             </select>
                         </div>
@@ -1185,9 +1190,10 @@ $isLoggedIn = isAdminLoggedIn();
                                         Minimalus telemetrijos atnaujinimo intervalas
                                     </div>
                                     <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
-                                        Kaip dažnai gali būti atnaujinama konkretaus mazgo telemetrija. Nustatymas galioja mazgams, imamiems per <code>/api/repeater</code> ir <code>/api/repyters</code>.
-                                        <br>Pvz., jei nustatyta <b>60 min. (1h)</b>, mazgas nebus paduodamas, jei jo telemetrija jau buvo atnaujinta per paskutinę 1h – vietoje jo eilėje bus paimtas kitas mazgas, kurio telemetrija gauta seniau arba dar negauta visai.
-                                        <br><span style="color: var(--accent-cyan);">Numatyta reikšmė: <b>60</b> min. Įveskite <b>0</b>, jei norite rotuoti mazgus iš eilės be jokio minimalaus laiko tarpo.</span>
+                                        Kas kiek laiko gali būti atnaujinami duomenys iš mazgo (galioja <code>/api/repeater</code> ir <code>/api/repyters</code>).
+                                        <br>Nustatytą laiką mazgas privalo laukti <b>tiek po sėkmingo atnaujinimo, tiek po nesėkmės (timeout)</b>, kad be reikalo neterštų LoRa radijo eterio.
+                                        <br>Pvz., jei nustatyta <b>60 min. (1h)</b>, neatsakęs mazgas taip pat nebus iškart statomas į eilę, o lauks 60 min. prieš kitą bandymą.
+                                        <br><span style="color: var(--accent-cyan);">Numatyta reikšmė: <b>60</b> min. Įveskite <b>0</b>, jei norite rotuoti mazgus be jokio minimalaus laiko tarpo.</span>
                                     </div>
                                 </div>
                                 <div style="display: flex; align-items: center; gap: 8px;">
@@ -2356,6 +2362,14 @@ $isLoggedIn = isAdminLoggedIn();
                     if (currentVal) botSelect.value = currentVal;
                 }
 
+                // Dinamiškai atnaujiname /api/repeater nuorodą su pasirinktu (ar pirmu) bot_id
+                const botLink = document.getElementById('btnQueueRepeaterLink');
+                if (botLink) {
+                    const activeBot = botId || (data.bots && data.bots[0]) || 'KLP';
+                    botLink.href = `../api/repeater?bot_id=${encodeURIComponent(activeBot)}`;
+                    botLink.title = `Pasižiūrėti sekantį kartotuvą botui '${activeBot}' JSON formatu`;
+                }
+
                 // Statistika
                 const stats = data.stats || {};
                 const qStatTotal = document.getElementById('qStatTotal');
@@ -2367,6 +2381,8 @@ $isLoggedIn = isAdminLoggedIn();
 
                 if (qStatTotal) qStatTotal.innerText = stats.total ?? currentQueueData.length;
                 if (qStatPending) qStatPending.innerText = stats.pending_first ?? 0;
+                const qStatInProgress = document.getElementById('qStatInProgress');
+                if (qStatInProgress) qStatInProgress.innerText = stats.in_progress ?? 0;
                 if (qStatSuccess) qStatSuccess.innerText = stats.success ?? 0;
                 if (qStatRateLimited) qStatRateLimited.innerText = stats.rate_limited ?? 0;
                 if (qStatTimeout) qStatTimeout.innerText = stats.timeout ?? 0;
@@ -2406,6 +2422,10 @@ $isLoggedIn = isAdminLoggedIn();
                     list = list.filter(item => item.is_blocked || item.attempt_status === 'blocked');
                 } else if (statusFilter === 'rate_limited') {
                     list = list.filter(item => item.is_rate_limited && !item.is_blocked);
+                } else if (statusFilter === 'retry_cooldown') {
+                    list = list.filter(item => item.is_retry_cooldown && !item.is_blocked);
+                } else if (statusFilter === 'timeout') {
+                    list = list.filter(item => item.attempt_status === 'timeout' && !item.is_blocked);
                 } else {
                     list = list.filter(item => item.attempt_status === statusFilter && !item.is_blocked);
                 }
@@ -2425,16 +2445,36 @@ $isLoggedIn = isAdminLoggedIn();
             tbody.innerHTML = list.map(item => {
                 const isBlocked = !!item.is_blocked;
                 const isRateLimited = !!item.is_rate_limited && !isBlocked;
+                const isInProgress = (item.attempt_status === 'in_progress' || !!item.is_in_progress) && !isBlocked;
+                const isRetryCooldown = !!item.is_retry_cooldown && !isBlocked && !isInProgress;
                 const failCount = parseInt(item.telemetry_fail_count || 0, 10);
                 const maxFails = parseInt(item.max_telemetry_fails || 20, 10);
-                const isNext = (!isBlocked && !isRateLimited && item.queue_pos === 1);
-                const posBadgeClass = isBlocked ? 'badge-red' : (isRateLimited ? 'badge-amber' : (isNext ? 'badge-green' : (item.queue_pos <= 3 ? 'badge-cyan' : 'badge-gray')));
-                const posLabel = isBlocked ? '⛔' : (isRateLimited ? '⏳' : `#${item.queue_pos}`);
+                const isNext = (!isBlocked && !isRateLimited && !isInProgress && !isRetryCooldown && item.queue_pos === 1);
+                const posBadgeClass = isBlocked 
+                    ? 'badge-red' 
+                    : (isInProgress 
+                        ? 'badge-blue' 
+                        : (isRateLimited || isRetryCooldown
+                            ? 'badge-amber' 
+                            : (isNext ? 'badge-green' : (item.queue_pos && item.queue_pos <= 3 ? 'badge-cyan' : 'badge-gray'))));
+                const posLabel = isBlocked 
+                    ? '⛔' 
+                    : (isInProgress 
+                        ? '⏳' 
+                        : (isRateLimited 
+                            ? '⏸️' 
+                            : (isRetryCooldown
+                                ? '⏳'
+                                : (item.queue_pos ? `#${item.queue_pos}` : '-'))));
                 const posTitle = isBlocked 
                     ? `Mazgas sustabdytas (${failCount}/${maxFails} fail)` 
-                    : (isRateLimited 
-                        ? `Pauzė: telemetrija atnaujinta neseniai (liko ${item.rate_limit_remaining_mins} min., limitas: ${item.min_interval_mins} min.)` 
-                        : `Eilės pozicija #${item.queue_pos}`);
+                    : (isInProgress
+                        ? `Laukiama atsakymo iš LoRa tinklo (užklausta prieš ${Math.round(item.elapsed_req_sec || 0)}s, laukiama iki 180s)`
+                        : (isRateLimited 
+                            ? `Pauzė: telemetrija atnaujinta neseniai (liko ${item.rate_limit_remaining_mins} min., limitas: ${item.min_interval_mins} min.)` 
+                            : (isRetryCooldown
+                                ? `Pauzė po nesėkmės (timeout): pakartotinis bandymas po ${item.retry_remaining_mins} min. (limitas: ${item.min_interval_mins} min.)`
+                                : (item.queue_pos ? `Eilės pozicija #${item.queue_pos}` : 'Laukiama'))));
 
                 // Mazgo pavadinimas ir identifikatorius
                 const nameStr = escapeHtml(item.name || item.node_id);
@@ -2448,12 +2488,19 @@ $isLoggedIn = isAdminLoggedIn();
                 // Paskutinė užklausa (requested_date)
                 let reqHtml = '';
                 if (!item.requested_date) {
+                    const subText = isBlocked 
+                        ? '<span style="font-size: 0.72rem; color: #ff6b81;">Sustabdytas (neimamas)</span>'
+                        : (isRateLimited 
+                            ? `<span style="font-size: 0.72rem; color: var(--accent-amber);">Pauzė (liko ${item.rate_limit_remaining_mins} min.)</span>` 
+                            : '<span style="font-size: 0.72rem; color: var(--accent-green);">Bus imamas iškart</span>');
+                    const badgeClass = isBlocked ? 'badge-red' : (isRateLimited ? 'badge-amber' : 'badge-green');
+                    const badgeLabel = isBlocked ? '⛔ NULL' : (isRateLimited ? '⏳ NULL (Pauzė)' : '🚀 NULL (Prioritetas)');
                     reqHtml = `
                         <div style="display: flex; flex-direction: column; gap: 3px;">
-                            <span class="badge badge-green" style="font-weight: 700; width: fit-content;" title="Mazgas dar neužklaustas arba jo eilė nuresetinta į NULL">
-                                🚀 NULL (Prioritetas)
+                            <span class="badge ${badgeClass}" style="font-weight: 700; width: fit-content;" title="Mazgas dar neužklaustas per /api/repeater arba eilė nuresetinta į NULL">
+                                ${badgeLabel}
                             </span>
-                            <span style="font-size: 0.72rem; color: var(--accent-green);">Bus imamas iškart</span>
+                            ${subText}
                         </div>
                     `;
                 } else {
@@ -2527,10 +2574,13 @@ $isLoggedIn = isAdminLoggedIn();
                         </div>
                     `;
                 } else if (item.attempt_status === 'in_progress') {
+                    const elapsed = item.elapsed_req_sec != null ? Math.round(item.elapsed_req_sec) : 0;
+                    const remaining = item.remaining_wait_sec != null ? Math.round(item.remaining_wait_sec) : Math.max(0, 180 - elapsed);
                     attemptBadge = `
                         <div style="display: flex; flex-direction: column; gap: 3px;">
                             <span class="badge badge-blue" style="width: fit-content;">⏳ Laukiama...</span>
-                            <span style="font-size: 0.72rem; color: var(--accent-cyan);">Užklausta, laukiama atsakymo eteryje</span>
+                            <span style="font-size: 0.72rem; color: var(--accent-cyan);">Užklausta prieš <b>${elapsed}s</b>, laukiama atsakymo (liko ~${remaining}s)</span>
+                            <span style="font-size: 0.70rem; color: var(--text-muted);">Pakartotinai į eilę neimamas, kol nesibaigė laukimo langas</span>
                             ${priorTelemDate ? `
                                 <div style="margin-top: 4px; font-size: 0.71rem; color: var(--text-muted);">
                                     📡 Paskutinė gauta: <b style="font-family: var(--font-mono); color: #ffffff;">${escapeHtml(priorTelemDate)}</b> (${priorTelemRel})
@@ -2554,13 +2604,24 @@ $isLoggedIn = isAdminLoggedIn();
                         `;
                     }
 
-                    attemptBadge = `
-                        <div style="display: flex; flex-direction: column; gap: 3px;">
-                            <span class="badge badge-red" style="width: fit-content;">❌ Timeout ${failCount > 1 ? `(${failCount}x)` : ''}</span>
-                            <span style="font-size: 0.72rem; color: #ff6b81;">Neatsakė į paskutinę užklausą</span>
-                            ${priorTelemBox}
-                        </div>
-                    `;
+                    if (isRetryCooldown) {
+                        attemptBadge = `
+                            <div style="display: flex; flex-direction: column; gap: 3px;">
+                                <span class="badge badge-amber" style="width: fit-content;">⏳ Timeout (Pauzė)</span>
+                                <span style="font-size: 0.72rem; color: var(--accent-amber);">Pauzė po nesėkmės: <b>liko ${item.retry_remaining_mins} min.</b></span>
+                                <span style="font-size: 0.70rem; color: var(--text-muted);">Pakartotinis bandymas po ${item.min_interval_mins || 60} min. Neatsakė (${failCount}x).</span>
+                                ${priorTelemBox}
+                            </div>
+                        `;
+                    } else {
+                        attemptBadge = `
+                            <div style="display: flex; flex-direction: column; gap: 3px;">
+                                <span class="badge badge-red" style="width: fit-content;">❌ Timeout ${failCount > 1 ? `(${failCount}x)` : ''}</span>
+                                <span style="font-size: 0.72rem; color: #ff6b81;">Neatsakė į paskutinę užklausą (Pauzė baigėsi, laukia eilėje)</span>
+                                ${priorTelemBox}
+                            </div>
+                        `;
+                    }
                 }
 
                 // Paskutiniai rodmenys & Telemetrijos laikas
@@ -2961,6 +3022,7 @@ $isLoggedIn = isAdminLoggedIn();
                 const lonMaxEl = document.getElementById('settingLtLonMax');
                 const maxFailsEl = document.getElementById('settingMaxTelemetryFails');
                 const minIntervalEl = document.getElementById('settingMinTelemetryIntervalMins');
+                const minRetryIntervalEl = document.getElementById('settingMinRetryIntervalMins');
                 const chartDaysEl = document.getElementById('settingTelemetryChartDays');
 
                 if (enabledEl) enabledEl.checked = !!currentSettings.filter_lithuania_enabled;
@@ -2971,6 +3033,7 @@ $isLoggedIn = isAdminLoggedIn();
                 if (lonMaxEl) lonMaxEl.value = currentSettings.lithuania_lon_max ?? 26.8500;
                 if (maxFailsEl) maxFailsEl.value = currentSettings.max_telemetry_fails ?? 20;
                 if (minIntervalEl) minIntervalEl.value = currentSettings.min_telemetry_interval_mins ?? 60;
+                if (minRetryIntervalEl) minRetryIntervalEl.value = currentSettings.min_retry_interval_mins ?? 15;
                 if (chartDaysEl) chartDaysEl.value = currentSettings.telemetry_chart_days ?? 7;
 
                 const autoAddRepEl = document.getElementById('settingAutoAddNewRepeaters');
@@ -3040,6 +3103,7 @@ $isLoggedIn = isAdminLoggedIn();
                     lithuania_lon_max: parseFloat(document.getElementById('settingLtLonMax').value),
                     max_telemetry_fails: parseInt(document.getElementById('settingMaxTelemetryFails')?.value || '20', 10),
                     min_telemetry_interval_mins: parseInt(document.getElementById('settingMinTelemetryIntervalMins')?.value || '60', 10),
+                    min_retry_interval_mins: parseInt(document.getElementById('settingMinRetryIntervalMins')?.value || '15', 10),
                     telemetry_chart_days: parseInt(document.getElementById('settingTelemetryChartDays')?.value || '7', 10),
                     auto_add_new_repeaters: document.getElementById('settingAutoAddNewRepeaters')?.checked ?? false
                 };

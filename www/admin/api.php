@@ -195,6 +195,9 @@ if ($action === 'save_settings') {
         if (isset($data['min_telemetry_interval_mins']) && is_numeric($data['min_telemetry_interval_mins'])) {
             $newSettings['min_telemetry_interval_mins'] = max(0, (int)$data['min_telemetry_interval_mins']);
         }
+        if (isset($data['min_retry_interval_mins']) && is_numeric($data['min_retry_interval_mins'])) {
+            $newSettings['min_retry_interval_mins'] = max(1, (int)$data['min_retry_interval_mins']);
+        }
         if (isset($data['telemetry_chart_days']) && is_numeric($data['telemetry_chart_days'])) {
             $newSettings['telemetry_chart_days'] = max(1, min(365, (int)$data['telemetry_chart_days']));
         }
@@ -486,9 +489,12 @@ if ($action === 'node_queue') {
         $blockedCount = 0;
         $rateLimitedCount = 0;
 
+        $inProgressCount = 0;
+
         foreach ($queue as $item) {
             if (!empty($item['is_blocked'])) $blockedCount++;
             elseif (!empty($item['is_rate_limited'])) $rateLimitedCount++;
+            elseif ($item['attempt_status'] === 'in_progress') $inProgressCount++;
             elseif ($item['attempt_status'] === 'never') $pendingFirst++;
             elseif ($item['attempt_status'] === 'success') $successCount++;
             elseif ($item['attempt_status'] === 'timeout') $timeoutCount++;
@@ -502,6 +508,7 @@ if ($action === 'node_queue') {
             'stats'     => [
                 'total'         => $totalCount,
                 'pending_first' => $pendingFirst,
+                'in_progress'   => $inProgressCount,
                 'success'       => $successCount,
                 'timeout'       => $timeoutCount,
                 'blocked'       => $blockedCount,

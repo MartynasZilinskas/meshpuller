@@ -615,6 +615,59 @@ SQL;
         $payloadJson     = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
         $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+
+        // -------------------------------------------------------------
+        // 🛡️ DUBLIKATŲ / AIDŲ FILTRAVIMAS SERVERYJE
+        // -------------------------------------------------------------
+        // Jei gautas RX paketas, tikriname, ar per pastarąsias 20s tas pats bot_id
+        // jau neįrašė to paties paketo (pagal raw_hex arba ištrauktą krovinį).
+        if ($direction === 'RX') {
+            $dedupWindowSec = 20;
+            $timeCondition = ($driver === 'pgsql')
+                ? "created_at >= NOW() - INTERVAL '{$dedupWindowSec} seconds'"
+                : "created_at >= NOW() - INTERVAL {$dedupWindowSec} SECOND";
+            $exactHexOp = ($driver === 'pgsql') ? "raw_hex ILIKE :raw_hex" : "raw_hex = :raw_hex";
+
+            // 1. Tikriname tikslų raw_hex dublikatą
+            $checkSql = "SELECT id FROM {$this->table}
+                         WHERE bot_id = :bot_id 
+                           AND direction = :direction 
+                           AND {$exactHexOp} 
+                           AND {$timeCondition} 
+                         ORDER BY id DESC LIMIT 1";
+            $checkStmt = $this->pdo->prepare($checkSql);
+            $checkStmt->execute([
+                ':bot_id'    => $botId,
+                ':direction' => $direction,
+                ':raw_hex'   => $rawHex,
+            ]);
+            $existingId = $checkStmt->fetchColumn();
+            if ($existingId) {
+                return (int)$existingId;
+            }
+
+            // 2. Tikriname pagal paketo krovinį (payloadHex), nes maršruto baitai (hops) skiriasi, o duomenys tie patys
+            $extractedPayload = MeshCoreDecoder::extractPayloadHex($rawHex);
+            if (!empty($extractedPayload) && strlen($extractedPayload) >= 8) {
+                $likeOp = ($driver === 'pgsql') ? 'ILIKE' : 'LIKE';
+                $payloadSql = "SELECT id FROM {$this->table}
+                               WHERE bot_id = :bot_id 
+                                 AND direction = :direction 
+                                 AND raw_hex {$likeOp} :payload_suffix 
+                                 AND {$timeCondition} 
+                               ORDER BY id DESC LIMIT 1";
+                $pStmt = $this->pdo->prepare($payloadSql);
+                $pStmt->execute([
+                    ':bot_id'         => $botId,
+                    ':direction'      => $direction,
+                    ':payload_suffix' => '%' . $extractedPayload,
+                ]);
+                $existingPayloadId = $pStmt->fetchColumn();
+                if ($existingPayloadId) {
+                    return (int)$existingPayloadId;
+                }
+            }
+        }
         
         $sql = "INSERT INTO {$this->table} (
                     direction, raw_hex, length, rssi, snr,
@@ -1082,7 +1135,6 @@ SQL;
                 raw_advert_json = EXCLUDED.raw_advert_json,
                 bot_id = COALESCE(EXCLUDED.bot_id, nodes.bot_id),
                 last_seen_at = CURRENT_TIMESTAMP,
-                requested_date = NULL,
                 "update" = CASE 
                     WHEN (nodes.is_repeater = false OR nodes.is_repeater IS NULL) AND EXCLUDED.is_repeater = true AND :auto_add_flag = 1 
                     THEN true 
@@ -1127,7 +1179,6 @@ SQL;
                 `raw_advert_json` = VALUES(`raw_advert_json`),
                 `bot_id` = COALESCE(VALUES(`bot_id`), `bot_id`),
                 `last_seen_at` = CURRENT_TIMESTAMP,
-                `requested_date` = NULL,
                 `update` = CASE 
                     WHEN (`is_repeater` = 0 OR `is_repeater` IS NULL) AND VALUES(`is_repeater`) = 1 AND :auto_add_flag = 1 
                     THEN 1 
@@ -1485,6 +1536,64 @@ SQL;
             }
         }
 
+        // -------------------------------------------------------------
+        // 🛡️ Apsauga nuo telemetrijos dublikatų:
+        // Jei tam pačiam mazgui (pagal public_key arba node_id) per pastarąsias 60s jau yra įrašyta
+        // tokia pati telemetrija (identiška įtampa ir temperatūra), naujos eilutės nebekuriame!
+        // -------------------------------------------------------------
+        $nodeKey = !empty($data['public_key']) ? (string)$data['public_key'] : null;
+        $nodeId  = !empty($data['node_id']) ? (string)$data['node_id'] : null;
+        $type    = !empty($data['type']) ? (string)$data['type'] : 'STATUS';
+        $bmv     = isset($data['battery_mv']) && $data['battery_mv'] !== null ? (int)$data['battery_mv'] : null;
+        $temp    = isset($data['temperature_c']) && $data['temperature_c'] !== null ? (float)$data['temperature_c'] : null;
+
+        if ($nodeKey !== null || ($nodeId !== null && $nodeId !== 'node')) {
+            $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            $timeCond = ($driver === 'pgsql')
+                ? "recorded_at >= NOW() - INTERVAL '60 seconds'"
+                : "recorded_at >= NOW() - INTERVAL 60 SECOND";
+
+            $whereNode = [];
+            $params = [':type' => $type];
+            if ($nodeKey !== null) {
+                $whereNode[] = "public_key = :pk";
+                $params[':pk'] = $nodeKey;
+            }
+            if ($nodeId !== null && $nodeId !== 'node') {
+                $whereNode[] = "node_id = :nid";
+                $params[':nid'] = $nodeId;
+            }
+
+            if (!empty($whereNode)) {
+                $nodeCond = '(' . implode(' OR ', $whereNode) . ')';
+                $valConds = [];
+                if ($bmv !== null) {
+                    $valConds[] = "battery_mv = :bmv";
+                    $params[':bmv'] = $bmv;
+                }
+                if ($temp !== null) {
+                    $valConds[] = "ABS(COALESCE(temperature_c, 0) - :temp) < 0.1";
+                    $params[':temp'] = $temp;
+                }
+
+                if (!empty($valConds)) {
+                    $valSql = implode(' AND ', $valConds);
+                    $dupSql = "SELECT id FROM telemetry 
+                               WHERE {$nodeCond} 
+                                 AND type = :type 
+                                 AND {$valSql} 
+                                 AND {$timeCond} 
+                               ORDER BY id DESC LIMIT 1";
+                    $dupStmt = $this->pdo->prepare($dupSql);
+                    $dupStmt->execute($params);
+                    $dupId = $dupStmt->fetchColumn();
+                    if ($dupId) {
+                        return (int)$dupId;
+                    }
+                }
+            }
+        }
+
         $botId = !empty($data['bot_id']) ? strtoupper(substr(trim((string)$data['bot_id']), 0, 16)) : 'KLP';
 
         $sql = <<<SQL
@@ -1752,6 +1861,7 @@ SQL;
         'max_telemetry_fails'                => 20,
         'auto_add_new_repeaters'             => false,
         'min_telemetry_interval_mins'        => 60,
+        'min_retry_interval_mins'            => 15,
         'telemetry_chart_days'               => 7,
     ];
 
@@ -1996,6 +2106,11 @@ SQL;
      */
     public function getMonitoredRepeaters(?string $botId = null): array
     {
+        // Be botId jokie kartotuvai neatiduodami
+        if (empty($botId)) {
+            return [];
+        }
+
         $repeaters = [];
         $knownKeys = [];
         $driver = $this->pdo ? $this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME) : null;
@@ -2222,6 +2337,11 @@ SQL;
      */
     public function getNextRepeaterToRequest(?string $botId = null): ?array
     {
+        // Be botId jokie kartotuvai neatiduodami
+        if (empty($botId)) {
+            return null;
+        }
+
         $driver = $this->pdo ? $this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME) : null;
         if (!$this->pdo) {
             return null;
@@ -2234,15 +2354,33 @@ SQL;
         $failFilterPgsql = ($maxFails > 0) ? " AND (COALESCE(telemetry_fail_count, 0) < {$maxFails})" : "";
         $failFilterMysql = ($maxFails > 0) ? " AND (COALESCE(`telemetry_fail_count`, 0) < {$maxFails})" : "";
 
-        // Minimalus telemetrijos atnaujinimo intervalas (minutėmis)
-        // Jei mazgo telemetrija buvo atnaujinta neseniai (mažiau nei prieš N min.),
-        // jis praleidžiamas, o imamas kitas mazgas, kurio telemetrija senesnė arba NULL.
+        // Minimalus telemetrijos atnaujinimo intervalas (minutėmis) (default 60 min)
+        // Supaprastinta logika:
+        // Imamas TIK mazgas, kuris turi būti stebimas (is_repeater=true, update=true)
+        // IR kurio requested_date IS NULL (dar neužklaustas)
+        // ARBA nuo requested_date jau praėjo nustatytas laiko tikrinimo intervalas.
         $minIntervalMins = (int)$this->getSetting('min_telemetry_interval_mins', 60);
-        $intervalFilterPgsql = "";
-        $intervalFilterMysql = "";
+
         if ($minIntervalMins > 0) {
-            $intervalFilterPgsql = " AND (telemetry_updated_at IS NULL OR telemetry_updated_at <= (CURRENT_TIMESTAMP - INTERVAL '{$minIntervalMins} minutes'))";
-            $intervalFilterMysql = " AND (`telemetry_updated_at` IS NULL OR `telemetry_updated_at` <= DATE_SUB(NOW(), INTERVAL {$minIntervalMins} MINUTE))";
+            $timingFilterPgsql = " AND (
+                requested_date IS NULL 
+                OR requested_date <= (CURRENT_TIMESTAMP - INTERVAL '{$minIntervalMins} minutes')
+            )";
+
+            $timingFilterMysql = " AND (
+                `requested_date` IS NULL 
+                OR `requested_date` <= DATE_SUB(NOW(), INTERVAL {$minIntervalMins} MINUTE)
+            )";
+        } else {
+            // Jei nustatyta 0 min., laukiama tik kol baigsis einamasis laukimo langas eteryje (180 sek.)
+            $timingFilterPgsql = " AND (
+                requested_date IS NULL 
+                OR requested_date <= (CURRENT_TIMESTAMP - INTERVAL '180 seconds')
+            )";
+            $timingFilterMysql = " AND (
+                `requested_date` IS NULL 
+                OR `requested_date` <= DATE_SUB(NOW(), INTERVAL 180 SECOND)
+            )";
         }
 
         $botFilterPgsql = "";
@@ -2260,7 +2398,7 @@ SQL;
             WITH next_rep AS (
                 SELECT id, public_key, node_id, node_name, password, requested_date, telemetry_updated_at, last_failed_request_at, bot_id
                 FROM nodes
-                WHERE (is_repeater = true) AND ("update" = true) {$failFilterPgsql} {$intervalFilterPgsql} {$botFilterPgsql}
+                WHERE (is_repeater = true) AND ("update" = true) {$failFilterPgsql} {$timingFilterPgsql} {$botFilterPgsql}
                 ORDER BY 
                     CASE WHEN requested_date IS NULL THEN 0 ELSE 1 END ASC,
                     requested_date ASC,
@@ -2329,7 +2467,7 @@ SQL;
             WHERE (`is_repeater` = 1 OR `is_repeater` = true)
               AND (`update` = 1 OR `update` = true)
               {$failFilterMysql}
-              {$intervalFilterMysql}
+              {$timingFilterMysql}
               {$botFilterMysql}
             ORDER BY 
                 CASE WHEN `requested_date` IS NULL THEN 0 ELSE 1 END ASC,
@@ -2559,6 +2697,7 @@ SQL;
                 $attemptColor = 'red';
             } elseif ($rawReqDate !== null && trim($rawReqDate) !== '') {
                 $reqTime = strtotime($rawReqDate);
+                $elapsedReqSec = max(0, $now - $reqTime);
                 $telemTime = $rawTelemDate ? strtotime($rawTelemDate) : 0;
 
                 // Jei telemetrijos įrašas buvo gautas po užklausos (arba per paskutines 30 sek. iki jos)
@@ -2567,9 +2706,8 @@ SQL;
                     $attemptLabel = '✅ Telemetrija gauta';
                     $attemptColor = 'green';
                 } else {
-                    $diffSec = $now - $reqTime;
                     // Jei užklausa išsiųsta neseniai (iki 3 minučių) - vis dar laukiama paketo eteryje
-                    if ($diffSec < 180) {
+                    if ($elapsedReqSec < 180) {
                         $attemptStatus = 'in_progress';
                         $attemptLabel = '⏳ Laukiama atsakymo...';
                         $attemptColor = 'blue';
@@ -2586,21 +2724,35 @@ SQL;
             }
 
             $minIntervalMins = (int)$this->getSetting('min_telemetry_interval_mins', 60);
+            $requiredSec = $minIntervalMins * 60;
+
+            $elapsedReqSec = ($rawReqDate !== null && trim((string)$rawReqDate) !== '') 
+                ? max(0, $now - strtotime($rawReqDate)) 
+                : null;
+
             $isRateLimited = false;
             $rateLimitRemainingMins = 0;
-            if ($minIntervalMins > 0 && $rawTelemDate !== null && trim((string)$rawTelemDate) !== '') {
-                $telemTimestamp = strtotime($rawTelemDate);
-                $elapsedSec = $now - $telemTimestamp;
-                $requiredSec = $minIntervalMins * 60;
-                if ($elapsedSec < $requiredSec) {
+            $isRetryCooldown = false;
+            $retryRemainingMins = 0;
+
+            if ($minIntervalMins > 0 && $elapsedReqSec !== null && $elapsedReqSec < $requiredSec) {
+                $remainingMins = ceil(($requiredSec - $elapsedReqSec) / 60);
+                if ($attemptStatus === 'success') {
                     $isRateLimited = true;
-                    $rateLimitRemainingMins = ceil(($requiredSec - $elapsedSec) / 60);
+                    $rateLimitRemainingMins = $remainingMins;
+                } elseif ($attemptStatus === 'timeout') {
+                    $isRetryCooldown = true;
+                    $retryRemainingMins = $remainingMins;
                 }
             }
 
-            // Jei mazgas yra užblokuotas (fail limitas) ARBA jo telemetrija atnaujinta per nustatytą intervalą (rate-limited),
-            // jis negauna aktyvios eilės pozicijos (bus paduodamas kitas mazgas)
-            $isEligibleForNext = (!$isBlocked && !$isRateLimited);
+            // Mazgas gali patekti į eilę TIK jei:
+            // 1. Nėra užblokuotas (viršytas fail limitas)
+            // 2. Šiuo metu nevyksta užklausa eteryje (< 180s)
+            // 3. requested_date IS NULL arba jau praėjo nustatytas intervalas (min_telemetry_interval_mins)
+            $isInProgress = ($attemptStatus === 'in_progress');
+            $hasWaitedInterval = ($elapsedReqSec === null || $elapsedReqSec >= $requiredSec);
+            $isEligibleForNext = (!$isBlocked && !$isInProgress && $hasWaitedInterval);
             $queuePos = $isEligibleForNext ? $queueIndex++ : null;
 
             $result[] = [
@@ -2622,6 +2774,12 @@ SQL;
                 'is_rate_limited'          => $isRateLimited,
                 'rate_limit_remaining_mins'=> $rateLimitRemainingMins,
                 'min_interval_mins'        => $minIntervalMins,
+                'is_retry_cooldown'        => $isRetryCooldown,
+                'retry_remaining_mins'     => $retryRemainingMins,
+                'min_retry_interval_mins'  => $minIntervalMins,
+                'is_in_progress'           => $isInProgress,
+                'elapsed_req_sec'          => $elapsedReqSec ?? null,
+                'remaining_wait_sec'       => $isInProgress ? max(0, 180 - ($elapsedReqSec ?? 0)) : 0,
                 'has_prior_telemetry'      => $hasPriorTelemetry,
                 'last_seen_at'             => $formatLt($row['last_seen_at']),
                 'last_seen_at_iso'         => $formatIsoLt($row['last_seen_at']),

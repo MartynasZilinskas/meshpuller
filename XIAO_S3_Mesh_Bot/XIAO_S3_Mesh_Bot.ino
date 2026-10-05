@@ -904,6 +904,54 @@ void sendMeshCoreTelemetryRequest(size_t repIdx) {
 }
 
 // ================================================================================
+// 🛡️ LORA RX DUBLIKATŲ / AIDŲ FILTRAVIMAS (DEDUPLICATION)
+// ================================================================================
+struct RxDedupEntry {
+  uint32_t hash;
+  uint8_t payloadType;
+  uint32_t timestampMs;
+};
+
+static const size_t RX_DEDUP_CACHE_SIZE = 32;
+static RxDedupEntry rxDedupCache[RX_DEDUP_CACHE_SIZE];
+static size_t rxDedupHead = 0;
+
+// FNV-1a greitas hešas paketo kroviniui
+static uint32_t calcPayloadHash(const uint8_t* data, size_t len) {
+  uint32_t hash = 2166136261UL;
+  for (size_t i = 0; i < len; i++) {
+    hash ^= data[i];
+    hash *= 16777619UL;
+  }
+  return hash;
+}
+
+// Tikrina, ar toks paketo krovinys jau buvo gautas per pastarąsias 20 sekundžių
+static bool isDuplicateRxPayload(uint8_t payloadType, const uint8_t* payload, size_t payloadLen) {
+  if (payload == nullptr || payloadLen == 0) return false;
+
+  uint32_t hash = calcPayloadHash(payload, payloadLen);
+  uint32_t nowMs = millis();
+  const uint32_t DEDUP_WINDOW_MS = 20000; // 20 sekundžių apsaugos langas
+
+  for (size_t i = 0; i < RX_DEDUP_CACHE_SIZE; i++) {
+    if (rxDedupCache[i].hash == hash && rxDedupCache[i].payloadType == payloadType) {
+      if ((nowMs - rxDedupCache[i].timestampMs) < DEDUP_WINDOW_MS) {
+        return true; // Dublikatas rastas!
+      }
+    }
+  }
+
+  // Įrašome naują įrašą į žiedinį buferį
+  rxDedupCache[rxDedupHead].hash = hash;
+  rxDedupCache[rxDedupHead].payloadType = payloadType;
+  rxDedupCache[rxDedupHead].timestampMs = nowMs;
+  rxDedupHead = (rxDedupHead + 1) % RX_DEDUP_CACHE_SIZE;
+
+  return false;
+}
+
+// ================================================================================
 // 📥 GAUTŲ PAKETŲ APDOROJIMAS IR ATSAKYMŲ PARSINIMAS
 // ================================================================================
 bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
@@ -999,6 +1047,16 @@ bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
     Serial.println("\n--------------------------------------------------------");
     Serial.printf("[LoRa RX] Gautas %s paketas (%d baitai) iš eterio (svetima užklausa / aidas). Praleidžiama.\n",
                   typeStr, length);
+    return false;
+  }
+
+  // C) DUBLIKATŲ / AIDŲ FILTRAVIMAS (Mesh flood pakartojimai per kaimyninius kartotuvus):
+  //    Kai tas pats atsakymas retransliuojamas per kelis kartotuvus (pvz., tiesiogiai, per B9DD, per 1BBD),
+  //    jo krovinys (payload) yra 100% identiškas. Jei tokį jau gavome per 20s – nebesiunčiame pakartotinai į API!
+  if (isDuplicateRxPayload(payloadType, payload, payloadLen)) {
+    Serial.println("\n--------------------------------------------------------");
+    Serial.printf("[LoRa RX Deduplikacija] Dublikatas iš eterio (%s, %d B). Šis paketas jau priimtas neseniai per kitą kartotuvą. Ignoruojama.\n",
+                  typeStr, (int)payloadLen);
     return false;
   }
 
@@ -1106,14 +1164,23 @@ bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
   // Serveryje jie bus išsaugoti DB ir pilnai iškoduoti bei dešifruoti.
   // Čia patikriname TIK ar šis paketas yra atsakymas mūsų mazgui, kad waitForReply() žinotų sėkmę.
   // --------------------------------------------------------------------------
-  if ((payloadType == PAYLOAD_TYPE_RESPONSE || payloadType == PAYLOAD_TYPE_PATH) && payloadLen >= 2) {
+  if (payloadLen >= 2) {
     uint8_t destHash = payload[0];
     uint8_t srcHash = payload[1];
 
-    if (destHash == myNodeHash) {
-      if (expectedSenderHash == 0 || srcHash == expectedSenderHash) {
-        Serial.printf("[LoRa RX] Gautas atsakymas mūsų mazgui (Src: 0x%02X -> Dest: 0x%02X). RAW paketas jau perduotas į API eilę.\n",
+    if (destHash == myNodeHash && (expectedSenderHash == 0 || srcHash == expectedSenderHash)) {
+      if (payloadType == PAYLOAD_TYPE_RESPONSE) {
+        Serial.printf("[LoRa RX] Gautas tikslinis RESPONSE atsakymas mūsų mazgui (Src: 0x%02X -> Dest: 0x%02X). RAW paketas jau perduotas į API eilę.\n",
                       srcHash, destHash);
+        return true;
+      } else if (payloadType == PAYLOAD_TYPE_PATH) {
+        Serial.printf("[LoRa RX] Gautas PATH (maršruto) paketas iš kartotuvo (Src: 0x%02X -> Dest: 0x%02X). Perduota į API, toliau laukiama duomenų RESPONSE atsakymo...\n",
+                      srcHash, destHash);
+        // Jei laukiame RESPONSE atsakymo (STATUS, TELEMETRIJA, LOGIN), kelio paketas nėra galutinis atsakymas.
+        // Tęsiame klausymąsi radijo eteryje, kol atskris tikrasis RESPONSE!
+        if (waitTarget == WAIT_STATUS || waitTarget == WAIT_TELEMETRY || waitTarget == WAIT_LOGIN) {
+          return false;
+        }
         return true;
       }
     }
