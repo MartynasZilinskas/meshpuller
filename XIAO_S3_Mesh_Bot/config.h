@@ -48,6 +48,7 @@ struct RepeaterTarget {
   bool reqStatus;   // true = siųsti būsenos užklausą (REQ_TYPE_GET_STATUS)
   bool reqTelemetry; // true = siųsti telemetrijos užklausą
                      // (REQ_TYPE_GET_TELEMETRY_DATA)
+  String path;      // Maršrutizavimo kelias (pvz. "B9DD", "DIRECT" arba tuščias jei nežinomas)
 };
 
 // Atsakymo laukimo tikslo tipas (apsauga nuo ankstyvo lango užsidarymo)

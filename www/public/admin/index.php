@@ -1168,6 +1168,22 @@ $isLoggedIn = isAdminLoggedIn();
                             📡 Telemetrijos Užklausų Eilės & Stebėjimo Nustatymai
                         </h4>
 
+                        <!-- Source Route / Path maršrutizavimo nustatymas -->
+                        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 16px; margin-bottom: 20px;">
+                            <label style="display: flex; align-items: flex-start; gap: 12px; cursor: pointer;">
+                                <input type="checkbox" id="settingEnableSourceRouting" style="width: 20px; height: 20px; margin-top: 2px;">
+                                <div>
+                                    <div style="font-size: 0.95rem; font-weight: 600; color: #ffffff;">
+                                        Įjungti Source Route (Path) naudojimą ESP32 botui
+                                    </div>
+                                    <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
+                                        Kai įjungta, botui leidžiama siųsti užklausas per tikslinius maršrutus (DIRECT kelią per tarpinius kartotuvus).<br>
+                                        <strong>Kai išjungta:</strong> botui nurodoma visas užklausas siųsti tik per <strong>FLOOD</strong> (per visą tinklą), nenaudojant jokių DIRECT kelių.
+                                    </div>
+                                </div>
+                            </label>
+                        </div>
+
                         <!-- Automatinis naujų kartotuvų pridėjimas stebėjimui -->
                         <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 16px; margin-bottom: 20px;">
                             <label style="display: flex; align-items: flex-start; gap: 12px; cursor: pointer;">
@@ -1285,6 +1301,23 @@ $isLoggedIn = isAdminLoggedIn();
                             <label for="editNodePassword">Valdymo Slaptažodis (ESP32 Botui)</label>
                             <input type="text" id="editNodePassword" class="form-control" placeholder="Slaptažodis kartotuvo telemetrijai siųsti (jei tuščias, bus &quot;&quot;)">
                             <div style="font-size: 0.70rem; color: var(--text-dim); margin-top: 4px;">Šis slaptažodis perduodamas į /api/repyters JSON failą botui.</div>
+                        </div>
+
+                        <div class="form-group">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                <label for="editNodeLastPath" style="margin-bottom: 0;">Maršrutizavimo Režimas (Path / Route)</label>
+                                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.8rem; margin-bottom: 0;">
+                                    <input type="checkbox" id="editNodeEnablePath" onchange="toggleNodePathMode(this.checked)">
+                                    <span id="editNodeEnablePathLabel" style="font-weight: 600; color: #2ed573;">ĮJUNGTA (Source Route)</span>
+                                </label>
+                            </div>
+                            <div id="editNodePathInputContainer">
+                                <input type="text" id="editNodeLastPath" class="form-control" placeholder="pvz. B9DD4607, DIRECT arba tuščia (automatinis mokymasis)">
+                                <div style="font-size: 0.70rem; color: var(--text-dim); margin-top: 4px;">Konkretūs tarpiniai kartotuvai (pvz. B9DD4607). Palikite tuščią, kad ESP32 išmoktų dinamiškai.</div>
+                            </div>
+                            <div id="editNodePathDisabledNotice" style="display: none; padding: 10px 12px; background: rgba(167, 139, 250, 0.1); border: 1px dashed #a78bfa; border-radius: var(--radius-md); font-size: 0.75rem; color: #d8b4fe;">
+                                🌐 <strong>IŠJUNGTA:</strong> Šiam mazgui maršrutizavimo kelias nenaudojamas. Visos užklausos bus siunčiamos tik per <strong>FLOOD</strong> (per visą tinklą).
+                            </div>
                         </div>
 
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
@@ -1800,12 +1833,22 @@ $isLoggedIn = isAdminLoggedIn();
                 const botId = n.bot_id || 'KLP';
                 const failCount = parseInt(n.telemetry_fail_count || 0, 10);
 
+                const lastPath = (n.last_path || '').trim();
+                const isFlood = (lastPath.toUpperCase() === 'FLOOD');
+
                 return `
                     <tr>
                         <td>
                             <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                                 <span class="badge badge-blue" title="${escapeHtml(key)}">${id.toUpperCase()}</span>
                                 <span style="font-weight: 600; color: #ffffff;">${escapeHtml(name)}</span>
+                                ${isFlood ? `
+                                    <span class="badge badge-purple" style="font-size: 0.68rem; font-weight: 700; padding: 1px 5px; cursor: pointer;" onclick="quickToggleNodePath('${escapeHtml(key)}', true)" title="Path išjungtas (FLOOD). Paspauskite, kad įjungtumėte Source Route">🌐 FLOOD</span>
+                                ` : (lastPath !== '' ? `
+                                    <span class="badge badge-cyan" style="font-size: 0.68rem; font-weight: 700; padding: 1px 5px; cursor: pointer;" onclick="quickToggleNodePath('${escapeHtml(key)}', false)" title="Maršrutas: [${escapeHtml(lastPath)}]. Paspauskite, kad išjungtumėte (perjungtumėte į FLOOD)">🎯 [${escapeHtml(lastPath)}]</span>
+                                ` : `
+                                    <span class="badge badge-gray" style="font-size: 0.68rem; font-weight: 600; padding: 1px 5px; cursor: pointer;" onclick="quickToggleNodePath('${escapeHtml(key)}', false)" title="Automatinis dinaminis kelias. Paspauskite, kad išjungtumėte (perjungtumėte į FLOOD)">🤖 AUTO</span>
+                                `)}
                                 ${failCount > 0 ? `<span class="badge badge-red" style="font-size: 0.68rem; font-weight: 700; padding: 1px 5px; cursor: pointer;" onclick="resetNodeFailCount('${id}', '${escapeHtml(name)}')" title="${failCount} nesėkmingi bandymai. Paspauskite, kad nuresetintumėte į 0.">⚠️ ${failCount} fail 🧹</span>` : ''}
                             </div>
                         </td>
@@ -1843,6 +1886,44 @@ $isLoggedIn = isAdminLoggedIn();
             }).join('');
         }
 
+        function toggleNodePathMode(enabled, presetVal = null) {
+            const label = document.getElementById('editNodeEnablePathLabel');
+            const inputCont = document.getElementById('editNodePathInputContainer');
+            const notice = document.getElementById('editNodePathDisabledNotice');
+            const input = document.getElementById('editNodeLastPath');
+            if (enabled) {
+                if (label) { label.innerText = 'ĮJUNGTA (Source Route)'; label.style.color = '#2ed573'; }
+                if (inputCont) inputCont.style.display = 'block';
+                if (notice) notice.style.display = 'none';
+                if (presetVal !== null && input) input.value = presetVal;
+                else if (input && input.value.trim().toUpperCase() === 'FLOOD') input.value = '';
+            } else {
+                if (label) { label.innerText = 'IŠJUNGTA (Tik FLOOD)'; label.style.color = '#f87171'; }
+                if (inputCont) inputCont.style.display = 'none';
+                if (notice) notice.style.display = 'block';
+                if (input) input.value = 'FLOOD';
+            }
+        }
+
+        async function quickToggleNodePath(key, enable) {
+            try {
+                const res = await fetch('api.php?action=update_node', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ public_key: key, last_path: enable ? '' : 'FLOOD' })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showToast(enable ? 'Source Route įjungtas šiam mazgui!' : 'Path išjungtas - mazgas perjungtas į FLOOD!', 'info');
+                    await loadNodes();
+                } else {
+                    alert('Klaida: ' + (data.error || 'Nepavyko'));
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
         // Mazgo redagavimo langas
         function openEditNode(publicKey, pushHistory = true) {
             if (!nodesData || nodesData.length === 0) {
@@ -1862,6 +1943,17 @@ $isLoggedIn = isAdminLoggedIn();
             document.getElementById('editNodeKeyDisplay').value = node.public_key;
             document.getElementById('editNodeName').value = node.node_name || '';
             document.getElementById('editNodePassword').value = node.password !== null && node.password !== undefined ? node.password : '';
+            
+            const rawPath = (node.last_path || '').trim();
+            const isFlood = (rawPath.toUpperCase() === 'FLOOD');
+            const pathCheckbox = document.getElementById('editNodeEnablePath');
+            if (pathCheckbox) {
+                pathCheckbox.checked = !isFlood;
+                toggleNodePathMode(!isFlood, isFlood ? '' : rawPath);
+            } else {
+                document.getElementById('editNodeLastPath').value = rawPath;
+            }
+
             document.getElementById('editNodeLat').value = node.latitude || '';
             document.getElementById('editNodeLon').value = node.longitude || '';
             document.getElementById('editNodeUpdate').checked = (node.update == 1 || node.update === true);
@@ -1881,10 +1973,17 @@ $isLoggedIn = isAdminLoggedIn();
         async function handleSaveNode(e) {
             e.preventDefault();
             const publicKey = document.getElementById('editNodePublicKey').value;
+            const isPathEnabled = document.getElementById('editNodeEnablePath') ? document.getElementById('editNodeEnablePath').checked : true;
+            let finalPath = document.getElementById('editNodeLastPath').value.trim();
+            if (!isPathEnabled) {
+                finalPath = 'FLOOD';
+            }
+
             const payload = {
                 public_key: publicKey,
                 node_name: document.getElementById('editNodeName').value,
                 password: document.getElementById('editNodePassword').value,
+                last_path: finalPath,
                 update: document.getElementById('editNodeUpdate').checked ? 1 : 0,
                 is_repeater: document.getElementById('editNodeIsRepeater').checked ? 1 : 0,
                 latitude: document.getElementById('editNodeLat').value,
@@ -2672,6 +2771,13 @@ $isLoggedIn = isAdminLoggedIn();
                                 <div style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-dim);" title="Viešasis raktas: ${escapeHtml(item.public_key || '')}">
                                     🔑 ${keyShort}
                                 </div>
+                                <div style="margin-top: 3px;">
+                                    ${item.last_path === 'DIRECT' 
+                                        ? '<span class="badge badge-green" style="font-size: 0.68rem;" title="Tiesioginis 0 šuolių ryšys">🎯 DIRECT (0 šuol.)</span>' 
+                                        : (item.last_path 
+                                            ? `<span class="badge badge-cyan" style="font-size: 0.68rem;" title="Išmoktas grįžtamasis kelias">🗺️ Kelias: [${escapeHtml(item.last_path)}]</span>` 
+                                            : '<span class="badge badge-gray" style="font-size: 0.68rem;" title="Kelias nežinomas, užklausos bus siunčiamos per FLOOD">🌐 FLOOD (tinklas)</span>')}
+                                </div>
                             </div>
                         </td>
                         <td>
@@ -3039,6 +3145,9 @@ $isLoggedIn = isAdminLoggedIn();
                 const autoAddRepEl = document.getElementById('settingAutoAddNewRepeaters');
                 if (autoAddRepEl) autoAddRepEl.checked = !!currentSettings.auto_add_new_repeaters;
 
+                const sourceRoutingEl = document.getElementById('settingEnableSourceRouting');
+                if (sourceRoutingEl) sourceRoutingEl.checked = currentSettings.enable_source_routing !== false;
+
                 // Statistika
                 const stTotal = document.getElementById('stTotalNodes');
                 const stLt = document.getElementById('stLtNodes');
@@ -3095,6 +3204,7 @@ $isLoggedIn = isAdminLoggedIn();
 
             try {
                 const payload = {
+                    enable_source_routing: document.getElementById('settingEnableSourceRouting')?.checked ?? true,
                     filter_lithuania_enabled: document.getElementById('settingFilterLtEnabled').checked,
                     filter_lithuania_include_no_coords: document.getElementById('settingFilterLtIncludeNoCoords').checked,
                     lithuania_lat_min: parseFloat(document.getElementById('settingLtLatMin').value),

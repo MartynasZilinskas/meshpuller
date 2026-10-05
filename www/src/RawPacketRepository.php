@@ -319,6 +319,7 @@ SQL;
                 $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS telemetry_updated_at TIMESTAMP WITHOUT TIME ZONE NULL');
                 $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS telemetry_fail_count INTEGER NOT NULL DEFAULT 0');
                 $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS last_failed_request_at TIMESTAMP WITHOUT TIME ZONE NULL');
+                $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS last_path VARCHAR(64) NULL');
                 $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_nodes_update ON nodes ("update")');
                 $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_nodes_bot_id ON nodes (bot_id)');
                 $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_nodes_requested_date ON nodes (requested_date)');
@@ -347,6 +348,7 @@ SQL;
                 $hasTempC = false;
                 $hasFailCount = false;
                 $hasLastFailedReq = false;
+                $hasLastPath = false;
                 $colsStmt = $this->pdo->query("SHOW COLUMNS FROM `nodes`");
                 while ($c = $colsStmt->fetch(\PDO::FETCH_ASSOC)) {
                     $fn = strtolower($c['Field'] ?? '');
@@ -358,12 +360,16 @@ SQL;
                     if ($fn === 'temperature_c') $hasTempC = true;
                     if ($fn === 'telemetry_fail_count') $hasFailCount = true;
                     if ($fn === 'last_failed_request_at') $hasLastFailedReq = true;
+                    if ($fn === 'last_path') $hasLastPath = true;
                 }
                 if (!$hasPassword) {
                     $this->pdo->exec("ALTER TABLE `nodes` ADD COLUMN `password` VARCHAR(128) NULL DEFAULT NULL AFTER `node_id`");
                 }
+                if (!$hasLastPath) {
+                    $this->pdo->exec("ALTER TABLE `nodes` ADD COLUMN `last_path` VARCHAR(64) NULL DEFAULT NULL AFTER `password`");
+                }
                 if (!$hasUpdate) {
-                    $this->pdo->exec("ALTER TABLE `nodes` ADD COLUMN `update` TINYINT(1) NOT NULL DEFAULT 0 AFTER `password`");
+                    $this->pdo->exec("ALTER TABLE `nodes` ADD COLUMN `update` TINYINT(1) NOT NULL DEFAULT 0 AFTER `last_path`");
                     try {
                         $this->pdo->exec("ALTER TABLE `nodes` ADD INDEX `idx_nodes_update` (`update`)");
                     } catch (\Throwable $e) {}
@@ -1242,7 +1248,8 @@ SQL;
         ?float $rssi = null, 
         ?float $snr = null,
         bool $hasTelemetry = false,
-        ?float $temperatureC = null
+        ?float $temperatureC = null,
+        ?string $lastPath = null
     ): bool
     {
         $id = trim($identifier);
@@ -1256,6 +1263,16 @@ SQL;
         if (!empty($botId)) {
             $sets[] = 'bot_id = :bot_id';
             $params[':bot_id'] = strtoupper(substr(trim($botId), 0, 16));
+        }
+
+        if ($lastPath !== null && trim($lastPath) !== '') {
+            $driver = $this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME);
+            if ($driver === 'pgsql') {
+                $sets[] = "last_path = CASE WHEN last_path = 'FLOOD' THEN 'FLOOD' ELSE :last_path END";
+            } else {
+                $sets[] = "last_path = IF(last_path = 'FLOOD', 'FLOOD', :last_path)";
+            }
+            $params[':last_path'] = strtoupper(trim($lastPath));
         }
 
         // 'telemetry_updated_at' atnaujinamas TIK TADA, kai gautas tikras TELEMETRY arba STATUS paketas (hasTelemetry === true)
@@ -1492,12 +1509,37 @@ SQL;
 
         $hasTelemetry = true;
 
+        // Išskiriame grįžtamąjį kelią (reverse path):
+        $incomingHops = $decoded['path']['hops'] ?? [];
+        $pathHopCount = isset($decoded['path']['hop_count']) ? (int)$decoded['path']['hop_count'] : null;
+        $returnPath = null;
+        if ($pathHopCount === 0) {
+            // Tiesioginis ryšys (DIRECT 0 šuolių) galimas TIK jei signalas stiprus (>= -95 dBm).
+            // Priešingu atveju tai tolimas signalas, kurio ESP32 tiesiogiai nepasieks.
+            if ($rssi !== null && $rssi >= -95.0) {
+                $returnPath = 'DIRECT';
+            }
+        } elseif (!empty($incomingHops) && is_array($incomingHops)) {
+            // Apverčiame šuolių tvarką: Target -> [H1, H2] -> Us  =>  Us -> [H2, H1] -> Target
+            $computedPath = implode('', array_reverse($incomingHops));
+
+            // Apsauga nuo asimetrinio 1 šuolio spąstų:
+            // Jei gautas tik 1 šuolis, bet signalas silpnas (RSSI < -100 dBm),
+            // tai yra asimetrinis tolimas ryšys, kurio mūsų ESP32 siųstuvas tiesiogiai nepasieks.
+            // Tokiu atveju neperrašome esamo daugiapakopio kelio!
+            if ($pathHopCount === 1 && $rssi !== null && $rssi < -100.0) {
+                $returnPath = null;
+            } else {
+                $returnPath = $computedPath;
+            }
+        }
+
         // Atnaujiname mazgo 'last_seen_at' ir telemetrijos rodiklius 'nodes' lentelėje
-        // Jei pakete buvo telemetrijos duomenų, atnaujiname ir 'telemetry_updated_at'
+        // Jei pakete buvo telemetrijos duomenų, atnaujiname ir 'telemetry_updated_at' bei išmoktą maršrutą
         if (!empty($publicKey)) {
-            $this->touchNodeSeen($publicKey, $botId, $batteryV, $batteryMv, $rssi, $snr, $hasTelemetry, $temperatureC);
+            $this->touchNodeSeen($publicKey, $botId, $batteryV, $batteryMv, $rssi, $snr, $hasTelemetry, $temperatureC, $returnPath);
         } elseif (!empty($nodeId) && $nodeId !== 'node') {
-            $this->touchNodeSeen($nodeId, $botId, $batteryV, $batteryMv, $rssi, $snr, $hasTelemetry, $temperatureC);
+            $this->touchNodeSeen($nodeId, $botId, $batteryV, $batteryMv, $rssi, $snr, $hasTelemetry, $temperatureC, $returnPath);
         }
 
         return $this->insertTelemetryRecord([
@@ -1852,6 +1894,7 @@ SQL;
      * Numatytieji sistemos ir žemėlapio nustatymai
      */
     public const DEFAULT_SYSTEM_SETTINGS = [
+        'enable_source_routing'              => true,
         'filter_lithuania_enabled'           => false,
         'filter_lithuania_include_no_coords' => false,
         'lithuania_lat_min'                  => 53.85,
@@ -2124,6 +2167,7 @@ SQL;
                 $failFilterPgsql = ($maxFails > 0) ? " AND (COALESCE(telemetry_fail_count, 0) < {$maxFails})" : "";
                 $failFilterMysql = ($maxFails > 0) ? " AND (COALESCE(`telemetry_fail_count`, 0) < {$maxFails})" : "";
 
+                $sourceRoutingEnabled = (bool)$this->getSetting('enable_source_routing', true);
                 $minIntervalMins = (int)$this->getSetting('min_telemetry_interval_mins', 60);
                 $intervalFilterPgsql = "";
                 $intervalFilterMysql = "";
@@ -2143,12 +2187,12 @@ SQL;
                 }
 
                 if ($driver === 'pgsql') {
-                    $sql = "SELECT public_key, node_id, node_name, is_repeater, password, \"update\", bot_id 
+                    $sql = "SELECT public_key, node_id, node_name, is_repeater, password, \"update\", bot_id, last_path 
                             FROM nodes 
                             WHERE \"update\" = true {$failFilterPgsql} {$intervalFilterPgsql} {$botFilterPgsql}
                             ORDER BY last_seen_at DESC";
                 } else {
-                    $sql = "SELECT public_key, node_id, node_name, is_repeater, `password`, `update`, `bot_id` 
+                    $sql = "SELECT public_key, node_id, node_name, is_repeater, `password`, `update`, `bot_id`, `last_path` 
                             FROM `nodes` 
                             WHERE `update` = 1 {$failFilterMysql} {$intervalFilterMysql} {$botFilterMysql}
                             ORDER BY last_seen_at DESC";
@@ -2171,11 +2215,21 @@ SQL;
                             ? trim((string)$row['password']) 
                             : '';
 
+                        $rawPath = trim((string)($row['last_path'] ?? ''));
+                        if (!$sourceRoutingEnabled || strtoupper($rawPath) === 'FLOOD') {
+                            $lastPath = 'FLOOD';
+                            $isDirect = false;
+                        } else {
+                            $lastPath = $rawPath;
+                            $isDirect = ($lastPath === 'DIRECT');
+                        }
+
                         $repeaters[] = [
                             'name'      => $shortName,
                             'public_id' => $pubId,
                             'password'  => $password,
-                            'isDirect'  => false,
+                            'path'      => $lastPath,
+                            'isDirect'  => $isDirect,
                             'status'    => false,
                             'telemetry' => true,
                             'bot_id'    => $row['bot_id'] ?? null,
@@ -2392,11 +2446,12 @@ SQL;
             $botFilterMysql = " AND (`nodes`.`bot_id` = :bot_id)";
             $params[':bot_id'] = $cleanBotId;
         }
+        $sourceRoutingEnabled = (bool)$this->getSetting('enable_source_routing', true);
 
         if ($driver === 'pgsql') {
             $sql = <<<SQL
             WITH next_rep AS (
-                SELECT id, public_key, node_id, node_name, password, requested_date, telemetry_updated_at, last_failed_request_at, bot_id
+                SELECT id, public_key, node_id, node_name, password, requested_date, telemetry_updated_at, last_failed_request_at, bot_id, last_path
                 FROM nodes
                 WHERE (is_repeater = true) AND ("update" = true) {$failFilterPgsql} {$timingFilterPgsql} {$botFilterPgsql}
                 ORDER BY 
@@ -2425,7 +2480,7 @@ SQL;
                 requested_date = CURRENT_TIMESTAMP
             FROM next_rep
             WHERE nodes.id = next_rep.id
-            RETURNING nodes.public_key, nodes.node_id, nodes.node_name, nodes.password, nodes.requested_date, nodes.telemetry_fail_count, nodes.bot_id;
+            RETURNING nodes.public_key, nodes.node_id, nodes.node_name, nodes.password, nodes.requested_date, nodes.telemetry_fail_count, nodes.bot_id, nodes.last_path;
 SQL;
             try {
                 $stmt = $this->pdo->prepare($sql);
@@ -2439,12 +2494,21 @@ SQL;
                     $password = ($row['password'] !== null) 
                         ? trim((string)$row['password']) 
                         : '';
+                    $rawPath = trim((string)($row['last_path'] ?? ''));
+                    if (!$sourceRoutingEnabled || strtoupper($rawPath) === 'FLOOD') {
+                        $lastPath = 'FLOOD';
+                        $isDirect = false;
+                    } else {
+                        $lastPath = $rawPath;
+                        $isDirect = ($lastPath === 'DIRECT');
+                    }
 
                     return [
                         'name'                 => $shortName,
                         'public_id'            => $pubId,
                         'password'             => $password,
-                        'isDirect'             => false,
+                        'path'                 => $lastPath,
+                        'isDirect'             => $isDirect,
                         'status'               => false,
                         'telemetry'            => true,
                         'bot_id'               => $row['bot_id'] ?? null,
@@ -2462,7 +2526,7 @@ SQL;
         $this->pdo->beginTransaction();
         try {
             $selectSql = <<<SQL
-            SELECT id, public_key, node_id, node_name, `password`, `requested_date`, `telemetry_updated_at`, `last_failed_request_at`, `telemetry_fail_count`, `bot_id`
+            SELECT id, public_key, node_id, node_name, `password`, `requested_date`, `telemetry_updated_at`, `last_failed_request_at`, `telemetry_fail_count`, `bot_id`, `last_path`
             FROM `nodes`
             WHERE (`is_repeater` = 1 OR `is_repeater` = true)
               AND (`update` = 1 OR `update` = true)
@@ -2516,12 +2580,21 @@ SQL;
                 $password = ($row['password'] !== null) 
                     ? trim((string)$row['password']) 
                     : '';
+                $rawPath = trim((string)($row['last_path'] ?? ''));
+                if (!$sourceRoutingEnabled || strtoupper($rawPath) === 'FLOOD') {
+                    $lastPath = 'FLOOD';
+                    $isDirect = false;
+                } else {
+                    $lastPath = $rawPath;
+                    $isDirect = ($lastPath === 'DIRECT');
+                }
 
                 return [
                     'name'                 => $shortName,
                     'public_id'            => $pubId,
                     'password'             => $password,
-                    'isDirect'             => false,
+                    'path'                 => $lastPath,
+                    'isDirect'             => $isDirect,
                     'status'               => false,
                     'telemetry'            => true,
                     'bot_id'               => $row['bot_id'] ?? null,
@@ -2594,6 +2667,7 @@ SQL;
             n.requested_date,
             n.telemetry_updated_at,
             n.telemetry_fail_count,
+            n.last_path,
             (
                 SELECT t.battery_v 
                 FROM telemetry t 
@@ -2788,6 +2862,10 @@ SQL;
                 'attempt_status'           => $attemptStatus,
                 'attempt_label'            => $attemptLabel,
                 'attempt_color'            => $attemptColor,
+                'last_path'                => $row['last_path'] ?? null,
+                'path_display'             => empty($row['last_path']) 
+                    ? 'FLOOD (visas tinklas)' 
+                    : ($row['last_path'] === 'DIRECT' ? 'DIRECT (0 šuolių)' : 'DIRECT per [' . $row['last_path'] . ']'),
                 'tz'                       => 'Europe/Vilnius',
             ];
         }
@@ -2980,6 +3058,13 @@ SQL;
             if ($cnt === 0) {
                 $sets[] = "last_failed_request_at = NULL";
             }
+        }
+
+        if (array_key_exists('last_path', $fields)) {
+            $sets[] = "last_path = :last_path";
+            $params[':last_path'] = ($fields['last_path'] !== null && trim((string)$fields['last_path']) !== '') 
+                ? strtoupper(trim((string)$fields['last_path'])) 
+                : null;
         }
 
         if (empty($sets)) {

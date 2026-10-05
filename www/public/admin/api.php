@@ -171,6 +171,9 @@ if ($action === 'save_settings') {
         $data = json_decode($rawInput, true) ?: $_POST;
 
         $newSettings = [];
+        if (isset($data['enable_source_routing'])) {
+            $newSettings['enable_source_routing'] = ($data['enable_source_routing'] === true || $data['enable_source_routing'] === '1' || $data['enable_source_routing'] === 1);
+        }
         if (isset($data['filter_lithuania_enabled'])) {
             $newSettings['filter_lithuania_enabled'] = ($data['filter_lithuania_enabled'] === true || $data['filter_lithuania_enabled'] === '1' || $data['filter_lithuania_enabled'] === 1);
         }
@@ -285,6 +288,9 @@ if ($action === 'update_node') {
     }
     if (array_key_exists('telemetry_fail_count', $data)) {
         $fieldsToUpdate['telemetry_fail_count'] = max(0, (int)$data['telemetry_fail_count']);
+    }
+    if (array_key_exists('last_path', $data)) {
+        $fieldsToUpdate['last_path'] = $data['last_path'];
     }
 
     try {
