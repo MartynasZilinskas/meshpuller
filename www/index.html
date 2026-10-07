@@ -1323,7 +1323,6 @@
             </div>
             <div class="brand-text-container">
                 <h1 class="brand-title">MeshCore Telemetry</h1>
-                <span class="brand-badge">869.618 MHz • ShortFast</span>
             </div>
         </div>
 
@@ -1367,20 +1366,6 @@
         <!-- Šoninė panelė su statistika ir mazgų kortelėmis -->
         <aside class="sidebar-panel" id="sidebarPanel">
             <div class="sidebar-header">
-                <div class="stats-grid">
-                    <div class="stat-card">
-                        <div class="stat-val" id="statRepeatersCount">0</div>
-                        <div class="stat-label">Kartotuvai</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-val" id="statAvgBattery">- V</div>
-                        <div class="stat-label">Vid. Baterija</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-val" id="statAvgTemp">- °C</div>
-                        <div class="stat-label">Vid. Temp.</div>
-                    </div>
-                </div>
 
                 <div class="search-box">
                     <svg class="search-icon" viewBox="0 0 24 24">
@@ -1668,7 +1653,7 @@
                                 ticks: {
                                     color: '#00d2ff',
                                     font: { size: 9, family: 'monospace' },
-                                    callback: function(v) { return v + '°'; }
+                                    callback: function(v) { return Number(v).toFixed(1) + '°C'; }
                                 },
                                 grid: {
                                     color: 'rgba(255, 255, 255, 0.05)'
@@ -1682,7 +1667,7 @@
                                 ticks: {
                                     color: '#2ed573',
                                     font: { size: 9, family: 'monospace' },
-                                    callback: function(v) { return v.toFixed(1) + 'V'; }
+                                    callback: function(v) { return Number(v).toFixed(2) + 'V'; }
                                 },
                                 grid: {
                                     drawOnChartArea: false
@@ -1701,11 +1686,12 @@
             }
         }
 
-        // Mazgo telemetrijos tikrinimas: ar turi realius baterijos arba temperatūros rodmenis
+        // Mazgo telemetrijos tikrinimas: ar turi realius baterijos/temperatūros rodmenis arba gautą telemetrijos įrašą
         function hasNodeTelemetry(node) {
             if (!node) return false;
             return (node.battery_v !== null && node.battery_v !== undefined) || 
-                   (node.temperature_c !== null && node.temperature_c !== undefined);
+                   (node.temperature_c !== null && node.temperature_c !== undefined) ||
+                   Boolean(node.telemetry_updated_at);
         }
 
         // Inicijuojame Leaflet žemėlapį
@@ -2167,7 +2153,11 @@
                                         ${battV !== null ? `<span class="marker-pill metric-pill battery ${battStyle.class}" title="Baterija (atnaujinta: ${formatLithuanianDateTime(telemTime) || 'Nėra'})">🔋 ${battStyle.text}</span>` : ''}
                                         ${tempC !== null ? `<span class="marker-pill metric-pill temp ${tempStyle.class}" title="Temperatūra (atnaujinta: ${formatLithuanianDateTime(telemTime) || 'Nėra'})">🌡️ ${tempStyle.text}</span>` : ''}
                                     </div>
-                                ` : ''}
+                                ` : (telemTime ? `
+                                    <div class="marker-top-metrics">
+                                        <span class="marker-pill metric-pill" style="color:#a78bfa;" title="Telemetrija gauta (atnaujinta: ${formatLithuanianDateTime(telemTime)})">⏱️ ${formatRelativeTime(telemTime)}</span>
+                                    </div>
+                                ` : '')}
                                 <div class="marker-name-row">
                                     <span class="marker-name">${name}</span>
                                 </div>
@@ -2289,8 +2279,8 @@
 
                     <div class="node-metrics-row">
                         <div class="node-indicators">
-                            ${battV !== null ? `<span class="metric-pill battery ${battStyle.class}" title="Baterija (atnaujinta: ${formatLithuanianDateTime(telemTime) || 'Nėra'})">🔋 ${battStyle.text}</span>` : '<span class="metric-pill" style="color:var(--text-dim);">🔋 -</span>'}
-                            ${tempC !== null ? `<span class="metric-pill temp ${tempStyle.class}" title="Temperatūra (atnaujinta: ${formatLithuanianDateTime(telemTime) || 'Nėra'})">🌡️ ${tempStyle.text}</span>` : ''}
+                            ${battV !== null ? `<span class="metric-pill battery ${battStyle.class}" title="Baterija (atnaujinta: ${formatLithuanianDateTime(telemTime) || 'Nėra'})">🔋 ${battStyle.text}</span>` : '<span class="metric-pill" style="color:var(--text-dim);" title="Baterijos duomenų nėra">🔋 -</span>'}
+                            ${tempC !== null ? `<span class="metric-pill temp ${tempStyle.class}" title="Temperatūra (atnaujinta: ${formatLithuanianDateTime(telemTime) || 'Nėra'})">🌡️ ${tempStyle.text}</span>` : '<span class="metric-pill" style="color:var(--text-dim);" title="Temperatūros duomenų nėra">🌡️ -</span>'}
                         </div>
                         <div class="node-telem-time" title="Telemetrija atnaujinta: ${formatLithuanianDateTime(telemTime) || 'Nėra'}">
                             ${telemTime ? `<span style="color:#c084fc; font-weight:600;">⏱️ ${formatRelativeTime(telemTime)}</span>` : ''}
@@ -2310,10 +2300,7 @@
                 listContainer.appendChild(card);
             });
 
-            // Atnaujiname viršutinius statistikos langelius ir mobilias žymas
-            document.getElementById('statRepeatersCount').innerText = nodeList.length;
-            document.getElementById('statAvgBattery').innerText = battCount > 0 ? (totalBattery / battCount).toFixed(2) + ' V' : '- V';
-            document.getElementById('statAvgTemp').innerText = tempCount > 0 ? (totalTemp / tempCount).toFixed(1) + ' °C' : '- °C';
+            // Atnaujiname mobilias žymas
 
             const mobileTabCount = document.getElementById('mobileTabCount');
             if (mobileTabCount) mobileTabCount.innerText = nodeList.length;

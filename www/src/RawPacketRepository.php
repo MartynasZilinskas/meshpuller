@@ -1282,12 +1282,12 @@ SQL;
             $sets[] = 'telemetry_fail_count = 0';
         }
 
-        if ($batteryV !== null && $batteryV >= 1.0 && $batteryV <= 15.0) {
+        if ($batteryV !== null && $batteryV >= 0.0 && $batteryV <= 15.0) {
             $sets[] = 'battery_v = :batt_v';
             $params[':batt_v'] = $batteryV;
         }
 
-        if ($batteryMv !== null && $batteryMv > 1000 && $batteryMv < 15000) {
+        if ($batteryMv !== null && $batteryMv >= 0 && $batteryMv <= 15000) {
             $sets[] = 'battery_mv = :batt_mv';
             $params[':batt_mv'] = $batteryMv;
         }
@@ -1433,7 +1433,7 @@ SQL;
             $stats = $parsed['repeater_stats'];
             $type = 'STATUS';
             $batteryMv = isset($stats['battery_mv']) ? (int)$stats['battery_mv'] : null;
-            $batteryV = isset($stats['battery_volts']) ? (float)$stats['battery_volts'] : ($batteryMv ? round($batteryMv / 1000.0, 2) : null);
+            $batteryV = isset($stats['battery_volts']) ? (float)$stats['battery_volts'] : ($batteryMv !== null ? round($batteryMv / 1000.0, 2) : null);
             $uptimeSeconds = isset($stats['uptime_seconds']) ? (int)$stats['uptime_seconds'] : null;
             $airTimeSeconds = isset($stats['air_time_seconds']) ? (int)$stats['air_time_seconds'] : null;
             $noiseFloor = isset($stats['noise_floor_dbm']) ? (int)$stats['noise_floor_dbm'] : null;
@@ -1445,15 +1445,17 @@ SQL;
             $errorCount = isset($stats['error_events']) ? (int)$stats['error_events'] : null;
         }
         // 2. Tikriname ar yra CAYENNE_LPP_TELEMETRY (Telemetrijos jutikliai)
-        elseif (!empty($parsed['sensors'])) {
+        elseif (isset($parsed['sensors']) || (isset($parsed['response_type']) && $parsed['response_type'] === 'CAYENNE_LPP_TELEMETRY')) {
             $type = 'TELEMETRY';
-            foreach ($parsed['sensors'] as $sensor) {
-                if (isset($sensor['temperature_c']) && $temperatureC === null) {
-                    $temperatureC = (float)$sensor['temperature_c'];
-                }
-                if (isset($sensor['voltage_mv']) && $batteryMv === null) {
-                    $batteryMv = (int)$sensor['voltage_mv'];
-                    $batteryV = (float)($sensor['voltage_v'] ?? round($batteryMv / 1000.0, 2));
+            if (!empty($parsed['sensors']) && is_array($parsed['sensors'])) {
+                foreach ($parsed['sensors'] as $sensor) {
+                    if (isset($sensor['temperature_c']) && $temperatureC === null) {
+                        $temperatureC = (float)$sensor['temperature_c'];
+                    }
+                    if (isset($sensor['voltage_mv']) && $batteryMv === null) {
+                        $batteryMv = (int)$sensor['voltage_mv'];
+                        $batteryV = (float)($sensor['voltage_v'] ?? round($batteryMv / 1000.0, 2));
+                    }
                 }
             }
         }
@@ -1786,7 +1788,7 @@ SQL;
                 WHERE (t.node_id = n.node_id OR (n.public_key IS NOT NULL AND t.public_key = n.public_key)) 
                   AND t.type IN ('TELEMETRY', 'STATUS')
                   AND t.battery_v IS NOT NULL 
-                  AND t.battery_v >= 1.0 AND t.battery_v <= 15.0
+                  AND t.battery_v >= 0.0 AND t.battery_v <= 15.0
                 ORDER BY t.recorded_at DESC, t.id DESC 
                 LIMIT 1
             ) AS last_battery_v,
@@ -1879,7 +1881,7 @@ SQL;
     public function cleanupInvalidTelemetry(): int
     {
         try {
-            $sql = "DELETE FROM telemetry WHERE battery_v > 15.0 OR battery_v < 1.0 OR battery_mv > 15000 OR battery_mv < 1000 OR noise_floor < -160 OR rssi < -160 OR snr > 50 OR snr < -50";
+            $sql = "DELETE FROM telemetry WHERE (battery_v IS NOT NULL AND (battery_v > 15.0 OR battery_v < 0.0)) OR (battery_mv IS NOT NULL AND (battery_mv > 15000 OR battery_mv < 0)) OR noise_floor < -160 OR rssi < -160 OR snr > 50 OR snr < -50";
             return (int)$this->pdo->exec($sql);
         } catch (\Throwable $e) {
             return 0;
@@ -2644,8 +2646,11 @@ SQL;
         }
 
         if (!empty($search)) {
-            $where[] = "n.node_name LIKE :search OR n.node_id LIKE :search OR n.public_key LIKE :search";
-            $params[':search'] = '%' . $search . '%';
+            $s = '%' . strtolower(trim($search)) . '%';
+            $where[] = "(LOWER(n.node_name) LIKE :search1 OR LOWER(n.node_id) LIKE :search2 OR LOWER(n.public_key) LIKE :search3)";
+            $params[':search1'] = $s;
+            $params[':search2'] = $s;
+            $params[':search3'] = $s;
         }
 
         $whereSql = !empty($where) ? "WHERE " . implode(" AND ", $where) : "";
@@ -2674,7 +2679,7 @@ SQL;
                 WHERE (t.node_id = n.node_id OR (n.public_key IS NOT NULL AND t.public_key = n.public_key)) 
                   AND t.type IN ('TELEMETRY', 'STATUS')
                   AND t.battery_v IS NOT NULL 
-                  AND t.battery_v >= 1.0 AND t.battery_v <= 15.0
+                  AND t.battery_v >= 0.0 AND t.battery_v <= 15.0
                 ORDER BY t.recorded_at DESC, t.id DESC 
                 LIMIT 1
             ) AS last_battery_v,
@@ -3089,7 +3094,7 @@ SQL;
     /**
      * Grąžina filtruotus mazgus su puslapiavimu ir bendru skaičiumi
      */
-    public function getFilteredNodes(array $filters = [], int $limit = 100, int $offset = 0): array
+    public function getFilteredNodes(array $filters = [], int $limit = 50, int $offset = 0, ?string $sortBy = null, ?string $sortDir = 'DESC'): array
     {
         // Atnaujiname nesėkmingų bandymų skaičių mazgams prieš formuojant sąrašą
         $this->syncFailedTelemetryAttempts(180);
@@ -3134,8 +3139,25 @@ SQL;
         $countStmt->execute($params);
         $totalCount = (int)$countStmt->fetchColumn();
 
+        // Rūšiavimas pagal pasirinktą stulpelį
+        $allowedCols = [
+            'name'         => 'node_name',
+            'node_name'    => 'node_name',
+            'node_id'      => 'node_id',
+            'type'         => 'is_repeater',
+            'is_repeater'  => 'is_repeater',
+            'bot_id'       => 'bot_id',
+            'update'       => $colUpdate,
+            'password'     => 'password',
+            'coords'       => 'latitude',
+            'latitude'     => 'latitude',
+            'last_seen_at' => 'last_seen_at',
+        ];
+        $orderCol = $allowedCols[$sortBy ?? ''] ?? 'last_seen_at';
+        $orderDir = (strtoupper((string)$sortDir) === 'ASC') ? 'ASC' : 'DESC';
+
         // Gauname įrašus
-        $sql = "SELECT * FROM nodes {$whereSql} ORDER BY last_seen_at DESC LIMIT " . (int)$limit . " OFFSET " . (int)$offset;
+        $sql = "SELECT * FROM nodes {$whereSql} ORDER BY {$orderCol} {$orderDir}, id DESC LIMIT " . (int)$limit . " OFFSET " . (int)$offset;
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
         $nodes = $stmt->fetchAll() ?: [];
@@ -3151,7 +3173,7 @@ SQL;
     /**
      * Grąžina filtruotus telemetrijos įrašus su puslapiavimu
      */
-    public function getFilteredTelemetry(array $filters = [], int $limit = 50, int $offset = 0): array
+    public function getFilteredTelemetry(array $filters = [], int $limit = 50, int $offset = 0, ?string $sortBy = null, ?string $sortDir = 'DESC'): array
     {
         $where = [];
         $params = [];
@@ -3193,8 +3215,26 @@ SQL;
         $countStmt->execute($params);
         $totalCount = (int)$countStmt->fetchColumn();
 
+        // Rūšiavimas pagal pasirinktą stulpelį
+        $allowedCols = [
+            'id'             => 'id',
+            'node_id'        => 'node_id',
+            'type'           => 'type',
+            'battery_v'      => 'battery_v',
+            'temperature_c'  => 'temperature_c',
+            'rssi'           => 'rssi',
+            'snr'            => 'snr',
+            'uptime'         => 'uptime_seconds',
+            'uptime_seconds' => 'uptime_seconds',
+            'packets'        => 'packets_recv',
+            'packets_recv'   => 'packets_recv',
+            'recorded_at'    => 'recorded_at',
+        ];
+        $orderCol = $allowedCols[$sortBy ?? ''] ?? 'recorded_at';
+        $orderDir = (strtoupper((string)$sortDir) === 'ASC') ? 'ASC' : 'DESC';
+
         // Įrašai
-        $sql = "SELECT * FROM telemetry {$whereSql} ORDER BY recorded_at DESC, id DESC LIMIT " . (int)$limit . " OFFSET " . (int)$offset;
+        $sql = "SELECT * FROM telemetry {$whereSql} ORDER BY {$orderCol} {$orderDir}, id DESC LIMIT " . (int)$limit . " OFFSET " . (int)$offset;
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
         $records = $stmt->fetchAll() ?: [];
@@ -3306,7 +3346,7 @@ SQL;
     /**
      * Grąžina filtruotus raw_packets įrašus debugginimui
      */
-    public function getFilteredRawPackets(array $filters = [], int $limit = 50, int $offset = 0): array
+    public function getFilteredRawPackets(array $filters = [], int $limit = 50, int $offset = 0, ?string $sortBy = null, ?string $sortDir = 'DESC'): array
     {
         $where = [];
         $params = [];
@@ -3352,8 +3392,29 @@ SQL;
         $countStmt->execute($params);
         $totalCount = (int)$countStmt->fetchColumn();
 
+        // Rūšiavimas pagal pasirinktą stulpelį
+        $allowedCols = [
+            'id'            => 'id',
+            'bot_id'        => 'bot_id',
+            'direction'     => 'direction',
+            'sender'        => 'sender_name',
+            'sender_name'   => 'sender_name',
+            'target'        => 'target_name',
+            'target_name'   => 'target_name',
+            'length'        => 'length',
+            'rssi'          => 'rssi',
+            'snr'           => 'snr',
+            'status'        => 'processed',
+            'processed'     => 'processed',
+            'error'         => 'error_message',
+            'error_message' => 'error_message',
+            'created_at'    => 'id',
+        ];
+        $orderCol = $allowedCols[$sortBy ?? ''] ?? 'id';
+        $orderDir = (strtoupper((string)$sortDir) === 'ASC') ? 'ASC' : 'DESC';
+
         // Įrašai
-        $sql = "SELECT id, bot_id, direction, length, rssi, snr, target_name, target_public_key, sender_name, sender_public_key, is_encrypted, processed, created_at, processed_at, completed_at, error_message, SUBSTRING(raw_hex, 1, 80) AS raw_hex_preview FROM raw_packets {$whereSql} ORDER BY id DESC LIMIT " . (int)$limit . " OFFSET " . (int)$offset;
+        $sql = "SELECT id, bot_id, direction, length, rssi, snr, target_name, target_public_key, sender_name, sender_public_key, is_encrypted, processed, created_at, processed_at, completed_at, error_message, SUBSTRING(raw_hex, 1, 80) AS raw_hex_preview FROM raw_packets {$whereSql} ORDER BY {$orderCol} {$orderDir} LIMIT " . (int)$limit . " OFFSET " . (int)$offset;
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
         $packets = $stmt->fetchAll() ?: [];

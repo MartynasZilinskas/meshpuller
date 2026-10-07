@@ -452,6 +452,37 @@ $isLoggedIn = isAdminLoggedIn();
             letter-spacing: 0.04em;
         }
 
+        table.admin-table th.sortable {
+            cursor: pointer;
+            user-select: none;
+            transition: color 0.15s ease, background 0.15s ease;
+        }
+
+        table.admin-table th.sortable:hover {
+            color: var(--accent-cyan);
+            background: #252525;
+        }
+
+        table.admin-table th.sortable .sort-icon {
+            display: inline-block;
+            margin-left: 5px;
+            font-size: 0.70rem;
+            color: var(--text-dim);
+            transition: color 0.15s ease;
+        }
+
+        table.admin-table th.sortable.sorted-asc .sort-icon,
+        table.admin-table th.sortable.sorted-desc .sort-icon {
+            color: var(--accent-cyan);
+            font-weight: bold;
+        }
+
+        table.admin-table th.sortable.sorted-asc,
+        table.admin-table th.sortable.sorted-desc {
+            color: #ffffff;
+            background: rgba(0, 210, 255, 0.06);
+        }
+
         table.admin-table td {
             padding: 10px 14px;
             border-bottom: 1px solid #303030;
@@ -766,16 +797,16 @@ $isLoggedIn = isAdminLoggedIn();
                 </div>
 
                 <div class="table-wrapper">
-                    <table class="admin-table">
+                    <table class="admin-table" id="nodesTable">
                         <thead>
                             <tr>
-                                <th>Mazgas</th>
-                                <th>Tipas</th>
-                                <th>Šaltinis (Botas)</th>
-                                <th>Stebimas (Update)</th>
-                                <th>Slaptažodis</th>
-                                <th>Koordinatės</th>
-                                <th>Paskutinį kartą matytas (LT laiku)</th>
+                                <th class="sortable" onclick="handleSortTable('nodes', 'name')" data-sort="name">Mazgas <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('nodes', 'type')" data-sort="type">Tipas <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('nodes', 'bot_id')" data-sort="bot_id">Šaltinis (Botas) <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('nodes', 'update')" data-sort="update">Stebimas (Update) <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('nodes', 'password')" data-sort="password">Slaptažodis <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('nodes', 'coords')" data-sort="coords">Koordinatės <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('nodes', 'last_seen_at')" data-sort="last_seen_at">Paskutinį kartą matytas (LT laiku) <span class="sort-icon"></span></th>
                                 <th style="text-align: right;">Veiksmai</th>
                             </tr>
                         </thead>
@@ -783,6 +814,14 @@ $isLoggedIn = isAdminLoggedIn();
                             <tr><td colspan="8" style="text-align: center; padding: 24px;">Kraunami mazgai...</td></tr>
                         </tbody>
                     </table>
+
+                    <div class="pagination-row">
+                        <span id="nodesPageInfo">Puslapis 1</span>
+                        <div style="display: flex; gap: 6px;">
+                            <button class="btn btn-secondary btn-sm" id="btnPrevNodes" onclick="changeNodesPage(-1)">← Ankstesnis</button>
+                            <button class="btn btn-secondary btn-sm" id="btnNextNodes" onclick="changeNodesPage(1)">Kitas →</button>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -812,18 +851,18 @@ $isLoggedIn = isAdminLoggedIn();
                 </div>
 
                 <div class="table-wrapper">
-                    <table class="admin-table">
+                    <table class="admin-table" id="telemetryTable">
                         <thead>
                             <tr>
-                                <th>ID</th>
-                                <th>Mazgas</th>
-                                <th>Tipas</th>
-                                <th>Baterija</th>
-                                <th>Temperatūra</th>
-                                <th>Signalo Kokybė</th>
-                                <th>Veikimo Laikas (Uptime)</th>
-                                <th>Paketai RX/TX</th>
-                                <th>Užregistruota (LT laiku)</th>
+                                <th class="sortable" onclick="handleSortTable('telemetry', 'id')" data-sort="id">ID <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('telemetry', 'node_id')" data-sort="node_id">Mazgas <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('telemetry', 'type')" data-sort="type">Tipas <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('telemetry', 'battery_v')" data-sort="battery_v">Baterija <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('telemetry', 'temperature_c')" data-sort="temperature_c">Temperatūra <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('telemetry', 'rssi')" data-sort="rssi">Signalo Kokybė <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('telemetry', 'uptime')" data-sort="uptime">Veikimo Laikas (Uptime) <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('telemetry', 'packets')" data-sort="packets">Paketai RX/TX <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('telemetry', 'recorded_at')" data-sort="recorded_at">Užregistruota (LT laiku) <span class="sort-icon"></span></th>
                                 <th style="text-align: right;">Veiksmai</th>
                             </tr>
                         </thead>
@@ -873,18 +912,18 @@ $isLoggedIn = isAdminLoggedIn();
                 </div>
 
                 <div class="table-wrapper">
-                    <table class="admin-table">
+                    <table class="admin-table" id="rawTable">
                         <thead>
                             <tr>
-                                <th>ID</th>
-                                <th>Botas</th>
-                                <th>Kryptis</th>
-                                <th>Siuntėjas</th>
-                                <th>Taikinys</th>
-                                <th>Ilgis / Radijas</th>
-                                <th>Būsena</th>
-                                <th>Klaida (jei yra)</th>
-                                <th>Gauta Data (LT laiku)</th>
+                                <th class="sortable" onclick="handleSortTable('raw', 'id')" data-sort="id">ID <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('raw', 'bot_id')" data-sort="bot_id">Botas <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('raw', 'direction')" data-sort="direction">Kryptis <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('raw', 'sender')" data-sort="sender">Siuntėjas <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('raw', 'target')" data-sort="target">Taikinys <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('raw', 'length')" data-sort="length">Ilgis / Radijas <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('raw', 'status')" data-sort="status">Būsena <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('raw', 'error')" data-sort="error">Klaida (jei yra) <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('raw', 'created_at')" data-sort="created_at">Gauta Data (LT laiku) <span class="sort-icon"></span></th>
                                 <th style="text-align: right;">Veiksmai</th>
                             </tr>
                         </thead>
@@ -967,7 +1006,7 @@ $isLoggedIn = isAdminLoggedIn();
 
                     <!-- Filtravimo valdymo juosta -->
                     <div class="filter-group" style="flex-wrap: wrap; gap: 10px; padding-top: 10px; border-top: 1px solid var(--border-color);">
-                        <input type="text" id="queueSearchInput" class="form-control" style="width: 240px;" placeholder="Ieškoti mazgo ar ID..." oninput="onQueueFilterChange()">
+                        <input type="text" id="queueSearchInput" class="form-control" style="width: 240px;" placeholder="Ieškoti mazgo ar ID..." oninput="onQueueFilterChange()" onkeydown="if(event.key==='Enter'){clearTimeout(queueFilterTimeout);loadNodeQueue(false);}">
 
                         <div style="display: flex; align-items: center; gap: 6px;">
                             <label style="font-size: 0.78rem; color: var(--text-muted);">Šaltinis (Botas):</label>
@@ -1002,15 +1041,15 @@ $isLoggedIn = isAdminLoggedIn();
 
                 <!-- LENTELĖ SU EILE -->
                 <div class="table-wrapper" style="margin-bottom: 24px;">
-                    <table class="admin-table">
+                    <table class="admin-table" id="queueTable">
                         <thead>
                             <tr>
-                                <th style="width: 50px; text-align: center;">#</th>
-                                <th>Mazgas</th>
-                                <th>Šaltinis (Botas)</th>
-                                <th>Paskutinė Užklausa (LT laiku)</th>
-                                <th>Paskutinio Bandymo Rezultatas</th>
-                                <th>Paskutiniai Rodmenys & Telemetrija (LT laiku)</th>
+                                <th class="sortable" style="width: 50px; text-align: center;" onclick="handleSortTable('queue', 'index')" data-sort="index"># <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('queue', 'name')" data-sort="name">Mazgas <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('queue', 'bot_id')" data-sort="bot_id">Šaltinis (Botas) <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('queue', 'requested_date')" data-sort="requested_date">Paskutinė Užklausa (LT laiku) <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('queue', 'status')" data-sort="status">Paskutinio Bandymo Rezultatas <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('queue', 'telemetry')" data-sort="telemetry">Paskutiniai Rodmenys & Telemetrija (LT laiku) <span class="sort-icon"></span></th>
                                 <th style="text-align: right;">Veiksmai</th>
                             </tr>
                         </thead>
@@ -1018,6 +1057,14 @@ $isLoggedIn = isAdminLoggedIn();
                             <tr><td colspan="7" style="text-align: center; padding: 24px;">Kraunama kartotuvų užklausų eilė...</td></tr>
                         </tbody>
                     </table>
+
+                    <div class="pagination-row">
+                        <span id="queuePageInfo">Puslapis 1</span>
+                        <div style="display: flex; gap: 6px;">
+                            <button class="btn btn-secondary btn-sm" id="btnPrevQueue" onclick="changeQueuePage(-1)">← Ankstesnis</button>
+                            <button class="btn btn-secondary btn-sm" id="btnNextQueue" onclick="changeQueuePage(1)">Kitas →</button>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- 2. RAW PAKETŲ EILĖS APDOROJIMAS & WORKERIS -->
@@ -1423,6 +1470,10 @@ $isLoggedIn = isAdminLoggedIn();
         let activePacketId = null;
         let activePacketData = null;
         
+        // Puslapiavimas (po 50 per puslapį kiekvienai lentelei)
+        let nodesPage = 0;
+        const nodesLimit = 50;
+
         let telPage = 0;
         const telLimit = 50;
         let telNodeFilter = '';
@@ -1430,6 +1481,96 @@ $isLoggedIn = isAdminLoggedIn();
         let rawPage = 0;
         const rawLimit = 50;
         let rawNodeFilter = '';
+
+        let queuePage = 0;
+        const queueLimit = 50;
+
+        // Rūšiavimo būsenos valdymas (atsimenama kiekvienai lentelei individualiai per localStorage)
+        function getSortState(tableKey, defaultCol, defaultDir) {
+            try {
+                const stored = localStorage.getItem('meshcore_sort_' + tableKey);
+                if (stored) {
+                    const parsed = JSON.parse(stored);
+                    if (parsed && parsed.col && (parsed.dir === 'asc' || parsed.dir === 'desc')) {
+                        return parsed;
+                    }
+                }
+            } catch (e) {}
+            return { col: defaultCol, dir: defaultDir };
+        }
+
+        function setSortState(tableKey, col, dir) {
+            try {
+                localStorage.setItem('meshcore_sort_' + tableKey, JSON.stringify({ col, dir }));
+            } catch (e) {}
+        }
+
+        let nodesSort = getSortState('nodes', 'last_seen_at', 'desc');
+        let telSort = getSortState('telemetry', 'recorded_at', 'desc');
+        let rawSort = getSortState('raw', 'id', 'desc');
+        let queueSort = getSortState('queue', 'index', 'asc');
+
+        function updateTableSortHeaders(tableKey) {
+            let currentSort;
+            let tableId;
+            if (tableKey === 'nodes') { currentSort = nodesSort; tableId = 'nodesTable'; }
+            else if (tableKey === 'telemetry') { currentSort = telSort; tableId = 'telemetryTable'; }
+            else if (tableKey === 'raw') { currentSort = rawSort; tableId = 'rawTable'; }
+            else if (tableKey === 'queue') { currentSort = queueSort; tableId = 'queueTable'; }
+            else return;
+
+            const table = document.getElementById(tableId);
+            if (!table) return;
+
+            const headers = table.querySelectorAll('th[data-sort]');
+            headers.forEach(th => {
+                const sortKey = th.getAttribute('data-sort');
+                const iconSpan = th.querySelector('.sort-icon');
+                th.classList.remove('sorted-asc', 'sorted-desc');
+
+                if (sortKey === currentSort.col) {
+                    th.classList.add(currentSort.dir === 'asc' ? 'sorted-asc' : 'sorted-desc');
+                    if (iconSpan) iconSpan.textContent = (currentSort.dir === 'asc') ? '▲' : '▼';
+                } else {
+                    if (iconSpan) iconSpan.textContent = '⇅';
+                }
+            });
+        }
+
+        function handleSortTable(tableKey, col) {
+            let currentSort;
+            if (tableKey === 'nodes') currentSort = nodesSort;
+            else if (tableKey === 'telemetry') currentSort = telSort;
+            else if (tableKey === 'raw') currentSort = rawSort;
+            else if (tableKey === 'queue') currentSort = queueSort;
+            else return;
+
+            let newDir = 'asc';
+            if (currentSort.col === col) {
+                newDir = (currentSort.dir === 'asc') ? 'desc' : 'asc';
+            } else {
+                const descFirst = ['id', 'recorded_at', 'created_at', 'last_seen_at', 'requested_date', 'telemetry', 'battery_v', 'temperature_c', 'rssi', 'uptime', 'length'];
+                newDir = descFirst.includes(col) ? 'desc' : 'asc';
+            }
+
+            currentSort.col = col;
+            currentSort.dir = newDir;
+            setSortState(tableKey, col, newDir);
+
+            if (tableKey === 'nodes') {
+                nodesPage = 0;
+                loadNodes(0);
+            } else if (tableKey === 'telemetry') {
+                telPage = 0;
+                loadTelemetry(0);
+            } else if (tableKey === 'raw') {
+                rawPage = 0;
+                loadRawPackets(0);
+            } else if (tableKey === 'queue') {
+                queuePage = 0;
+                renderNodeQueueTable();
+            }
+        }
 
         // Istorijos ir modalų būsenos valdymas
         let activePacketModalId = null;
@@ -1481,10 +1622,12 @@ $isLoggedIn = isAdminLoggedIn();
                 const type = overrides.type !== undefined ? overrides.type : (document.getElementById('nodesTypeFilter')?.value || '');
                 const update = overrides.update !== undefined ? overrides.update : (document.getElementById('nodesUpdateFilter')?.value || '');
                 const editNode = overrides.edit_node !== undefined ? overrides.edit_node : activeEditNodeKey;
+                const page = overrides.page !== undefined ? overrides.page : nodesPage;
 
                 if (search) params.set('search', search);
                 if (type) params.set('type', type);
                 if (update) params.set('update', update);
+                if (page > 0) params.set('page', page + 1);
                 if (editNode) params.set('edit_node', editNode);
             } else if (tab === 'telemetry') {
                 const node = overrides.node !== undefined ? overrides.node : (document.getElementById('telemetryNodeInput')?.value || '').trim();
@@ -1608,12 +1751,14 @@ $isLoggedIn = isAdminLoggedIn();
                     const search = params.get('search') || params.get('q') || '';
                     const type = params.get('type') || '';
                     const update = params.get('update') || '';
+                    const pageParam = parseInt(params.get('page'), 10);
+                    nodesPage = (!isNaN(pageParam) && pageParam > 0) ? (pageParam - 1) : 0;
 
                     if (document.getElementById('nodesSearch')) document.getElementById('nodesSearch').value = search;
                     if (document.getElementById('nodesTypeFilter')) document.getElementById('nodesTypeFilter').value = type;
                     if (document.getElementById('nodesUpdateFilter')) document.getElementById('nodesUpdateFilter').value = update;
 
-                    loadNodes();
+                    loadNodes(nodesPage);
                 } else if (tab === 'telemetry') {
                     const node = params.get('node') || '';
                     const type = params.get('type') || '';
@@ -1694,7 +1839,9 @@ $isLoggedIn = isAdminLoggedIn();
             }
             updateDocumentTitle();
 
-            if (tabName === 'nodes') loadNodes();
+            updateTableSortHeaders(tabName === 'tools' ? 'queue' : tabName);
+
+            if (tabName === 'nodes') loadNodes(nodesPage);
             else if (tabName === 'telemetry') loadTelemetry(telPage);
             else if (tabName === 'raw') loadRawPackets(rawPage);
             else if (tabName === 'tools') loadNodeQueue();
@@ -1703,8 +1850,9 @@ $isLoggedIn = isAdminLoggedIn();
 
         // Filtravimo ir paieškos apdorotojai
         const debouncedLoadNodes = debounce(() => {
-            updateHistory({ tab: 'nodes' }, 'replace');
-            loadNodes();
+            nodesPage = 0;
+            updateHistory({ tab: 'nodes', page: 0 }, 'replace');
+            loadNodes(0);
         }, 300);
 
         function onNodesSearchInput() {
@@ -1712,13 +1860,15 @@ $isLoggedIn = isAdminLoggedIn();
         }
 
         function onNodesSearchEnter() {
-            updateHistory({ tab: 'nodes' }, 'push');
-            loadNodes();
+            nodesPage = 0;
+            updateHistory({ tab: 'nodes', page: 0 }, 'push');
+            loadNodes(0);
         }
 
         function onNodesFilterChange() {
-            updateHistory({ tab: 'nodes' }, 'push');
-            loadNodes();
+            nodesPage = 0;
+            updateHistory({ tab: 'nodes', page: 0 }, 'push');
+            loadNodes(0);
         }
 
         function onTelemetryFilterChange() {
@@ -1791,19 +1941,28 @@ $isLoggedIn = isAdminLoggedIn();
         }
 
         // 1. MAZGŲ SĄRAŠAS
-        async function loadNodes() {
-            const search = document.getElementById('nodesSearch').value;
-            const type = document.getElementById('nodesTypeFilter').value;
-            const update = document.getElementById('nodesUpdateFilter').value;
+        async function loadNodes(page = 0) {
+            nodesPage = page;
+            const search = document.getElementById('nodesSearch')?.value || '';
+            const type = document.getElementById('nodesTypeFilter')?.value || '';
+            const update = document.getElementById('nodesUpdateFilter')?.value || '';
+            const offset = page * nodesLimit;
 
-            const url = `api.php?action=nodes&search=${encodeURIComponent(search)}&type=${encodeURIComponent(type)}&update=${encodeURIComponent(update)}`;
+            const url = `api.php?action=nodes&search=${encodeURIComponent(search)}&type=${encodeURIComponent(type)}&update=${encodeURIComponent(update)}&limit=${nodesLimit}&offset=${offset}&sort_by=${encodeURIComponent(nodesSort.col)}&sort_dir=${nodesSort.dir}`;
             try {
                 const res = await fetch(url);
                 const data = await res.json();
                 if (data.success) {
                     nodesData = data.nodes || [];
                     document.getElementById('nodesCountBadge').innerText = `${data.total} mazgų`;
+                    const pageInfo = document.getElementById('nodesPageInfo');
+                    const btnPrev = document.getElementById('btnPrevNodes');
+                    const btnNext = document.getElementById('btnNextNodes');
+                    if (pageInfo) pageInfo.innerText = `Puslapis ${nodesPage + 1} iš ${Math.max(1, Math.ceil(data.total / nodesLimit))}`;
+                    if (btnPrev) btnPrev.disabled = (nodesPage <= 0);
+                    if (btnNext) btnNext.disabled = (offset + nodesLimit >= data.total);
                     renderNodesTable(nodesData);
+                    updateTableSortHeaders('nodes');
 
                     if (pendingEditNodeKey) {
                         openEditNode(pendingEditNodeKey, false);
@@ -1812,6 +1971,15 @@ $isLoggedIn = isAdminLoggedIn();
                 }
             } catch (err) {
                 console.error(err);
+            }
+        }
+
+        function changeNodesPage(delta) {
+            const newPage = Math.max(0, nodesPage + delta);
+            if (newPage !== nodesPage) {
+                nodesPage = newPage;
+                updateHistory({ tab: 'nodes', page: nodesPage }, 'push');
+                loadNodes(nodesPage);
             }
         }
 
@@ -2043,7 +2211,7 @@ $isLoggedIn = isAdminLoggedIn();
             const type = document.getElementById('telemetryTypeFilter').value;
             const offset = page * telLimit;
 
-            const url = `api.php?action=telemetry&node_id=${encodeURIComponent(node)}&type=${encodeURIComponent(type)}&limit=${telLimit}&offset=${offset}`;
+            const url = `api.php?action=telemetry&node_id=${encodeURIComponent(node)}&type=${encodeURIComponent(type)}&limit=${telLimit}&offset=${offset}&sort_by=${encodeURIComponent(telSort.col)}&sort_dir=${telSort.dir}`;
             try {
                 const res = await fetch(url);
                 const data = await res.json();
@@ -2053,6 +2221,7 @@ $isLoggedIn = isAdminLoggedIn();
                     document.getElementById('btnPrevTel').disabled = (telPage <= 0);
                     document.getElementById('btnNextTel').disabled = (offset + telLimit >= data.total);
                     renderTelemetryTable(data.records || []);
+                    updateTableSortHeaders('telemetry');
                 }
             } catch (err) {
                 console.error(err);
@@ -2145,7 +2314,7 @@ $isLoggedIn = isAdminLoggedIn();
             const direction = document.getElementById('rawDirectionFilter').value;
             const offset = page * rawLimit;
 
-            const url = `api.php?action=raw_packets&search=${encodeURIComponent(search)}&status=${encodeURIComponent(status)}&direction=${encodeURIComponent(direction)}&limit=${rawLimit}&offset=${offset}`;
+            const url = `api.php?action=raw_packets&search=${encodeURIComponent(search)}&status=${encodeURIComponent(status)}&direction=${encodeURIComponent(direction)}&limit=${rawLimit}&offset=${offset}&sort_by=${encodeURIComponent(rawSort.col)}&sort_dir=${rawSort.dir}`;
             try {
                 const res = await fetch(url);
                 const data = await res.json();
@@ -2155,6 +2324,7 @@ $isLoggedIn = isAdminLoggedIn();
                     document.getElementById('btnPrevRaw').disabled = (rawPage <= 0);
                     document.getElementById('btnNextRaw').disabled = (offset + rawLimit >= data.total);
                     renderRawTable(data.packets || []);
+                    updateTableSortHeaders('raw');
                 }
             } catch (err) {
                 console.error(err);
@@ -2443,7 +2613,10 @@ $isLoggedIn = isAdminLoggedIn();
                     throw new Error(data.error || 'Nepavyko užkrauti eilės duomenų');
                 }
 
-                currentQueueData = data.queue || [];
+                currentQueueData = (data.queue || []).map((item, idx) => {
+                    item._originalIndex = idx + 1;
+                    return item;
+                });
 
                 // Atnaujiname botų pasirinkimą jei dar nėra
                 const botSelect = document.getElementById('queueBotFilter');
@@ -2499,6 +2672,8 @@ $isLoggedIn = isAdminLoggedIn();
         }
 
         function onQueueFilterChange() {
+            queuePage = 0;
+            renderNodeQueueTable();
             clearTimeout(queueFilterTimeout);
             queueFilterTimeout = setTimeout(() => {
                 loadNodeQueue(false);
@@ -2506,6 +2681,12 @@ $isLoggedIn = isAdminLoggedIn();
         }
 
         function onQueueStatusFilterChange() {
+            queuePage = 0;
+            renderNodeQueueTable();
+        }
+
+        function changeQueuePage(delta) {
+            queuePage = Math.max(0, queuePage + delta);
             renderNodeQueueTable();
         }
 
@@ -2514,8 +2695,19 @@ $isLoggedIn = isAdminLoggedIn();
             if (!tbody) return;
 
             const statusFilter = document.getElementById('queueStatusFilter')?.value || '';
+            const searchVal = (document.getElementById('queueSearchInput')?.value || '').toLowerCase().trim();
 
-            let list = currentQueueData;
+            let list = [...currentQueueData];
+
+            if (searchVal) {
+                list = list.filter(item => {
+                    const name = (item.name || item.node_name || '').toLowerCase();
+                    const nodeId = (item.node_id || '').toLowerCase();
+                    const pubKey = (item.public_key || '').toLowerCase();
+                    return name.includes(searchVal) || nodeId.includes(searchVal) || pubKey.includes(searchVal);
+                });
+            }
+
             if (statusFilter) {
                 if (statusFilter === 'blocked') {
                     list = list.filter(item => item.is_blocked || item.attempt_status === 'blocked');
@@ -2530,6 +2722,53 @@ $isLoggedIn = isAdminLoggedIn();
                 }
             }
 
+            // Rūšiavimas pagal pasirinktą stulpelį
+            if (queueSort && queueSort.col) {
+                const dir = (queueSort.dir === 'desc') ? -1 : 1;
+                list.sort((a, b) => {
+                    if (queueSort.col === 'index') {
+                        const valA = a._originalIndex ?? a.queue_pos ?? 999999;
+                        const valB = b._originalIndex ?? b.queue_pos ?? 999999;
+                        return (valA - valB) * dir;
+                    } else if (queueSort.col === 'name') {
+                        const valA = (a.name || a.node_name || a.node_id || '').toLowerCase();
+                        const valB = (b.name || b.node_name || b.node_id || '').toLowerCase();
+                        return valA.localeCompare(valB) * dir;
+                    } else if (queueSort.col === 'bot_id') {
+                        const valA = (a.bot_id || '').toLowerCase();
+                        const valB = (b.bot_id || '').toLowerCase();
+                        return valA.localeCompare(valB) * dir;
+                    } else if (queueSort.col === 'requested_date') {
+                        const valA = a.requested_date ? new Date(a.requested_date).getTime() : 0;
+                        const valB = b.requested_date ? new Date(b.requested_date).getTime() : 0;
+                        return (valA - valB) * dir;
+                    } else if (queueSort.col === 'status') {
+                        const valA = (a.attempt_status || '') + '_' + (a.telemetry_fail_count || 0);
+                        const valB = (b.attempt_status || '') + '_' + (b.telemetry_fail_count || 0);
+                        return valA.localeCompare(valB) * dir;
+                    } else if (queueSort.col === 'telemetry') {
+                        const valA = a.last_telemetry_at ? new Date(a.last_telemetry_at).getTime() : (a.last_battery_v ? parseFloat(a.last_battery_v) : 0);
+                        const valB = b.last_telemetry_at ? new Date(b.last_telemetry_at).getTime() : (b.last_battery_v ? parseFloat(b.last_battery_v) : 0);
+                        return (valA - valB) * dir;
+                    }
+                    return 0;
+                });
+            }
+
+            const totalCount = list.length;
+            const totalPages = Math.max(1, Math.ceil(totalCount / queueLimit));
+            if (queuePage >= totalPages) queuePage = Math.max(0, totalPages - 1);
+            if (queuePage < 0) queuePage = 0;
+
+            const pageInfo = document.getElementById('queuePageInfo');
+            const btnPrev = document.getElementById('btnPrevQueue');
+            const btnNext = document.getElementById('btnNextQueue');
+            if (pageInfo) pageInfo.innerText = `Puslapis ${queuePage + 1} iš ${totalPages}`;
+            if (btnPrev) btnPrev.disabled = (queuePage <= 0);
+            if (btnNext) btnNext.disabled = (queuePage >= totalPages - 1);
+
+            updateTableSortHeaders('queue');
+
             if (!list || list.length === 0) {
                 tbody.innerHTML = `
                     <tr>
@@ -2541,7 +2780,9 @@ $isLoggedIn = isAdminLoggedIn();
                 return;
             }
 
-            tbody.innerHTML = list.map(item => {
+            const pageItems = list.slice(queuePage * queueLimit, (queuePage + 1) * queueLimit);
+
+            tbody.innerHTML = pageItems.map(item => {
                 const isBlocked = !!item.is_blocked;
                 const isRateLimited = !!item.is_rate_limited && !isBlocked;
                 const isInProgress = (item.attempt_status === 'in_progress' || !!item.is_in_progress) && !isBlocked;
@@ -2734,8 +2975,8 @@ $isLoggedIn = isAdminLoggedIn();
                     telemetryHtml = `
                         <div style="display: flex; flex-direction: column; gap: 3px;">
                             <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-                                ${item.battery_v !== null ? `<span style="font-size: 0.8rem; font-weight: 600; color: ${bColor};">🔋 ${Number(item.battery_v).toFixed(2)}V</span>` : ''}
-                                ${item.temperature_c !== null ? `<span style="font-size: 0.75rem; color: #ffffff;">🌡️ ${Number(item.temperature_c).toFixed(1)}°C</span>` : ''}
+                                ${item.battery_v !== null ? `<span style="font-size: 0.8rem; font-weight: 600; color: ${bColor};">🔋 ${Number(item.battery_v).toFixed(2)}V</span>` : '<span style="font-size: 0.8rem; color: var(--text-dim);" title="Baterijos duomenų nėra">🔋 -</span>'}
+                                ${item.temperature_c !== null ? `<span style="font-size: 0.75rem; color: #ffffff;">🌡️ ${Number(item.temperature_c).toFixed(1)}°C</span>` : '<span style="font-size: 0.75rem; color: var(--text-dim);" title="Temperatūros duomenų nėra">🌡️ -</span>'}
                             </div>
                             ${priorTelemDate ? `
                                 <div style="font-size: 0.72rem; color: var(--text-muted);" title="Lietuvos laiku: ${escapeHtml(priorTelemDate)}">
@@ -3290,6 +3531,7 @@ $isLoggedIn = isAdminLoggedIn();
         // Paleidimas užsikrovus / atnaujinus puslapį (Refresh)
         document.addEventListener('DOMContentLoaded', () => {
             <?php if ($isLoggedIn): ?>
+                ['nodes', 'telemetry', 'raw', 'queue'].forEach(t => updateTableSortHeaders(t));
                 loadStats();
                 applyUrlState(true);
             <?php endif; ?>

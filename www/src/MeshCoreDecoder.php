@@ -584,13 +584,11 @@ class MeshCoreDecoder
                 }
             }
 
-            // C) Skenuojame CayenneLPP jutiklių telemetriją
+            // C) Skenuojame CayenneLPP jutiklių telemetriją (arba tuščią telemetrijos atsaką)
             $cayenne = $this->parseCayenneLPP(substr($dataPtr, 4));
-            if (!empty($cayenne)) {
-                $res['response_type'] = 'CAYENNE_LPP_TELEMETRY';
-                $res['sensors'] = $cayenne;
-                return $res;
-            }
+            $res['response_type'] = 'CAYENNE_LPP_TELEMETRY';
+            $res['sensors'] = $cayenne;
+            return $res;
         }
 
         // 4. Tekstinis pranešimas (TXT_MSG)

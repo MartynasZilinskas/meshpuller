@@ -236,11 +236,13 @@ if ($action === 'nodes') {
         'type'   => $_GET['type'] ?? null,
         'update' => isset($_GET['update']) && $_GET['update'] !== '' ? $_GET['update'] : null,
     ];
-    $limit  = max(1, min(500, (int)($_GET['limit'] ?? 100)));
-    $offset = max(0, (int)($_GET['offset'] ?? 0));
+    $limit   = max(1, min(500, (int)($_GET['limit'] ?? 50)));
+    $offset  = max(0, (int)($_GET['offset'] ?? 0));
+    $sortBy  = $_GET['sort_by'] ?? null;
+    $sortDir = $_GET['sort_dir'] ?? 'desc';
 
     try {
-        $result = $repository->getFilteredNodes($filters, $limit, $offset);
+        $result = $repository->getFilteredNodes($filters, $limit, $offset, $sortBy, $sortDir);
         echo json_encode(array_merge(['success' => true], $result), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
     } catch (\Throwable $e) {
         http_response_code(500);
@@ -321,11 +323,13 @@ if ($action === 'telemetry') {
         'from'    => $_GET['from'] ?? null,
         'to'      => $_GET['to'] ?? null,
     ];
-    $limit  = max(1, min(500, (int)($_GET['limit'] ?? 50)));
-    $offset = max(0, (int)($_GET['offset'] ?? 0));
+    $limit   = max(1, min(500, (int)($_GET['limit'] ?? 50)));
+    $offset  = max(0, (int)($_GET['offset'] ?? 0));
+    $sortBy  = $_GET['sort_by'] ?? null;
+    $sortDir = $_GET['sort_dir'] ?? 'desc';
 
     try {
-        $result = $repository->getFilteredTelemetry($filters, $limit, $offset);
+        $result = $repository->getFilteredTelemetry($filters, $limit, $offset, $sortBy, $sortDir);
         echo json_encode(array_merge(['success' => true], $result), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
     } catch (\Throwable $e) {
         http_response_code(500);
@@ -342,14 +346,16 @@ if ($action === 'raw_packets') {
         'status'    => $_GET['status'] ?? null,
         'search'    => $_GET['search'] ?? null,
     ];
-    $limit  = max(1, min(500, (int)($_GET['limit'] ?? 50)));
-    $offset = max(0, (int)($_GET['offset'] ?? 0));
+    $limit   = max(1, min(500, (int)($_GET['limit'] ?? 50)));
+    $offset  = max(0, (int)($_GET['offset'] ?? 0));
+    $sortBy  = $_GET['sort_by'] ?? null;
+    $sortDir = $_GET['sort_dir'] ?? 'desc';
 
     try {
         if (($filters['status'] ?? '') === 'errors' || $offset === 0) {
             $repository->syncErrorsFromDecodedJson(100);
         }
-        $result = $repository->getFilteredRawPackets($filters, $limit, $offset);
+        $result = $repository->getFilteredRawPackets($filters, $limit, $offset, $sortBy, $sortDir);
         echo json_encode(array_merge(['success' => true], $result), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
     } catch (\Throwable $e) {
         http_response_code(500);

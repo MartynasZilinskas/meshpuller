@@ -234,7 +234,7 @@ if ($isNodesEndpoint) {
 
     if ($telemetryOnly) {
         $repeaters = array_values(array_filter($repeaters, function ($node) {
-            return ($node['battery_v'] !== null || $node['temperature_c'] !== null);
+            return ($node['battery_v'] !== null || $node['temperature_c'] !== null || !empty($node['telemetry_updated_at']));
         }));
     }
 
