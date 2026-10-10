@@ -221,6 +221,7 @@ SQL;
                 node_id VARCHAR(16) NULL,
                 password VARCHAR(128) NULL,
                 "update" BOOLEAN NOT NULL DEFAULT false,
+                is_disabled BOOLEAN NOT NULL DEFAULT false,
                 bot_id VARCHAR(16) NOT NULL DEFAULT 'KLP',
                 advert_format VARCHAR(8) NULL,
                 advert_timestamp BIGINT NULL,
@@ -253,6 +254,7 @@ SQL;
             CREATE INDEX IF NOT EXISTS idx_nodes_node_type ON nodes (node_type);
             CREATE INDEX IF NOT EXISTS idx_nodes_is_repeater ON nodes (is_repeater);
             CREATE INDEX IF NOT EXISTS idx_nodes_update ON nodes ("update");
+            CREATE INDEX IF NOT EXISTS idx_nodes_is_disabled ON nodes (is_disabled);
             CREATE INDEX IF NOT EXISTS idx_nodes_bot_id ON nodes (bot_id);
             CREATE INDEX IF NOT EXISTS idx_nodes_last_seen_at ON nodes (last_seen_at);
             CREATE INDEX IF NOT EXISTS idx_nodes_requested_date ON nodes (requested_date);
@@ -267,6 +269,7 @@ SQL;
                 `node_id`           VARCHAR(16) NULL DEFAULT NULL,
                 `password`          VARCHAR(128) NULL DEFAULT NULL,
                 `update`            TINYINT(1) NOT NULL DEFAULT 0,
+                `is_disabled`       TINYINT(1) NOT NULL DEFAULT 0,
                 `bot_id`            VARCHAR(16) NOT NULL DEFAULT 'KLP',
                 `advert_format`     VARCHAR(8) NULL DEFAULT NULL,
                 `advert_timestamp`  BIGINT UNSIGNED NULL DEFAULT NULL,
@@ -298,6 +301,7 @@ SQL;
                 INDEX `idx_node_type` (`node_type`),
                 INDEX `idx_is_repeater` (`is_repeater`),
                 INDEX `idx_nodes_update` (`update`),
+                INDEX `idx_nodes_is_disabled` (`is_disabled`),
                 INDEX `idx_nodes_bot_id` (`bot_id`),
                 INDEX `idx_nodes_requested_date` (`requested_date`),
                 INDEX `idx_nodes_telemetry_updated_at` (`telemetry_updated_at`),
@@ -313,6 +317,7 @@ SQL;
             try {
                 $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS password VARCHAR(128) NULL');
                 $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS "update" BOOLEAN NOT NULL DEFAULT false');
+                $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS is_disabled BOOLEAN NOT NULL DEFAULT false');
                 $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS bot_id VARCHAR(16) NOT NULL DEFAULT \'KLP\'');
                 $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS temperature_c NUMERIC(4, 1) NULL');
                 $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS requested_date TIMESTAMP WITHOUT TIME ZONE NULL');
@@ -321,6 +326,7 @@ SQL;
                 $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS last_failed_request_at TIMESTAMP WITHOUT TIME ZONE NULL');
                 $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS last_path VARCHAR(64) NULL');
                 $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_nodes_update ON nodes ("update")');
+                $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_nodes_is_disabled ON nodes (is_disabled)');
                 $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_nodes_bot_id ON nodes (bot_id)');
                 $this->pdo->exec('CREATE INDEX IF NOT EXISTS idx_nodes_requested_date ON nodes (requested_date)');
                 $this->pdo->exec('ALTER TABLE ' . $this->table . ' ADD COLUMN IF NOT EXISTS bot_id VARCHAR(16) NOT NULL DEFAULT \'KLP\'');
@@ -342,6 +348,7 @@ SQL;
             try {
                 $hasPassword = false;
                 $hasUpdate = false;
+                $hasIsDisabled = false;
                 $hasBotId = false;
                 $hasReqDate = false;
                 $hasTelemDate = false;
@@ -354,6 +361,7 @@ SQL;
                     $fn = strtolower($c['Field'] ?? '');
                     if ($fn === 'password') $hasPassword = true;
                     if ($fn === 'update' || $fn === 'updete') $hasUpdate = true;
+                    if ($fn === 'is_disabled') $hasIsDisabled = true;
                     if ($fn === 'bot_id') $hasBotId = true;
                     if ($fn === 'requested_date') $hasReqDate = true;
                     if ($fn === 'telemetry_updated_at') $hasTelemDate = true;
@@ -374,8 +382,14 @@ SQL;
                         $this->pdo->exec("ALTER TABLE `nodes` ADD INDEX `idx_nodes_update` (`update`)");
                     } catch (\Throwable $e) {}
                 }
+                if (!$hasIsDisabled) {
+                    $this->pdo->exec("ALTER TABLE `nodes` ADD COLUMN `is_disabled` TINYINT(1) NOT NULL DEFAULT 0 AFTER `update`");
+                    try {
+                        $this->pdo->exec("ALTER TABLE `nodes` ADD INDEX `idx_nodes_is_disabled` (`is_disabled`)");
+                    } catch (\Throwable $e) {}
+                }
                 if (!$hasBotId) {
-                    $this->pdo->exec("ALTER TABLE `nodes` ADD COLUMN `bot_id` VARCHAR(16) NOT NULL DEFAULT 'KLP' AFTER `update`");
+                    $this->pdo->exec("ALTER TABLE `nodes` ADD COLUMN `bot_id` VARCHAR(16) NOT NULL DEFAULT 'KLP' AFTER `is_disabled`");
                     try {
                         $this->pdo->exec("ALTER TABLE `nodes` ADD INDEX `idx_nodes_bot_id` (`bot_id`)");
                     } catch (\Throwable $e) {}
@@ -1347,6 +1361,7 @@ SQL;
         try {
             $driver = $this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME);
             $updateCond = ($driver === 'pgsql') ? '"update" = true' : '`update` = 1 OR `update` = true';
+            $disabledCond = ($driver === 'pgsql') ? 'is_disabled = true' : '`is_disabled` = 1 OR `is_disabled` = true';
             $sql = <<<SQL
             SELECT 
                 COUNT(*) AS total_nodes,
@@ -1354,7 +1369,8 @@ SQL;
                 SUM(CASE WHEN is_chat = 1 OR is_chat = true THEN 1 ELSE 0 END) AS chat_nodes_count,
                 SUM(CASE WHEN is_room = 1 OR is_room = true THEN 1 ELSE 0 END) AS rooms_count,
                 SUM(CASE WHEN has_location = 1 OR has_location = true THEN 1 ELSE 0 END) AS nodes_with_location,
-                SUM(CASE WHEN {$updateCond} THEN 1 ELSE 0 END) AS monitored_repeaters_count
+                SUM(CASE WHEN ({$updateCond}) AND NOT ({$disabledCond}) THEN 1 ELSE 0 END) AS monitored_repeaters_count,
+                SUM(CASE WHEN {$disabledCond} THEN 1 ELSE 0 END) AS disabled_nodes_count
             FROM nodes
 SQL;
             $stmt = $this->pdo->query($sql);
@@ -1766,7 +1782,13 @@ SQL;
      */
     public function getRepeatersWithLatestTelemetry(bool $repeatersOnly = true, int $limit = 500): array
     {
-        $whereClause = $repeatersOnly ? "WHERE (n.is_repeater = 1 OR n.is_repeater = true)" : "";
+        $where = [];
+        if ($repeatersOnly) {
+            $where[] = "(n.is_repeater = 1 OR n.is_repeater = true)";
+        }
+        // Išjungtų mazgų nerodome žemėlapyje
+        $where[] = "(n.is_disabled = 0 OR n.is_disabled = false OR n.is_disabled IS NULL)";
+        $whereClause = !empty($where) ? "WHERE " . implode(" AND ", $where) : "";
 
         $sql = <<<SQL
         SELECT 
@@ -1775,10 +1797,12 @@ SQL;
             n.public_key,
             n.bot_id,
             n.is_repeater,
+            n.is_disabled,
             n.latitude,
             n.longitude,
             n.battery_v AS advert_battery_v,
             n.temperature_c AS node_temperature_c,
+            n.first_seen_at,
             n.last_seen_at,
             n.telemetry_updated_at,
             n.telemetry_fail_count,
@@ -1849,12 +1873,14 @@ SQL;
                 'node_id'              => $nodeId,
                 'bot_id'               => !empty($row['bot_id']) ? (string)$row['bot_id'] : 'KLP',
                 'is_repeater'          => (bool)$row['is_repeater'],
+                'is_disabled'          => (bool)($row['is_disabled'] ?? false),
                 'latitude'             => $lat,
                 'longitude'            => $lon,
                 'battery_v'            => $batteryV,
                 'temperature_c'        => $tempC,
                 'telemetry_updated_at' => $telemUpdatedAt,
                 'telemetry_fail_count' => (int)($row['telemetry_fail_count'] ?? 0),
+                'first_seen_at'        => $row['first_seen_at'] ?? null,
                 'last_seen_at'         => $row['last_seen_at'],
             ];
         }
@@ -1871,7 +1897,8 @@ SQL;
             return $timeB <=> $timeA;
         });
 
-        return $result;
+        // Pritaikome telemetrijos senaties filtrą, jei nustatytas admine
+        return $this->filterNodesByTelemetryAgeSettings($result);
     }
 
     /**
@@ -1908,6 +1935,7 @@ SQL;
         'min_telemetry_interval_mins'        => 60,
         'min_retry_interval_mins'            => 15,
         'telemetry_chart_days'               => 7,
+        'max_telemetry_age_days'             => 0,
     ];
 
     /**
@@ -2042,6 +2070,54 @@ SQL;
             if ($this->isPointInLithuania($lat, $lon, $settings)) {
                 $filtered[] = $node;
             }
+        }
+
+        return array_values($filtered);
+    }
+
+    /**
+     * Filtruoja mazgus pagal telemetrijos senaties limitą dienomis.
+     * Jei nurodytas dienų skaičius > 0 ir mazgo telemetrija nebuvo atnaujinta ilgiau nei šis limitas,
+     * mazgas pašalinamas iš žemėlapio ir viešo sąrašo.
+     *
+     * @param array $nodes Mazgų masyvas
+     * @param array|null $settings Nustatymai (jei null, nuskaitomi automatiškai)
+     * @return array Atfiltruotas mazgų masyvas
+     */
+    public function filterNodesByTelemetryAgeSettings(array $nodes, ?array $settings = null): array
+    {
+        $settings = $settings ?: $this->getAllSettings();
+        $maxDays = isset($settings['max_telemetry_age_days']) ? (int)$settings['max_telemetry_age_days'] : 0;
+
+        // Jei limitas 0 arba neigiamas – filtras išjungtas, rodomi visi mazgai
+        if ($maxDays <= 0) {
+            return $nodes;
+        }
+
+        $cutoffTimestamp = time() - ($maxDays * 86400);
+        $filtered = [];
+
+        foreach ($nodes as $node) {
+            $telemTimeStr = $node['telemetry_updated_at'] ?? null;
+            if (!empty($telemTimeStr)) {
+                $telemTimestamp = strtotime($telemTimeStr);
+                if ($telemTimestamp && $telemTimestamp < $cutoffTimestamp) {
+                    // Telemetrija neatnaujinta ilgiau nei nurodytas dienų skaičius
+                    continue;
+                }
+            } else {
+                // Mazgas apskritai neturi telemetrijos.
+                // Tikriname kada mazgas pirmą kartą atsirado tinkle (first_seen_at)
+                $firstSeenStr = $node['first_seen_at'] ?? null;
+                $firstSeenTimestamp = !empty($firstSeenStr) ? strtotime($firstSeenStr) : 0;
+                if ($firstSeenTimestamp > 0 && $firstSeenTimestamp < $cutoffTimestamp) {
+                    continue;
+                } elseif ($firstSeenTimestamp === 0) {
+                    continue;
+                }
+            }
+
+            $filtered[] = $node;
         }
 
         return array_values($filtered);
@@ -2191,12 +2267,12 @@ SQL;
                 if ($driver === 'pgsql') {
                     $sql = "SELECT public_key, node_id, node_name, is_repeater, password, \"update\", bot_id, last_path 
                             FROM nodes 
-                            WHERE \"update\" = true {$failFilterPgsql} {$intervalFilterPgsql} {$botFilterPgsql}
+                            WHERE \"update\" = true AND (is_disabled = false OR is_disabled IS NULL) {$failFilterPgsql} {$intervalFilterPgsql} {$botFilterPgsql}
                             ORDER BY last_seen_at DESC";
                 } else {
                     $sql = "SELECT public_key, node_id, node_name, is_repeater, `password`, `update`, `bot_id`, `last_path` 
                             FROM `nodes` 
-                            WHERE `update` = 1 {$failFilterMysql} {$intervalFilterMysql} {$botFilterMysql}
+                            WHERE `update` = 1 AND (`is_disabled` = 0 OR `is_disabled` IS NULL) {$failFilterMysql} {$intervalFilterMysql} {$botFilterMysql}
                             ORDER BY last_seen_at DESC";
                 }
 
@@ -2455,7 +2531,7 @@ SQL;
             WITH next_rep AS (
                 SELECT id, public_key, node_id, node_name, password, requested_date, telemetry_updated_at, last_failed_request_at, bot_id, last_path
                 FROM nodes
-                WHERE (is_repeater = true) AND ("update" = true) {$failFilterPgsql} {$timingFilterPgsql} {$botFilterPgsql}
+                WHERE (is_repeater = true) AND ("update" = true) AND (is_disabled = false OR is_disabled IS NULL) {$failFilterPgsql} {$timingFilterPgsql} {$botFilterPgsql}
                 ORDER BY 
                     CASE WHEN requested_date IS NULL THEN 0 ELSE 1 END ASC,
                     requested_date ASC,
@@ -2532,6 +2608,7 @@ SQL;
             FROM `nodes`
             WHERE (`is_repeater` = 1 OR `is_repeater` = true)
               AND (`update` = 1 OR `update` = true)
+              AND (`is_disabled` = 0 OR `is_disabled` IS NULL)
               {$failFilterMysql}
               {$timingFilterMysql}
               {$botFilterMysql}
@@ -2634,6 +2711,9 @@ SQL;
         $where = [];
         $params = [];
 
+        // Neįtraukiame išjungtų mazgų į eilę
+        $where[] = "(n.is_disabled = 0 OR n.is_disabled = false OR n.is_disabled IS NULL)";
+
         if ($monitoredOnly) {
             $where[] = "({$updateCol} = 1 OR {$updateCol} = true)";
         } else {
@@ -2664,6 +2744,7 @@ SQL;
             n.bot_id,
             n.is_repeater,
             n.update,
+            n.is_disabled,
             n.latitude,
             n.longitude,
             n.battery_v AS advert_battery_v,
@@ -2843,6 +2924,7 @@ SQL;
                 'bot_id'                   => $bot,
                 'is_repeater'              => (bool)$row['is_repeater'],
                 'update'                   => (bool)$row['update'],
+                'is_disabled'              => (bool)($row['is_disabled'] ?? false),
                 'requested_date'           => $formatLt($rawReqDate),
                 'requested_date_iso'       => $formatIsoLt($rawReqDate),
                 'telemetry_updated_at'     => $formatLt($rawTelemDate),
@@ -3039,6 +3121,14 @@ SQL;
                 : (!empty($fields['update']) ? 1 : 0);
         }
 
+        if (array_key_exists('is_disabled', $fields)) {
+            $colDisabled = ($driver === 'pgsql') ? 'is_disabled' : '`is_disabled`';
+            $sets[] = "{$colDisabled} = :is_disabled";
+            $params[':is_disabled'] = ($driver === 'pgsql') 
+                ? (!empty($fields['is_disabled']) ? 'true' : 'false') 
+                : (!empty($fields['is_disabled']) ? 1 : 0);
+        }
+
         if (array_key_exists('is_repeater', $fields)) {
             $sets[] = "is_repeater = :is_repeater";
             $params[':is_repeater'] = ($driver === 'pgsql') 
@@ -3131,6 +3221,20 @@ SQL;
             $params[':filter_update'] = $upVal;
         }
 
+        if (!empty($filters['status'])) {
+            if ($filters['status'] === 'disabled') {
+                $where[] = "(is_disabled = 1 OR is_disabled = true)";
+            } elseif ($filters['status'] === 'active') {
+                $where[] = "(is_disabled = 0 OR is_disabled = false OR is_disabled IS NULL)";
+            }
+        } elseif (isset($filters['is_disabled']) && $filters['is_disabled'] !== '') {
+            if (!empty($filters['is_disabled'])) {
+                $where[] = "(is_disabled = 1 OR is_disabled = true)";
+            } else {
+                $where[] = "(is_disabled = 0 OR is_disabled = false OR is_disabled IS NULL)";
+            }
+        }
+
         $whereSql = !empty($where) ? ('WHERE ' . implode(' AND ', $where)) : '';
 
         // Gauname bendrą kiekį
@@ -3147,6 +3251,8 @@ SQL;
             'type'         => 'is_repeater',
             'is_repeater'  => 'is_repeater',
             'bot_id'       => 'bot_id',
+            'status'       => 'is_disabled',
+            'is_disabled'  => 'is_disabled',
             'update'       => $colUpdate,
             'password'     => 'password',
             'coords'       => 'latitude',

@@ -204,6 +204,9 @@ if ($action === 'save_settings') {
         if (isset($data['telemetry_chart_days']) && is_numeric($data['telemetry_chart_days'])) {
             $newSettings['telemetry_chart_days'] = max(1, min(365, (int)$data['telemetry_chart_days']));
         }
+        if (isset($data['max_telemetry_age_days']) && is_numeric($data['max_telemetry_age_days'])) {
+            $newSettings['max_telemetry_age_days'] = max(0, (int)$data['max_telemetry_age_days']);
+        }
         if (isset($data['auto_add_new_repeaters'])) {
             $newSettings['auto_add_new_repeaters'] = ($data['auto_add_new_repeaters'] === true || $data['auto_add_new_repeaters'] === '1' || $data['auto_add_new_repeaters'] === 1);
         }
@@ -232,9 +235,11 @@ if ($action === 'save_settings') {
 // Mazgų sąrašas su filtrais
 if ($action === 'nodes') {
     $filters = [
-        'search' => $_GET['search'] ?? null,
-        'type'   => $_GET['type'] ?? null,
-        'update' => isset($_GET['update']) && $_GET['update'] !== '' ? $_GET['update'] : null,
+        'search'      => $_GET['search'] ?? null,
+        'type'        => $_GET['type'] ?? null,
+        'update'      => isset($_GET['update']) && $_GET['update'] !== '' ? $_GET['update'] : null,
+        'status'      => $_GET['status'] ?? null,
+        'is_disabled' => isset($_GET['is_disabled']) && $_GET['is_disabled'] !== '' ? $_GET['is_disabled'] : null,
     ];
     $limit   = max(1, min(500, (int)($_GET['limit'] ?? 50)));
     $offset  = max(0, (int)($_GET['offset'] ?? 0));
@@ -278,6 +283,9 @@ if ($action === 'update_node') {
     }
     if (array_key_exists('update', $data)) {
         $fieldsToUpdate['update'] = (bool)$data['update'];
+    }
+    if (array_key_exists('is_disabled', $data)) {
+        $fieldsToUpdate['is_disabled'] = (bool)$data['is_disabled'];
     }
     if (array_key_exists('is_repeater', $data)) {
         $fieldsToUpdate['is_repeater'] = (bool)$data['is_repeater'];

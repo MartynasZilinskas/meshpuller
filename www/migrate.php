@@ -205,6 +205,7 @@ try {
     output("  [nodes] Iš viso žinomų mazgų: " . ($nodeStats['total_nodes'] ?? 0), "info");
     output("  [nodes] Kartotuvų (repeaters): " . ($nodeStats['repeaters_count'] ?? 0), "info");
     output("  [nodes] Stebimų kartotuvų (update=1): " . ($nodeStats['monitored_repeaters_count'] ?? 0), "info");
+    output("  [nodes] Išjungtų mazgų (disabled): " . ($nodeStats['disabled_nodes_count'] ?? 0), "info");
     output("  [nodes] Su GPS koordinatėmis: " . ($nodeStats['nodes_with_location'] ?? 0), "info");
     output("  [telemetry] Iš viso telemetrijos taškų: " . ($telemetryStats['total_points'] ?? 0), "info");
     output("  [telemetry] Stebimi unikalūs mazgai: " . ($telemetryStats['monitored_nodes'] ?? 0), "info");

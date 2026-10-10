@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS `nodes` (
     `is_repeater`       TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Ar mazgas yra kartotuvas',
     `password`          VARCHAR(128) NULL DEFAULT NULL COMMENT 'Kartotuvo valdymo/prisijungimo slaptažodis',
     `update`            TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Ar kartotuvas yra aktyviai atnaujinamas/stebimas boto (1=taip, 0=ne)',
+    `is_disabled`       TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Ar mazgas yra išjungtas (1=išjungtas, 0=aktyvus. Išjungtas mazgas neimamas į eilę ir nerodomas žemėlapyje)',
     `is_chat`           TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Ar mazgas yra pokalbių klientas',
     `is_room`           TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Ar mazgas yra kambario serveris',
     `has_location`      TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Ar skelbime yra GPS koordinatės',
@@ -102,6 +103,7 @@ CREATE TABLE IF NOT EXISTS `nodes` (
     INDEX `idx_node_type` (`node_type`),
     INDEX `idx_is_repeater` (`is_repeater`),
     INDEX `idx_nodes_update` (`update`),
+    INDEX `idx_nodes_is_disabled` (`is_disabled`),
     INDEX `idx_last_seen_at` (`last_seen_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='MeshCore tinklo mazgų (kartotuvų, klientų) duomenų lentelė';
 

@@ -513,6 +513,7 @@ $isLoggedIn = isAdminLoggedIn();
         .badge-amber { background: rgba(255, 193, 7, 0.15); color: var(--accent-amber); border: 1px solid var(--accent-amber); }
         .badge-purple { background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid #a855f7; }
         .badge-gray { background: #333333; color: var(--text-muted); border: 1px solid var(--border-light); }
+        .row-node-disabled { opacity: 0.75; background: rgba(220, 53, 69, 0.04); }
 
         .copy-btn {
             background: transparent;
@@ -777,6 +778,12 @@ $isLoggedIn = isAdminLoggedIn();
                     <div class="filter-group">
                         <input type="text" id="nodesSearch" class="form-control" style="width: 260px;" placeholder="Ieškoti pagal vardą, ID ar raktą..." oninput="onNodesSearchInput()" onkeydown="if(event.key==='Enter') onNodesSearchEnter()">
                         
+                        <select id="nodesStatusFilter" class="form-control" style="width: 175px;" onchange="onNodesFilterChange()">
+                            <option value="">Visos būsenos</option>
+                            <option value="active">Tik aktyvūs</option>
+                            <option value="disabled">Tik išjungti (Disabled)</option>
+                        </select>
+
                         <select id="nodesTypeFilter" class="form-control" style="width: 170px;" onchange="onNodesFilterChange()">
                             <option value="">Visi tipai</option>
                             <option value="repeater">Tik Kartotuvai</option>
@@ -801,6 +808,7 @@ $isLoggedIn = isAdminLoggedIn();
                         <thead>
                             <tr>
                                 <th class="sortable" onclick="handleSortTable('nodes', 'name')" data-sort="name">Mazgas <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('nodes', 'status')" data-sort="status">Būsena <span class="sort-icon"></span></th>
                                 <th class="sortable" onclick="handleSortTable('nodes', 'type')" data-sort="type">Tipas <span class="sort-icon"></span></th>
                                 <th class="sortable" onclick="handleSortTable('nodes', 'bot_id')" data-sort="bot_id">Šaltinis (Botas) <span class="sort-icon"></span></th>
                                 <th class="sortable" onclick="handleSortTable('nodes', 'update')" data-sort="update">Stebimas (Update) <span class="sort-icon"></span></th>
@@ -811,7 +819,7 @@ $isLoggedIn = isAdminLoggedIn();
                             </tr>
                         </thead>
                         <tbody id="nodesTableBody">
-                            <tr><td colspan="8" style="text-align: center; padding: 24px;">Kraunami mazgai...</td></tr>
+                            <tr><td colspan="9" style="text-align: center; padding: 24px;">Kraunami mazgai...</td></tr>
                         </tbody>
                     </table>
 
@@ -1288,6 +1296,24 @@ $isLoggedIn = isAdminLoggedIn();
                             <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
                                 <div style="max-width: 580px;">
                                     <div style="font-size: 0.95rem; font-weight: 600; color: #ffffff;">
+                                        Mazgų rodymo žemėlapyje senaties limitas (dienomis)
+                                    </div>
+                                    <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
+                                        Praėjus nurodytam dienų skaičiui, kai mazgo telemetrija nebuvo atnaujinta, mazgas automatiškai neberodomas žemėlapyje.
+                                        <br><span style="color: var(--accent-cyan);">Numatyta reikšmė: <b>0</b> (išjungta, rodomi visi mazgai). Galite nurodyti pvz. <b>3</b>, <b>7</b>, <b>14</b> ar <b>30</b> dienų.</span>
+                                    </div>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="number" min="0" max="3650" step="1" id="settingMaxTelemetryAgeDays" class="form-control" style="width: 100px; font-weight: 700; text-align: center; font-size: 1rem;" placeholder="0" required>
+                                    <span style="font-size: 0.82rem; color: var(--text-muted);">d.</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 16px; margin-bottom: 20px;">
+                            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
+                                <div style="max-width: 580px;">
+                                    <div style="font-size: 0.95rem; font-weight: 600; color: #ffffff;">
                                         Maksimalus nesėkmingų bandymų (fail) limitas
                                     </div>
                                     <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
@@ -1387,6 +1413,17 @@ $isLoggedIn = isAdminLoggedIn();
                             <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                                 <input type="checkbox" id="editNodeIsRepeater" style="width: 16px; height: 16px;">
                                 <span>Mazgas yra kartotuvas</span>
+                            </label>
+                        </div>
+
+                        <!-- Mazgo išjungimo (disable) valdymas -->
+                        <div style="margin: 8px 0; padding: 12px; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: var(--radius-md);">
+                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; margin-bottom: 0;">
+                                <input type="checkbox" id="editNodeIsDisabled" style="width: 18px; height: 18px; accent-color: #ef4444;">
+                                <div>
+                                    <span style="font-weight: 700; color: #ef4444; font-size: 0.9rem;">Išjungti mazgą (Disable)</span>
+                                    <div style="font-size: 0.72rem; color: var(--text-dim); margin-top: 2px;">Išjungtas mazgas nebus imamas į eilę ir nebus rodomas žemėlapyje.</div>
+                                </div>
                             </label>
                         </div>
 
@@ -1619,12 +1656,14 @@ $isLoggedIn = isAdminLoggedIn();
 
             if (tab === 'nodes') {
                 const search = overrides.search !== undefined ? overrides.search : (document.getElementById('nodesSearch')?.value || '').trim();
+                const status = overrides.status !== undefined ? overrides.status : (document.getElementById('nodesStatusFilter')?.value || '');
                 const type = overrides.type !== undefined ? overrides.type : (document.getElementById('nodesTypeFilter')?.value || '');
                 const update = overrides.update !== undefined ? overrides.update : (document.getElementById('nodesUpdateFilter')?.value || '');
                 const editNode = overrides.edit_node !== undefined ? overrides.edit_node : activeEditNodeKey;
                 const page = overrides.page !== undefined ? overrides.page : nodesPage;
 
                 if (search) params.set('search', search);
+                if (status) params.set('status', status);
                 if (type) params.set('type', type);
                 if (update) params.set('update', update);
                 if (page > 0) params.set('page', page + 1);
@@ -1749,12 +1788,14 @@ $isLoggedIn = isAdminLoggedIn();
                 // 3. Skirtuko duomenų atstatymas ir užkrovimas
                 if (tab === 'nodes') {
                     const search = params.get('search') || params.get('q') || '';
+                    const status = params.get('status') || '';
                     const type = params.get('type') || '';
                     const update = params.get('update') || '';
                     const pageParam = parseInt(params.get('page'), 10);
                     nodesPage = (!isNaN(pageParam) && pageParam > 0) ? (pageParam - 1) : 0;
 
                     if (document.getElementById('nodesSearch')) document.getElementById('nodesSearch').value = search;
+                    if (document.getElementById('nodesStatusFilter')) document.getElementById('nodesStatusFilter').value = status;
                     if (document.getElementById('nodesTypeFilter')) document.getElementById('nodesTypeFilter').value = type;
                     if (document.getElementById('nodesUpdateFilter')) document.getElementById('nodesUpdateFilter').value = update;
 
@@ -1944,11 +1985,12 @@ $isLoggedIn = isAdminLoggedIn();
         async function loadNodes(page = 0) {
             nodesPage = page;
             const search = document.getElementById('nodesSearch')?.value || '';
+            const status = document.getElementById('nodesStatusFilter')?.value || '';
             const type = document.getElementById('nodesTypeFilter')?.value || '';
             const update = document.getElementById('nodesUpdateFilter')?.value || '';
             const offset = page * nodesLimit;
 
-            const url = `api.php?action=nodes&search=${encodeURIComponent(search)}&type=${encodeURIComponent(type)}&update=${encodeURIComponent(update)}&limit=${nodesLimit}&offset=${offset}&sort_by=${encodeURIComponent(nodesSort.col)}&sort_dir=${nodesSort.dir}`;
+            const url = `api.php?action=nodes&search=${encodeURIComponent(search)}&status=${encodeURIComponent(status)}&type=${encodeURIComponent(type)}&update=${encodeURIComponent(update)}&limit=${nodesLimit}&offset=${offset}&sort_by=${encodeURIComponent(nodesSort.col)}&sort_dir=${nodesSort.dir}`;
             try {
                 const res = await fetch(url);
                 const data = await res.json();
@@ -1986,7 +2028,7 @@ $isLoggedIn = isAdminLoggedIn();
         function renderNodesTable(nodes) {
             const tbody = document.getElementById('nodesTableBody');
             if (!nodes.length) {
-                tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; padding: 24px; color: var(--text-dim);">Mazgų nerasta.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9" style="text-align:center; padding: 24px; color: var(--text-dim);">Mazgų nerasta.</td></tr>';
                 return;
             }
 
@@ -1996,6 +2038,7 @@ $isLoggedIn = isAdminLoggedIn();
                 const key = n.public_key || '';
                 const isRep = n.is_repeater == 1 || n.is_repeater === true;
                 const isUp = n.update == 1 || n.update === true;
+                const isDis = n.is_disabled == 1 || n.is_disabled === true || n.is_disabled === '1';
                 const hasLoc = (n.latitude && n.longitude && Math.abs(n.latitude) > 0.001);
                 const pass = n.password !== null && n.password !== undefined ? n.password : '';
                 const botId = n.bot_id || 'KLP';
@@ -2005,11 +2048,12 @@ $isLoggedIn = isAdminLoggedIn();
                 const isFlood = (lastPath.toUpperCase() === 'FLOOD');
 
                 return `
-                    <tr>
+                    <tr class="${isDis ? 'row-node-disabled' : ''}">
                         <td>
                             <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                                 <span class="badge badge-blue" title="${escapeHtml(key)}">${id.toUpperCase()}</span>
                                 <span style="font-weight: 600; color: #ffffff;">${escapeHtml(name)}</span>
+                                ${isDis ? `<span class="badge badge-red" style="font-size: 0.68rem; font-weight: 700; padding: 1px 5px;" title="Mazgas išjungtas iš eilės ir žemėlapio">⛔ IŠJUNGTAS</span>` : ''}
                                 ${isFlood ? `
                                     <span class="badge badge-purple" style="font-size: 0.68rem; font-weight: 700; padding: 1px 5px; cursor: pointer;" onclick="quickToggleNodePath('${escapeHtml(key)}', true)" title="Path išjungtas (FLOOD). Paspauskite, kad įjungtumėte Source Route">🌐 FLOOD</span>
                                 ` : (lastPath !== '' ? `
@@ -2019,6 +2063,13 @@ $isLoggedIn = isAdminLoggedIn();
                                 `)}
                                 ${failCount > 0 ? `<span class="badge badge-red" style="font-size: 0.68rem; font-weight: 700; padding: 1px 5px; cursor: pointer;" onclick="resetNodeFailCount('${id}', '${escapeHtml(name)}')" title="${failCount} nesėkmingi bandymai. Paspauskite, kad nuresetintumėte į 0.">⚠️ ${failCount} fail 🧹</span>` : ''}
                             </div>
+                        </td>
+                        <td>
+                            ${isDis ? `
+                                <span class="badge badge-red" style="font-weight: 700; cursor: pointer; padding: 2px 8px;" onclick="quickToggleNodeDisabled('${escapeHtml(key)}', false)" title="Mazgas IŠJUNGTAS (neimamas į eilę, nerodomas žemėlapyje). Paspauskite, kad įjungtumėte">⛔ Išjungtas</span>
+                            ` : `
+                                <span class="badge badge-green" style="font-weight: 600; cursor: pointer; padding: 2px 8px;" onclick="quickToggleNodeDisabled('${escapeHtml(key)}', true)" title="Mazgas AKTYVUS. Paspauskite, kad išjungtumėte">✅ Aktyvus</span>
+                            `}
                         </td>
                         <td>
                             ${isRep ? '<span class="badge badge-cyan">KARTOTUVAS</span>' : '<span class="badge badge-gray">KLIENTAS</span>'}
@@ -2043,6 +2094,11 @@ $isLoggedIn = isAdminLoggedIn();
                         </td>
                         <td style="text-align: right; white-space: nowrap;">
                             <button class="btn btn-secondary btn-icon" onclick="openEditNode('${key}')" title="Keisti nustatymus">⚙️</button>
+                            ${isDis ? `
+                                <button class="btn btn-secondary btn-icon" style="margin-left: 3px; color: #2ed573;" onclick="quickToggleNodeDisabled('${escapeHtml(key)}', false)" title="Įjungti mazgą (Enable)">▶️</button>
+                            ` : `
+                                <button class="btn btn-secondary btn-icon" style="margin-left: 3px; color: #ff6b81;" onclick="quickToggleNodeDisabled('${escapeHtml(key)}', true)" title="Išjungti mazgą (Disable)">⏸️</button>
+                            `}
                             ${failCount > 0 ? `
                                 <button class="btn btn-secondary btn-icon" style="margin-left: 3px;" onclick="resetNodeFailCount('${id}', '${escapeHtml(name)}')" title="Nuresetinti nesėkmingų bandymų (fail) skaičių į 0">🧹</button>
                             ` : ''}
@@ -2126,6 +2182,9 @@ $isLoggedIn = isAdminLoggedIn();
             document.getElementById('editNodeLon').value = node.longitude || '';
             document.getElementById('editNodeUpdate').checked = (node.update == 1 || node.update === true);
             document.getElementById('editNodeIsRepeater').checked = (node.is_repeater == 1 || node.is_repeater === true);
+            const isDis = (node.is_disabled == 1 || node.is_disabled === true || node.is_disabled === '1');
+            const disCheckbox = document.getElementById('editNodeIsDisabled');
+            if (disCheckbox) disCheckbox.checked = isDis;
 
             const failCnt = parseInt(node.telemetry_fail_count || 0, 10);
             const failLabel = document.getElementById('editNodeFailLabel');
@@ -2153,6 +2212,7 @@ $isLoggedIn = isAdminLoggedIn();
                 password: document.getElementById('editNodePassword').value,
                 last_path: finalPath,
                 update: document.getElementById('editNodeUpdate').checked ? 1 : 0,
+                is_disabled: document.getElementById('editNodeIsDisabled')?.checked ? 1 : 0,
                 is_repeater: document.getElementById('editNodeIsRepeater').checked ? 1 : 0,
                 latitude: document.getElementById('editNodeLat').value,
                 longitude: document.getElementById('editNodeLon').value,
@@ -2175,6 +2235,26 @@ $isLoggedIn = isAdminLoggedIn();
                 }
             } catch (err) {
                 alert('Serverio ryšio klaida');
+            }
+        }
+
+        async function quickToggleNodeDisabled(key, disable) {
+            try {
+                const res = await fetch('api.php?action=update_node', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ public_key: key, is_disabled: disable ? 1 : 0 })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showToast(disable ? 'Mazgas išjungtas (nebus imamas į eilę ir nerodomas žemėlapyje)!' : 'Mazgas įjungtas (aktyvus)!', disable ? 'warning' : 'success');
+                    await loadNodes(nodesPage);
+                    loadStats();
+                } else {
+                    alert('Klaida: ' + (data.error || 'Nepavyko atnaujinti būsenos'));
+                }
+            } catch (e) {
+                console.error(e);
             }
         }
 
@@ -3371,6 +3451,7 @@ $isLoggedIn = isAdminLoggedIn();
                 const minIntervalEl = document.getElementById('settingMinTelemetryIntervalMins');
                 const minRetryIntervalEl = document.getElementById('settingMinRetryIntervalMins');
                 const chartDaysEl = document.getElementById('settingTelemetryChartDays');
+                const maxTelemAgeDaysEl = document.getElementById('settingMaxTelemetryAgeDays');
 
                 if (enabledEl) enabledEl.checked = !!currentSettings.filter_lithuania_enabled;
                 if (noCoordsEl) noCoordsEl.checked = !!currentSettings.filter_lithuania_include_no_coords;
@@ -3382,6 +3463,7 @@ $isLoggedIn = isAdminLoggedIn();
                 if (minIntervalEl) minIntervalEl.value = currentSettings.min_telemetry_interval_mins ?? 60;
                 if (minRetryIntervalEl) minRetryIntervalEl.value = currentSettings.min_retry_interval_mins ?? 15;
                 if (chartDaysEl) chartDaysEl.value = currentSettings.telemetry_chart_days ?? 7;
+                if (maxTelemAgeDaysEl) maxTelemAgeDaysEl.value = currentSettings.max_telemetry_age_days ?? 0;
 
                 const autoAddRepEl = document.getElementById('settingAutoAddNewRepeaters');
                 if (autoAddRepEl) autoAddRepEl.checked = !!currentSettings.auto_add_new_repeaters;
@@ -3456,6 +3538,7 @@ $isLoggedIn = isAdminLoggedIn();
                     min_telemetry_interval_mins: parseInt(document.getElementById('settingMinTelemetryIntervalMins')?.value || '60', 10),
                     min_retry_interval_mins: parseInt(document.getElementById('settingMinRetryIntervalMins')?.value || '15', 10),
                     telemetry_chart_days: parseInt(document.getElementById('settingTelemetryChartDays')?.value || '7', 10),
+                    max_telemetry_age_days: parseInt(document.getElementById('settingMaxTelemetryAgeDays')?.value || '0', 10),
                     auto_add_new_repeaters: document.getElementById('settingAutoAddNewRepeaters')?.checked ?? false
                 };
 

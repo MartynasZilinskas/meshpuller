@@ -220,6 +220,11 @@ if ($isNodesEndpoint) {
     $repeaters = $repository->filterNodesByGeolocationSettings($repeaters);
 
     // =========================================================================
+    // ⏱️ PAPILDOMAS SLUOKSNIS: Telemetrijos senaties filtracija (senesni nei X d.)
+    // =========================================================================
+    $repeaters = $repository->filterNodesByTelemetryAgeSettings($repeaters);
+
+    // =========================================================================
     // 📊 PAPILDOMAS SLUOKSNIS: Telemetrijos filtracija (nerodyti be telemetrijos)
     // Galima perduoti telemetry_only=1, has_telemetry=1 arba hide_no_telemetry=1
     // =========================================================================
@@ -239,15 +244,16 @@ if ($isNodesEndpoint) {
     }
 
     echo json_encode([
-        'success'              => true,
-        'endpoint'             => '/api/nodes',
-        'filter'               => $all ? 'all_nodes' : 'repeaters_only',
-        'telemetry_only'       => $telemetryOnly,
-        'telemetry_chart_days' => $repository ? (int)$repository->getSetting('telemetry_chart_days', 7) : 7,
-        'count'                => count($repeaters),
-        'repeaters'            => $repeaters,
-        'nodes'                => $repeaters,
-        'timestamp'            => date('Y-m-d H:i:s'),
+        'success'                => true,
+        'endpoint'               => '/api/nodes',
+        'filter'                 => $all ? 'all_nodes' : 'repeaters_only',
+        'telemetry_only'         => $telemetryOnly,
+        'telemetry_chart_days'   => $repository ? (int)$repository->getSetting('telemetry_chart_days', 7) : 7,
+        'max_telemetry_age_days' => $repository ? (int)$repository->getSetting('max_telemetry_age_days', 0) : 0,
+        'count'                  => count($repeaters),
+        'repeaters'              => $repeaters,
+        'nodes'                  => $repeaters,
+        'timestamp'              => date('Y-m-d H:i:s'),
     ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
     exit;
 }
