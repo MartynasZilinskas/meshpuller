@@ -27,7 +27,9 @@ foreach ($possibleVendor as $dir) {
         break;
     }
 }
-
+if ($srcDir && file_exists($srcDir . '/autoload.php')) {
+    require_once $srcDir . '/autoload.php';
+}
 if ($vendorDir) {
     require_once $vendorDir . '/autoload.php';
 } elseif ($srcDir) {

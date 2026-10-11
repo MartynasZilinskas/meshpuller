@@ -888,29 +888,6 @@
             margin-left: 2px;
         }
 
-        /* Šoninėje panelėje esantys papildomi filtrai */
-        .sidebar-filter-box {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-            padding-top: 4px;
-            border-top: 1px solid rgba(255, 255, 255, 0.05);
-        }
-
-        .sidebar-filter-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 6px;
-            flex-wrap: wrap;
-        }
-
-        .sidebar-filter-lbl {
-            font-size: 0.68rem;
-            color: var(--text-dim);
-            font-weight: 600;
-            text-transform: uppercase;
-        }
 
         .marker-top-metrics {
             display: flex;
@@ -1640,32 +1617,6 @@
                     </svg>
                     <input type="text" id="searchInput" class="search-input" placeholder="Filtruoti mazgus pagal vardą ar ID..." oninput="onSearchInput()">
                 </div>
-
-                <div class="sidebar-filter-box">
-                    <div class="sidebar-filter-row">
-                        <span class="sidebar-filter-lbl">Senumas:</span>
-                        <div class="filter-btn-group">
-                            <button type="button" class="filter-btn active" id="sideBtnColorAll" onclick="setColorFilter('all')">Visi</button>
-                            <button type="button" class="filter-btn btn-color-blue" id="sideBtnColorBlue" onclick="setColorFilter('blue')" title="Iki 24 val.">🔵</button>
-                            <button type="button" class="filter-btn btn-color-orange" id="sideBtnColorOrange" onclick="setColorFilter('orange')" title="Virš 24 val.">🟠</button>
-                            <button type="button" class="filter-btn btn-color-red" id="sideBtnColorRed" onclick="setColorFilter('red')" title="Virš 48 val.">🔴</button>
-                        </div>
-                    </div>
-                    <div class="sidebar-filter-row">
-                        <span class="sidebar-filter-lbl">Srovė / Įtampa:</span>
-                        <select id="sideVoltSelect" class="filter-select-volt" style="flex: 1; max-width: 180px;" onchange="onVoltSelectChange(this.value)">
-                            <option value="">Visos įtampos</option>
-                            <option value="4.10">Iki ≤ 4.10 V</option>
-                            <option value="4.00">Iki ≤ 4.00 V</option>
-                            <option value="3.90">Iki ≤ 3.90 V</option>
-                            <option value="3.80">Iki ≤ 3.80 V</option>
-                            <option value="3.70">Iki ≤ 3.70 V</option>
-                            <option value="3.65">Iki ≤ 3.65 V</option>
-                            <option value="custom">✏️ Įvesti V...</option>
-                        </select>
-                        <input type="number" id="sideVoltCustomInput" class="filter-input-volt-custom" step="0.05" min="0" max="15" placeholder="Iki V" style="display: none;" oninput="onVoltCustomInputChange(this.value)">
-                    </div>
-                </div>
             </div>
 
             <!-- Mazgų sąrašas -->
@@ -2233,15 +2184,12 @@
         // Srovės / įtampos filtro nustatymas per select
         function onVoltSelectChange(val) {
             const customMap = document.getElementById('mapVoltCustomInput');
-            const customSide = document.getElementById('sideVoltCustomInput');
 
             if (val === 'custom') {
                 if (customMap) { customMap.style.display = 'inline-block'; customMap.focus(); }
-                if (customSide) { customSide.style.display = 'inline-block'; }
                 return;
             } else {
                 if (customMap) customMap.style.display = 'none';
-                if (customSide) customSide.style.display = 'none';
             }
 
             activeMaxVolt = (val !== '' && val !== null && !isNaN(parseFloat(val))) ? parseFloat(val) : null;
@@ -2255,9 +2203,7 @@
             activeMaxVolt = (!isNaN(num) && num > 0) ? num : null;
             
             const customMap = document.getElementById('mapVoltCustomInput');
-            const customSide = document.getElementById('sideVoltCustomInput');
             if (customMap && customMap.value !== val) customMap.value = val;
-            if (customSide && customSide.value !== val) customSide.value = val;
 
             applyActiveFilters(false);
         }
@@ -2268,19 +2214,15 @@
 
         function syncVoltSelectsUI(val) {
             const mapSel = document.getElementById('mapVoltSelect');
-            const sideSel = document.getElementById('sideVoltSelect');
             if (mapSel) mapSel.value = val;
-            if (sideSel) sideSel.value = val;
         }
 
         function updateFilterButtonsUI() {
             const colors = ['all', 'blue', 'orange', 'red'];
             colors.forEach(c => {
                 const btnM = document.getElementById(`btnColor${c.charAt(0).toUpperCase() + c.slice(1)}`);
-                const btnS = document.getElementById(`sideBtnColor${c.charAt(0).toUpperCase() + c.slice(1)}`);
                 const isAct = (activeColorFilter === c);
                 if (btnM) btnM.classList.toggle('active', isAct);
-                if (btnS) btnS.classList.toggle('active', isAct);
             });
         }
 
@@ -2292,9 +2234,7 @@
             if (searchInput) searchInput.value = '';
 
             const customMap = document.getElementById('mapVoltCustomInput');
-            const customSide = document.getElementById('sideVoltCustomInput');
             if (customMap) { customMap.value = ''; customMap.style.display = 'none'; }
-            if (customSide) { customSide.value = ''; customSide.style.display = 'none'; }
 
             syncVoltSelectsUI('');
             updateFilterButtonsUI();
@@ -2365,8 +2305,6 @@
 
             const mapVoltSel = document.getElementById('mapVoltSelect');
             if (mapVoltSel) mapVoltSel.classList.toggle('active-filter', activeMaxVolt !== null);
-            const sideVoltSel = document.getElementById('sideVoltSelect');
-            if (sideVoltSel) sideVoltSel.classList.toggle('active-filter', activeMaxVolt !== null);
         }
 
         function onTelemetryToggleChange(checked) {

@@ -6,20 +6,41 @@
 
 ---
 
-## 📁 Katalogo Struktūra
+## 📁 Katalogo Struktūra ir SOLID Architektūra
 
 ```text
 www/
-├── composer.json               # Composer konfigūracija (PSR-4 autoloading)
+├── composer.json               # Composer konfigūracija (PSR-4: MeshCore\ -> src/)
 ├── src/
+│   ├── autoload.php            # Standalone PSR-4 autoloaderis (veikia be Composer)
 │   ├── MeshCoreDecoder.php     # Protokolo dekodavimo ir dešifravimo klasė
-│   ├── RawPacketRepository.php # PostgreSQL duomenų bazės ir eiliškumo valdymo klasė
-│   └── app.php                 # Pagrindinis endpointas (/api/raw)
-├── public/
-│   └── index.php               # Maršrutizatorius (nukreipia į src/app.php)
-├── raw/
-│   └── index.php               # Tiesioginis kreipinys į /raw
+│   ├── RawPacketRepository.php # SOLID Facade / Aggregate Root (100% atgalinis suderinamumas)
+│   ├── Contracts/              # SOLID: Interfeisai (I ir D principai)
+│   │   ├── DatabaseConnectionInterface.php
+│   │   ├── RawPacketRepositoryInterface.php
+│   │   ├── NodeRepositoryInterface.php
+│   │   ├── TelemetryRepositoryInterface.php
+│   │   ├── SettingsRepositoryInterface.php
+│   │   ├── GeolocationServiceInterface.php
+│   │   └── PollingQueueServiceInterface.php
+│   ├── Database/               # Duomenų bazės ryšio ir schemų valdymas (SRP)
+│   │   ├── DatabaseManager.php # PDO ryšys, konfigūracija, klaidų valdymas
+│   │   └── SchemaManager.php   # DDL migracijos ir indeksų kūrimas
+│   ├── Repositories/           # Duomenų saugyklos (SRP)
+│   │   ├── RawPacketStorage.php    # RAW paketų eilė, fiksavimas ir apdorojimas
+│   │   ├── NodeRepository.php      # Mazgų skelbimai, būsenos, statistika
+│   │   ├── TelemetryRepository.php # Telemetrijos istorija, filtrai, ataskaitos
+│   │   └── SettingsRepository.php  # Sistemos nustatymai (DB / settings.json)
+│   ├── Services/               # Pagalbinės verslo logikos paslaugos (SRP)
+│   │   ├── GeolocationService.php  # Koordinačių patikra, LT ribos, filtravimas
+│   │   └── PollingQueueService.php # Kartotuvų užklausų eilė (ESP32 botui)
+│   └── app.php                 # Pagrindinis API endpointas (/api/raw)
+├── admin/
+│   ├── api.php                 # Admin API kontroleris
+│   └── index.php               # Admin valdymo skydelis (UI)
+├── public/                     # Viešas žiniatinklio katalogas
 ├── process_queue.php           # CLI / Cron fono darbininkas paketų apdorojimui
+├── migrate.php                 # Duomenų bazės struktūros atnaujinimo skriptas
 ├── test_decode.php             # CLI testavimo skriptas su realiais pavyzdžiais
 └── README.md                   # Ši dokumentacija
 ```
