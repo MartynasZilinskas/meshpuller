@@ -81,6 +81,14 @@ $isTelemetryEndpoint = (
     basename($_SERVER['SCRIPT_FILENAME'] ?? '') === 'telemetry.php'
 );
 
+// Nustatome ar kreipiamasi į /api/bots arba /bots endpointą (ESP32 botų sąrašas)
+$isBotsEndpoint = (
+    preg_match('#/(api/)?bots(\.php)?$#', $path) || 
+    (isset($_GET['endpoint']) && $_GET['endpoint'] === 'bots') ||
+    (isset($_GET['action']) && $_GET['action'] === 'bots') ||
+    basename($_SERVER['SCRIPT_FILENAME'] ?? '') === 'bots.php'
+);
+
 // -----------------------------------------------------------------------------
 // 📡 ENDPOINT: GET /api/api/repeater (arba /api/repeater)
 // Grąžina TIK 1 kartotuvą pagal requested_date prioritetą (tuščia data -> seniausia data)
@@ -119,6 +127,15 @@ if ($isSingleRepeaterEndpoint) {
         echo json_encode([
             'success' => false,
             'error'   => 'Nenurodytas boto identifikatorius. Privaloma nurodyti ?bot_id=... parametrą arba X-Bot-ID antraštę (pvz. ?bot_id=KLP).'
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if ($repository && !$repository->isBotEnabled($requestedBotId)) {
+        http_response_code(403);
+        echo json_encode([
+            'success' => false,
+            'error'   => "Botas '{$requestedBotId}' yra išjungtas per administravimo pultą."
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
         exit;
     }
@@ -185,6 +202,15 @@ if ($isRepytersEndpoint) {
         exit;
     }
 
+    if ($repository && !$repository->isBotEnabled($requestedBotId)) {
+        http_response_code(403);
+        echo json_encode([
+            'success' => false,
+            'error'   => "Botas '{$requestedBotId}' yra išjungtas per administravimo pultą."
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
     $repeatersList = ($repository) ? $repository->getMonitoredRepeaters($requestedBotId) : [];
 
     echo json_encode($repeatersList, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -246,6 +272,8 @@ if ($isNodesEndpoint) {
         }));
     }
 
+    $allBots = ($repository) ? $repository->getBotsWithNodeCounts() : [];
+
     echo json_encode([
         'success'                => true,
         'endpoint'               => '/api/nodes',
@@ -256,7 +284,41 @@ if ($isNodesEndpoint) {
         'count'                  => count($repeaters),
         'repeaters'              => $repeaters,
         'nodes'                  => $repeaters,
+        'bots'                   => $allBots,
         'timestamp'              => date('Y-m-d H:i:s'),
+    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// -----------------------------------------------------------------------------
+// 🤖 ENDPOINT: GET /api/bots (ESP32 botų / vartų sąrašas)
+// -----------------------------------------------------------------------------
+if ($isBotsEndpoint) {
+    if ($method !== 'GET') {
+        http_response_code(405);
+        echo json_encode([
+            'success' => false,
+            'error'   => 'Metodas nepalaikomas. /api/bots priima tik GET užklausas.'
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if (!$dbConnected || !$repository) {
+        http_response_code(500);
+        echo json_encode([
+            'success' => false,
+            'error'   => 'Duomenų bazė nepasiekiama: ' . $dbError,
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $bots = $repository->getBotsWithNodeCounts();
+    echo json_encode([
+        'success'   => true,
+        'endpoint'  => '/api/bots',
+        'count'     => count($bots),
+        'bots'      => $bots,
+        'timestamp' => date('Y-m-d H:i:s'),
     ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
     exit;
 }

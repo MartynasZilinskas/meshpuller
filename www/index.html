@@ -6,6 +6,11 @@
     <title>MeshCore Tinklo Žemėlapis & Kartotuvų Telemetrija</title>
     <meta name="description" content="Tiesioginis MeshCore LoRa kartotuvų tinklo žemėlapis su baterijos įkrova, temperatūra ir būsenos statistika realiu laiku.">
     
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="alternate icon" href="favicon.ico">
+    <link rel="apple-touch-icon" href="favicon-32x32.png">
+
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -2072,10 +2077,15 @@
             const battStyle = getBatteryStyle(battV);
             const tempStyle = getTempStyle(tempC);
 
+            const botName = node.bot_name || '';
+            const botBadgeText = botName ? `🤖 ${botId} (${botName})` : `🤖 ${botId}`;
+            const botBadgeTitle = botName ? `Gauta per ESP32 vartus: ${botName} [${botId}]` : `Gauta per ESP32 vartus: ${botId}`;
+
             document.getElementById('sheetNodeBadge').innerText = nodeId.toUpperCase();
             document.getElementById('sheetNodeName').innerText = name;
             document.getElementById('sheetNodeName').title = name;
-            document.getElementById('sheetBotBadge').innerText = `🤖 ${botId}`;
+            document.getElementById('sheetBotBadge').innerText = botBadgeText;
+            document.getElementById('sheetBotBadge').title = botBadgeTitle;
             document.getElementById('sheetNodeType').innerText = node.is_repeater ? 'KARTOTUVAS' : 'MAZGAS';
 
             const battEl = document.getElementById('sheetBatteryVal');
@@ -2278,7 +2288,9 @@
                     const name = (node.name || '').toLowerCase();
                     const id = (node.node_id || '').toLowerCase();
                     const key = (node.public_key || '').toLowerCase();
-                    if (!name.includes(searchQuery) && !id.includes(searchQuery) && !key.includes(searchQuery)) {
+                    const bot = (node.bot_id || '').toLowerCase();
+                    const botName = (node.bot_name || '').toLowerCase();
+                    if (!name.includes(searchQuery) && !id.includes(searchQuery) && !key.includes(searchQuery) && !bot.includes(searchQuery) && !botName.includes(searchQuery)) {
                         return false;
                     }
                 }
@@ -2542,6 +2554,8 @@
                 const lastSeen = node.last_seen_at || '';
                 const telemTime = node.telemetry_updated_at || (node.telemetry ? (node.telemetry.telemetry_updated_at || node.telemetry.last_telemetry_at) : null) || '';
                 const botId = String(node.bot_id || 'KLP').replace(/[^a-zA-Z0-9_-]/g, '');
+                const botName = node.bot_name || '';
+                const botTitle = botName ? `Gauta per ESP32 vartus: ${botName} [${botId}]` : `Gauta per ESP32 vartus: ${botId}`;
                 
                 // Telemetrija: temperatūra ir baterija V
                 const battV = node.battery_v !== null ? node.battery_v : (node.telemetry ? node.telemetry.battery_v : null);
@@ -2614,7 +2628,7 @@
                     const popupContent = `
                         <div class="popup-card">
                             <div class="popup-header"><span class="node-badge-id" style="margin-right: 6px;">${nodeId.toUpperCase()}</span>${name}</div>
-                            <div class="popup-id">${node.is_repeater ? 'KARTOTUVAS' : 'MAZGAS'} • <span style="color:#c084fc; font-weight:600;">🤖 ${botId}</span></div>
+                            <div class="popup-id">${node.is_repeater ? 'KARTOTUVAS' : 'MAZGAS'} • <span style="color:#c084fc; font-weight:600;" title="${botTitle}">🤖 ${botId}${botName ? ` (${botName})` : ''}</span></div>
                             
                             <div class="popup-grid">
                                 <div class="popup-stat">
@@ -2709,7 +2723,7 @@
                             <span class="node-name" title="${name}">${name}</span>
                         </div>
                         <div style="display:flex; align-items:center; gap:6px;">
-                            <span class="node-bot-badge" title="Gauta per ESP32">🤖 ${botId}</span>
+                            <span class="node-bot-badge" title="${botTitle}">🤖 ${botId}</span>
                             <button class="card-info-btn" onclick="event.stopPropagation(); openMobileSheet(repeaters.find(n => n.node_id === '${nodeId}'));" title="Peržiūrėti informaciją">ℹ️</button>
                         </div>
                     </div>

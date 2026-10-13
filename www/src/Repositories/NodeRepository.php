@@ -2,6 +2,7 @@
 
 namespace MeshCore\Repositories;
 
+use MeshCore\Contracts\BotRepositoryInterface;
 use MeshCore\Contracts\NodeRepositoryInterface;
 use MeshCore\Contracts\PollingQueueServiceInterface;
 use MeshCore\Contracts\SettingsRepositoryInterface;
@@ -18,17 +19,20 @@ class NodeRepository implements NodeRepositoryInterface
     private PDO $pdo;
     private ?SettingsRepositoryInterface $settingsRepo;
     private ?PollingQueueServiceInterface $pollingQueueService;
+    private ?BotRepositoryInterface $botRepo;
     private string $rawPacketsTable;
 
     public function __construct(
         PDO $pdo,
         ?SettingsRepositoryInterface $settingsRepo = null,
         ?PollingQueueServiceInterface $pollingQueueService = null,
+        ?BotRepositoryInterface $botRepo = null,
         string $rawPacketsTable = 'raw_packets'
     ) {
         $this->pdo                 = $pdo;
         $this->settingsRepo        = $settingsRepo;
         $this->pollingQueueService = $pollingQueueService;
+        $this->botRepo             = $botRepo;
         $this->rawPacketsTable     = preg_replace('/[^a-zA-Z0-9_]/', '', $rawPacketsTable);
     }
 
@@ -40,6 +44,11 @@ class NodeRepository implements NodeRepositoryInterface
     public function setPollingQueueService(PollingQueueServiceInterface $pollingQueueService): void
     {
         $this->pollingQueueService = $pollingQueueService;
+    }
+
+    public function setBotRepository(BotRepositoryInterface $botRepo): void
+    {
+        $this->botRepo = $botRepo;
     }
 
     /**
@@ -82,11 +91,27 @@ class NodeRepository implements NodeRepositoryInterface
         $rssi = isset($packetMeta['rssi']) ? (float)$packetMeta['rssi'] : null;
         $snr = isset($packetMeta['snr']) ? (float)$packetMeta['snr'] : null;
 
-        $botId = !empty($packetMeta['bot_id']) 
+        $heardBotId = !empty($packetMeta['bot_id']) 
             ? strtoupper(substr(trim((string)$packetMeta['bot_id']), 0, 16)) 
             : (!empty($packetMeta['payload_json']) && is_string($packetMeta['payload_json']) && ($pj = json_decode($packetMeta['payload_json'], true)) && !empty($pj['bot_id']) 
                 ? strtoupper(substr(trim((string)$pj['bot_id']), 0, 16)) 
                 : 'KLP');
+
+        // Boto nustatymas:
+        // Jei advertas turi galiojančias GPS koordinates (ne null ir ne 0, 0), priskiriame arčiausiai esančiam botui.
+        // Jei koordinačių nėra arba jos yra 0, 0 (arba nėra botų su koordinatėmis) - priskiriame botui, kuris išgirdo šį paketą.
+        $hasCoords = ($lat !== null && $lon !== null && (abs($lat) > 0.0001 || abs($lon) > 0.0001));
+        $botId = $heardBotId;
+
+        if ($hasCoords) {
+            $closestBot = ($this->botRepo !== null)
+                ? $this->botRepo->findClosestBot($lat, $lon, false)
+                : $this->findClosestBotViaPdo($lat, $lon);
+
+            if ($closestBot && !empty($closestBot['bot_id'])) {
+                $botId = strtoupper(substr(trim((string)$closestBot['bot_id']), 0, 16));
+            }
+        }
 
         $flagsJson = !empty($flags) ? json_encode($flags, JSON_UNESCAPED_UNICODE) : null;
         $rawAdvertJson = json_encode($advert, JSON_UNESCAPED_UNICODE);
@@ -129,7 +154,7 @@ class NodeRepository implements NodeRepositoryInterface
                 last_snr = COALESCE(EXCLUDED.last_snr, nodes.last_snr),
                 flags_json = COALESCE(EXCLUDED.flags_json, nodes.flags_json),
                 raw_advert_json = EXCLUDED.raw_advert_json,
-                bot_id = COALESCE(EXCLUDED.bot_id, nodes.bot_id),
+                bot_id = CASE WHEN nodes.is_bot_locked THEN nodes.bot_id ELSE COALESCE(EXCLUDED.bot_id, nodes.bot_id) END,
                 last_seen_at = CURRENT_TIMESTAMP,
                 "update" = CASE 
                     WHEN (nodes.is_repeater = false OR nodes.is_repeater IS NULL) AND EXCLUDED.is_repeater = true AND :auto_add_flag = 1 
@@ -173,7 +198,7 @@ SQL;
                 `last_snr` = COALESCE(VALUES(`last_snr`), `last_snr`),
                 `flags_json` = COALESCE(VALUES(`flags_json`), `flags_json`),
                 `raw_advert_json` = VALUES(`raw_advert_json`),
-                `bot_id` = COALESCE(VALUES(`bot_id`), `bot_id`),
+                `bot_id` = CASE WHEN `is_bot_locked` = 1 THEN `bot_id` ELSE COALESCE(VALUES(`bot_id`), `bot_id`) END,
                 `last_seen_at` = CURRENT_TIMESTAMP,
                 `update` = CASE 
                     WHEN (`is_repeater` = 0 OR `is_repeater` IS NULL) AND VALUES(`is_repeater`) = 1 AND :auto_add_flag = 1 
@@ -236,13 +261,28 @@ SQL;
         $sets = ['last_seen_at = CURRENT_TIMESTAMP'];
         $params = [':id1' => $id, ':id2' => $id];
 
-        if (!empty($botId)) {
-            $sets[] = 'bot_id = :bot_id';
-            $params[':bot_id'] = strtoupper(substr(trim($botId), 0, 16));
+        $finalBotId = !empty($botId) ? strtoupper(substr(trim($botId), 0, 16)) : null;
+        if ($latitude !== null && $longitude !== null && (abs($latitude) > 0.0001 || abs($longitude) > 0.0001)) {
+            $closest = ($this->botRepo !== null)
+                ? $this->botRepo->findClosestBot($latitude, $longitude, false)
+                : $this->findClosestBotViaPdo($latitude, $longitude);
+            if ($closest && !empty($closest['bot_id'])) {
+                $finalBotId = strtoupper(substr(trim((string)$closest['bot_id']), 0, 16));
+            }
+        }
+
+        $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+
+        if (!empty($finalBotId)) {
+            if ($driver === 'pgsql') {
+                $sets[] = 'bot_id = CASE WHEN is_bot_locked THEN bot_id ELSE :bot_id END';
+            } else {
+                $sets[] = 'bot_id = CASE WHEN is_bot_locked = 1 THEN bot_id ELSE :bot_id END';
+            }
+            $params[':bot_id'] = $finalBotId;
         }
 
         if ($returnPath !== null && trim($returnPath) !== '') {
-            $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
             if ($driver === 'pgsql') {
                 $sets[] = "last_path = CASE WHEN last_path = 'FLOOD' THEN 'FLOOD' ELSE :last_path END";
             } else {
@@ -286,7 +326,17 @@ SQL;
 
         try {
             $stmt = $this->pdo->prepare($sql);
-            return $stmt->execute($params);
+            $res = $stmt->execute($params);
+
+            if (!empty($botId)) {
+                $cleanBot = strtoupper(substr(trim($botId), 0, 32));
+                try {
+                    $bStmt = $this->pdo->prepare("UPDATE bots SET last_seen_at = CURRENT_TIMESTAMP WHERE UPPER(bot_id) = :b_id");
+                    $bStmt->execute([':b_id' => $cleanBot]);
+                } catch (\Throwable $e) {}
+            }
+
+            return $res;
         } catch (\Throwable $e) {
             return false;
         }
@@ -447,6 +497,18 @@ SQL;
             }
         }
 
+        if (array_key_exists('bot_id', $fields)) {
+            $sets[] = "bot_id = :bot_id";
+            $params[':bot_id'] = strtoupper(substr(trim((string)$fields['bot_id']), 0, 16));
+        }
+
+        if (array_key_exists('is_bot_locked', $fields)) {
+            $sets[] = "is_bot_locked = :is_bot_locked";
+            $params[':is_bot_locked'] = ($driver === 'pgsql') 
+                ? (!empty($fields['is_bot_locked']) ? 'true' : 'false') 
+                : (!empty($fields['is_bot_locked']) ? 1 : 0);
+        }
+
         if (array_key_exists('last_path', $fields)) {
             $sets[] = "last_path = :last_path";
             $params[':last_path'] = ($fields['last_path'] !== null && trim((string)$fields['last_path']) !== '') 
@@ -495,7 +557,7 @@ SQL;
 
         if (!empty($filters['search'])) {
             $s = '%' . trim(strtolower($filters['search'])) . '%';
-            $where[] = "(LOWER(node_name) LIKE :search1 OR LOWER(node_id) LIKE :search2 OR LOWER(public_key) LIKE :search3)";
+            $where[] = "(LOWER(nodes.node_name) LIKE :search1 OR LOWER(nodes.node_id) LIKE :search2 OR LOWER(nodes.public_key) LIKE :search3)";
             $params[':search1'] = $s;
             $params[':search2'] = $s;
             $params[':search3'] = $s;
@@ -503,11 +565,11 @@ SQL;
 
         if (!empty($filters['type'])) {
             if ($filters['type'] === 'repeater') {
-                $where[] = "(is_repeater = 1 OR is_repeater = true)";
+                $where[] = "(nodes.is_repeater = 1 OR nodes.is_repeater = true)";
             } elseif ($filters['type'] === 'chat') {
-                $where[] = "(is_chat = 1 OR is_chat = true)";
+                $where[] = "(nodes.is_chat = 1 OR nodes.is_chat = true)";
             } elseif ($filters['type'] === 'room') {
-                $where[] = "(is_room = 1 OR is_room = true)";
+                $where[] = "(nodes.is_room = 1 OR nodes.is_room = true)";
             }
         }
 
@@ -515,22 +577,27 @@ SQL;
             $upVal = ($driver === 'pgsql') 
                 ? (!empty($filters['update']) ? 'true' : 'false') 
                 : (!empty($filters['update']) ? 1 : 0);
-            $where[] = "{$colUpdate} = :filter_update";
+            $where[] = "nodes.{$colUpdate} = :filter_update";
             $params[':filter_update'] = $upVal;
         }
 
         if (!empty($filters['status'])) {
             if ($filters['status'] === 'disabled') {
-                $where[] = "(is_disabled = 1 OR is_disabled = true)";
+                $where[] = "(nodes.is_disabled = 1 OR nodes.is_disabled = true)";
             } elseif ($filters['status'] === 'active') {
-                $where[] = "(is_disabled = 0 OR is_disabled = false OR is_disabled IS NULL)";
+                $where[] = "(nodes.is_disabled = 0 OR nodes.is_disabled = false OR nodes.is_disabled IS NULL)";
             }
         } elseif (isset($filters['is_disabled']) && $filters['is_disabled'] !== '') {
             if (!empty($filters['is_disabled'])) {
-                $where[] = "(is_disabled = 1 OR is_disabled = true)";
+                $where[] = "(nodes.is_disabled = 1 OR nodes.is_disabled = true)";
             } else {
-                $where[] = "(is_disabled = 0 OR is_disabled = false OR is_disabled IS NULL)";
+                $where[] = "(nodes.is_disabled = 0 OR nodes.is_disabled = false OR nodes.is_disabled IS NULL)";
             }
+        }
+
+        if (!empty($filters['bot_id'])) {
+            $where[] = "UPPER(nodes.bot_id) = :filter_bot_id";
+            $params[':filter_bot_id'] = strtoupper(trim((string)$filters['bot_id']));
         }
 
         $whereSql = !empty($where) ? ('WHERE ' . implode(' AND ', $where)) : '';
@@ -541,24 +608,29 @@ SQL;
         $totalCount = (int)$countStmt->fetchColumn();
 
         $allowedCols = [
-            'name'         => 'node_name',
-            'node_name'    => 'node_name',
-            'node_id'      => 'node_id',
-            'type'         => 'is_repeater',
-            'is_repeater'  => 'is_repeater',
-            'bot_id'       => 'bot_id',
-            'status'       => 'is_disabled',
-            'is_disabled'  => 'is_disabled',
-            'update'       => $colUpdate,
-            'password'     => 'password',
-            'coords'       => 'latitude',
-            'latitude'     => 'latitude',
-            'last_seen_at' => 'last_seen_at',
+            'name'         => 'nodes.node_name',
+            'node_name'    => 'nodes.node_name',
+            'node_id'      => 'nodes.node_id',
+            'type'         => 'nodes.is_repeater',
+            'is_repeater'  => 'nodes.is_repeater',
+            'bot_id'       => 'nodes.bot_id',
+            'status'       => 'nodes.is_disabled',
+            'is_disabled'  => 'nodes.is_disabled',
+            'update'       => 'nodes.' . $colUpdate,
+            'password'     => 'nodes.password',
+            'coords'       => 'nodes.latitude',
+            'latitude'     => 'nodes.latitude',
+            'last_seen_at' => 'nodes.last_seen_at',
         ];
-        $orderCol = $allowedCols[$sortBy ?? ''] ?? 'last_seen_at';
+        $orderCol = $allowedCols[$sortBy ?? ''] ?? 'nodes.last_seen_at';
         $orderDir = (strtoupper((string)$sortDir) === 'ASC') ? 'ASC' : 'DESC';
 
-        $sql = "SELECT * FROM nodes {$whereSql} ORDER BY {$orderCol} {$orderDir}, id DESC LIMIT " . (int)$limit . " OFFSET " . (int)$offset;
+        $sql = "SELECT nodes.*, b.name AS bot_name, b.enabled AS bot_enabled, b.latitude AS bot_latitude, b.longitude AS bot_longitude 
+                FROM nodes 
+                LEFT JOIN bots b ON UPPER(nodes.bot_id) = UPPER(b.bot_id) 
+                {$whereSql} 
+                ORDER BY {$orderCol} {$orderDir}, nodes.id DESC 
+                LIMIT " . (int)$limit . " OFFSET " . (int)$offset;
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
         $nodes = $stmt->fetchAll() ?: [];
@@ -569,5 +641,38 @@ SQL;
             'offset' => $offset,
             'nodes' => $nodes
         ];
+    }
+
+    /**
+     * Suranda arčiausiai esantį botą tiesiogiai per PDO užklausą (jei botRepo nebuvo perduotas)
+     */
+    private function findClosestBotViaPdo(float $latitude, float $longitude): ?array
+    {
+        try {
+            $stmt = $this->pdo->query("SELECT bot_id, name, latitude, longitude, enabled FROM bots WHERE latitude IS NOT NULL AND longitude IS NOT NULL");
+            $bots = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            $closest = null;
+            $minDist = PHP_FLOAT_MAX;
+            foreach ($bots as $b) {
+                $bLat = (float)$b['latitude'];
+                $bLon = (float)$b['longitude'];
+                if (abs($bLat) < 0.0001 && abs($bLon) < 0.0001) continue;
+
+                $earthRadius = 6371; // km
+                $dLat = deg2rad($bLat - $latitude);
+                $dLon = deg2rad($bLon - $longitude);
+                $a = sin($dLat / 2) * sin($dLat / 2) +
+                     cos(deg2rad($latitude)) * cos(deg2rad($bLat)) *
+                     sin($dLon / 2) * sin($dLon / 2);
+                $dist = $earthRadius * 2 * atan2(sqrt($a), sqrt(1 - $a));
+                if ($dist < $minDist) {
+                    $minDist = $dist;
+                    $closest = $b;
+                }
+            }
+            return $closest;
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 }

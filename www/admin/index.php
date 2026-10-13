@@ -9,6 +9,11 @@ $isLoggedIn = isAdminLoggedIn();
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MeshCore Administravimo Pultas</title>
     
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="../favicon.svg">
+    <link rel="alternate icon" href="../favicon.ico">
+    <link rel="apple-touch-icon" href="../favicon-32x32.png">
+
     <!-- Šriftai ir stiliai -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -555,6 +560,7 @@ $isLoggedIn = isAdminLoggedIn();
             align-items: center;
             justify-content: center;
             padding: 20px;
+            overflow-y: auto;
         }
 
         .modal-overlay.active {
@@ -568,14 +574,24 @@ $isLoggedIn = isAdminLoggedIn();
             width: 100%;
             max-width: 650px;
             max-height: 90vh;
+            max-height: 90dvh;
             display: flex;
             flex-direction: column;
             overflow: hidden;
             box-shadow: 0 14px 45px rgba(0, 0, 0, 0.8);
+            margin: auto;
         }
 
         .modal-card.modal-lg {
             max-width: 850px;
+        }
+
+        .modal-card form {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
         }
 
         .modal-header {
@@ -585,6 +601,7 @@ $isLoggedIn = isAdminLoggedIn();
             display: flex;
             align-items: center;
             justify-content: space-between;
+            flex-shrink: 0;
         }
 
         .modal-header h3 {
@@ -610,9 +627,30 @@ $isLoggedIn = isAdminLoggedIn();
             padding: 20px;
             overflow-y: auto;
             flex: 1;
+            min-height: 0;
             display: flex;
             flex-direction: column;
             gap: 14px;
+            overscroll-behavior: contain;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+        }
+
+        .modal-body::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .modal-body::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .modal-body::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.25);
+            border-radius: 4px;
+        }
+
+        .modal-body::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.4);
         }
 
         .modal-footer {
@@ -622,6 +660,7 @@ $isLoggedIn = isAdminLoggedIn();
             display: flex;
             justify-content: flex-end;
             gap: 10px;
+            flex-shrink: 0;
         }
 
         /* JSON Pre peržiūra */
@@ -751,12 +790,19 @@ $isLoggedIn = isAdminLoggedIn();
                     <div class="val" id="statTelemetryCount">-</div>
                     <div class="lbl">Telemetrijos Įrašai</div>
                 </div>
+                <div class="stat-box cyan" style="cursor: pointer;" onclick="switchTab('bots')" title="Eiti į botų valdymą">
+                    <div class="val" id="statBotsCount">-</div>
+                    <div class="lbl">ESP32 Botai</div>
+                </div>
             </div>
 
             <!-- Skirtukų navigacija -->
             <div class="tab-nav">
                 <button class="tab-btn active" id="tabBtn-nodes" onclick="switchTab('nodes')">
                     <span>🛰️ Mazgai</span>
+                </button>
+                <button class="tab-btn" id="tabBtn-bots" onclick="switchTab('bots')">
+                    <span>🤖 Botai</span>
                 </button>
                 <button class="tab-btn" id="tabBtn-telemetry" onclick="switchTab('telemetry')">
                     <span>📊 Telemetrijos Įrašai</span>
@@ -776,29 +822,39 @@ $isLoggedIn = isAdminLoggedIn();
             <div class="tab-content active" id="tab-nodes">
                 <div class="filter-card">
                     <div class="filter-group">
-                        <input type="text" id="nodesSearch" class="form-control" style="width: 260px;" placeholder="Ieškoti pagal vardą, ID ar raktą..." oninput="onNodesSearchInput()" onkeydown="if(event.key==='Enter') onNodesSearchEnter()">
+                        <input type="text" id="nodesSearch" class="form-control" style="width: 240px;" placeholder="Ieškoti pagal vardą, ID ar raktą..." oninput="onNodesSearchInput()" onkeydown="if(event.key==='Enter') onNodesSearchEnter()">
                         
-                        <select id="nodesStatusFilter" class="form-control" style="width: 175px;" onchange="onNodesFilterChange()">
+                        <select id="nodesBotFilter" class="form-control" style="width: 170px;" onchange="onNodesFilterChange()">
+                            <option value="">Visi botai</option>
+                        </select>
+
+                        <select id="nodesStatusFilter" class="form-control" style="width: 160px;" onchange="onNodesFilterChange()">
                             <option value="">Visos būsenos</option>
                             <option value="active">Tik aktyvūs</option>
                             <option value="disabled">Tik išjungti (Disabled)</option>
                         </select>
 
-                        <select id="nodesTypeFilter" class="form-control" style="width: 170px;" onchange="onNodesFilterChange()">
+                        <select id="nodesTypeFilter" class="form-control" style="width: 160px;" onchange="onNodesFilterChange()">
                             <option value="">Visi tipai</option>
                             <option value="repeater">Tik Kartotuvai</option>
                             <option value="chat">Tik Pokalbiai</option>
                             <option value="room">Tik Kambariai</option>
                         </select>
 
-                        <select id="nodesUpdateFilter" class="form-control" style="width: 190px;" onchange="onNodesFilterChange()">
+                        <select id="nodesUpdateFilter" class="form-control" style="width: 180px;" onchange="onNodesFilterChange()">
                             <option value="">Visi (Stebimi ir kiti)</option>
                             <option value="1">Tik stebimi (update=1)</option>
                             <option value="0">Tik nestebimi (update=0)</option>
                         </select>
                     </div>
 
-                    <div>
+                    <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="resetAllRequestedDates()" title="Išvalyti visų (arba pasirinkto boto) mazgų requested_date datą į NULL (atstatyti eilę į pradžią)">
+                            <span>⚡ Resetinti eilę</span>
+                        </button>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="resetAllFailCounts()" title="Nuresetinti visų (arba pasirinkto boto) mazgų nesėkmingų bandymų (fail) skaičių į 0">
+                            <span>🧹 Resetinti fail (0)</span>
+                        </button>
                         <span id="nodesCountBadge" class="badge badge-gray">0 mazgų</span>
                     </div>
                 </div>
@@ -830,6 +886,47 @@ $isLoggedIn = isAdminLoggedIn();
                             <button class="btn btn-secondary btn-sm" id="btnNextNodes" onclick="changeNodesPage(1)">Kitas →</button>
                         </div>
                     </div>
+                </div>
+            </div>
+
+            <!-- SKIRTUKAS: BOTAI (ESP32 VARTAI) -->
+            <div class="tab-content" id="tab-bots">
+                <div class="filter-card">
+                    <div class="filter-group">
+                        <input type="text" id="botsSearch" class="form-control" style="width: 260px;" placeholder="Ieškoti pagal ID, pavadinimą ar raktą..." oninput="onBotsSearchInput()">
+                        <select id="botsStatusFilter" class="form-control" style="width: 175px;" onchange="renderBotsTable()">
+                            <option value="">Visos būsenos</option>
+                            <option value="enabled">Tik aktyvūs (Enabled)</option>
+                            <option value="disabled">Tik išjungti (Disabled)</option>
+                        </select>
+                    </div>
+
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        <span id="botsCountBadge" class="badge badge-gray">0 botų</span>
+                        <button class="btn btn-sm" onclick="openCreateBotModal()">
+                            <span>➕ Naujas Botas</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="table-wrapper">
+                    <table class="admin-table" id="botsTable">
+                        <thead>
+                            <tr>
+                                <th>Boto ID</th>
+                                <th>Pavadinimas (Name)</th>
+                                <th>Viešasis Raktas (Public Key)</th>
+                                <th>Būsena</th>
+                                <th>GPS Koordinatės</th>
+                                <th>Priskirti Mazgai</th>
+                                <th>Paskutinį kartą matytas (LT)</th>
+                                <th style="text-align: right;">Veiksmai</th>
+                            </tr>
+                        </thead>
+                        <tbody id="botsTableBody">
+                            <tr><td colspan="8" style="text-align: center; padding: 24px;">Kraunami botai...</td></tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
 
@@ -1377,6 +1474,23 @@ $isLoggedIn = isAdminLoggedIn();
                         </div>
 
                         <div class="form-group">
+                            <label for="editNodeBotId">Priskirtas Botas (ESP32 Gateway)</label>
+                            <select id="editNodeBotId" class="form-control">
+                                <!-- Užpildoma dinamiškai iš botų sąrašo -->
+                            </select>
+                            <div style="margin-top: 8px;">
+                                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.85rem; font-weight: 500; color: var(--text-main, #f1f2f6);">
+                                    <input type="checkbox" id="editNodeBotLocked">
+                                    <span>🔒 Užrakinti boto priskyrimą</span>
+                                </label>
+                                <div style="font-size: 0.70rem; color: var(--text-dim); margin-top: 3px; margin-left: 24px;">
+                                    Neleisti automatiškai perrašyti boto pagal gautus ADVERT paketus ar GPS koordinates (fiksuotas priskyrimas).
+                                </div>
+                            </div>
+                            <div style="font-size: 0.70rem; color: var(--text-dim); margin-top: 4px;">ESP32 stotis / vartai, kuriems priskirtas šis mazgas.</div>
+                        </div>
+
+                        <div class="form-group">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
                                 <label for="editNodeLastPath" style="margin-bottom: 0;">Maršrutizavimo Režimas (Path / Route)</label>
                                 <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.8rem; margin-bottom: 0;">
@@ -1427,8 +1541,8 @@ $isLoggedIn = isAdminLoggedIn();
                             </label>
                         </div>
 
-                        <!-- Fail count valdymas mazgui -->
-                        <div id="editNodeFailSection" style="margin-top: 10px; padding: 12px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: var(--radius-md); display: flex; justify-content: space-between; align-items: center; gap: 12px;">
+                        <!-- Fail count ir eilės valdymas mazgui -->
+                        <div id="editNodeFailSection" style="margin-top: 10px; padding: 12px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: var(--radius-md); display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;">
                             <div>
                                 <div style="font-size: 0.86rem; font-weight: 600; color: #ffffff;" id="editNodeFailLabel">
                                     Nesėkmingi bandymai (fail): 0
@@ -1437,14 +1551,82 @@ $isLoggedIn = isAdminLoggedIn();
                                     Jei pasiekia nustatytą limitą, mazgas sustabdomas nuo automatinių užklausų.
                                 </div>
                             </div>
-                            <button type="button" class="btn btn-secondary btn-sm" id="btnResetActiveNodeFail" onclick="resetActiveEditNodeFail()" style="white-space: nowrap;">
-                                <span>🧹 Nuresetinti (0)</span>
-                            </button>
+                            <div style="display: flex; gap: 8px;">
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="resetActiveEditNodeQueue()" title="Nukreipti šį mazgą į eilės pradžią (atstatyti requested_date)" style="white-space: nowrap;">
+                                    <span>⚡ Resetinti eilę</span>
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" id="btnResetActiveNodeFail" onclick="resetActiveEditNodeFail()" style="white-space: nowrap;">
+                                    <span>🧹 Resetinti fail (0)</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" onclick="closeModal('editNodeModal')">Atšaukti</button>
                         <button type="submit" class="btn">Išsaugoti Pakeitimus</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- MODALAS: BOTO NUSTATYMAI -->
+        <div class="modal-overlay" id="editBotModal">
+            <div class="modal-card">
+                <div class="modal-header">
+                    <h3 id="editBotTitle">Boto Nustatymai</h3>
+                    <button class="modal-close" onclick="closeModal('editBotModal')">&times;</button>
+                </div>
+                <form id="editBotForm" onsubmit="handleSaveBot(event)">
+                    <div class="modal-body">
+                        <input type="hidden" id="editBotOriginalId">
+                        <input type="hidden" id="editBotIsNew">
+
+                        <div class="form-group">
+                            <label for="editBotId">Boto Identifikatorius (ID)</label>
+                            <input type="text" id="editBotId" class="form-control" placeholder="pvz. KLP, VILNIUS, KAUNAS" required style="font-family: var(--font-mono); font-weight: 700; text-transform: uppercase;">
+                            <div style="font-size: 0.70rem; color: var(--text-dim); margin-top: 4px;">Naudojamas ESP32 vartų užklausose kaip bot_id (pvz. ?bot_id=KLP).</div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="editBotName">Boto Pavadinimas (Name)</label>
+                            <input type="text" id="editBotName" class="form-control" placeholder="pvz. Klaipėdos ESP32 Vartai" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="editBotPublicKey">Viešasis Raktas (Public Key)</label>
+                            <input type="text" id="editBotPublicKey" class="form-control" placeholder="64 heksadecimalūs simboliai (Ed25519) arba tuščia" style="font-family: var(--font-mono); font-size: 0.75rem;">
+                            <div style="font-size: 0.70rem; color: var(--text-dim); margin-top: 4px;">ESP32 modulio Ed25519 32 baitų viešasis raktas (64 hex).</div>
+                        </div>
+
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                            <div class="form-group">
+                                <label for="editBotLat">GPS Platuma (Latitude)</label>
+                                <input type="number" step="0.0000001" id="editBotLat" class="form-control" placeholder="pvz. 55.705207">
+                            </div>
+                            <div class="form-group">
+                                <label for="editBotLon">GPS Ilguma (Longitude)</label>
+                                <input type="number" step="0.0000001" id="editBotLon" class="form-control" placeholder="pvz. 21.145874">
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="editBotDescription">Pastabos / Aprašymas</label>
+                            <textarea id="editBotDescription" class="form-control" rows="2" placeholder="Papildoma informacija apie vietą, anteną ar įrangą..."></textarea>
+                        </div>
+
+                        <div style="margin: 8px 0; padding: 12px; background: rgba(0, 210, 255, 0.05); border: 1px solid rgba(0, 210, 255, 0.2); border-radius: var(--radius-md);">
+                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; margin-bottom: 0;">
+                                <input type="checkbox" id="editBotEnabled" style="width: 18px; height: 18px; accent-color: var(--accent-cyan);" checked>
+                                <div>
+                                    <span style="font-weight: 700; color: var(--accent-cyan); font-size: 0.9rem;">Botas Įjungtas / Aktyvus</span>
+                                    <div style="font-size: 0.72rem; color: var(--text-dim); margin-top: 2px;">Jei išjungtas, šiam botui nebus atiduodamos kartotuvų telemetrijos užklausos.</div>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" onclick="closeModal('editBotModal')">Atšaukti</button>
+                        <button type="submit" class="btn">Išsaugoti Botą</button>
                     </div>
                 </form>
             </div>
@@ -1613,6 +1795,8 @@ $isLoggedIn = isAdminLoggedIn();
         let activePacketModalId = null;
         let activeEditNodeKey = null;
         let pendingEditNodeKey = null;
+        let activeEditBotId = null;
+        let allBotsData = [];
         let modalOpenedInSession = false;
         let isApplyingUrlState = false;
 
@@ -1690,6 +1874,11 @@ $isLoggedIn = isAdminLoggedIn();
                 if (dir) params.set('dir', dir);
                 if (page > 0) params.set('page', page + 1);
                 if (packet) params.set('packet', packet);
+            } else if (tab === 'bots') {
+                const search = overrides.search !== undefined ? overrides.search : (document.getElementById('botsSearch')?.value || '').trim();
+                const status = overrides.status !== undefined ? overrides.status : (document.getElementById('botsStatusFilter')?.value || '');
+                if (search) params.set('search', search);
+                if (status) params.set('status', status);
             } else if (tab === 'tools') {
                 // Eilė ir įrankiai papildomų parametrų neturi
             }
@@ -1708,7 +1897,8 @@ $isLoggedIn = isAdminLoggedIn();
                 tab: overrides.tab !== undefined ? overrides.tab : currentTab,
                 activePacketModalId: overrides.packet !== undefined ? overrides.packet : activePacketModalId,
                 activeEditNodeKey: overrides.edit_node !== undefined ? overrides.edit_node : activeEditNodeKey,
-                hasModal: !!(overrides.packet || overrides.edit_node || activePacketModalId || activeEditNodeKey)
+                activeEditBotId: overrides.edit_bot !== undefined ? overrides.edit_bot : activeEditBotId,
+                hasModal: !!(overrides.packet || overrides.edit_node || overrides.edit_bot || activePacketModalId || activeEditNodeKey || activeEditBotId)
             };
 
             if (mode === 'push') {
@@ -1722,6 +1912,7 @@ $isLoggedIn = isAdminLoggedIn();
         function updateDocumentTitle() {
             const titles = {
                 nodes: '🛰️ Mazgai',
+                bots: '🤖 Botai',
                 telemetry: '📊 Telemetrija',
                 raw: '📦 RAW Paketai',
                 tools: '⚡ Eilė ir Įrankiai',
@@ -1732,6 +1923,8 @@ $isLoggedIn = isAdminLoggedIn();
                 title += ` (Paketas #${activePacketModalId})`;
             } else if (activeEditNodeKey) {
                 title += ` (Mazgo nustatymai)`;
+            } else if (activeEditBotId) {
+                title += ` (Boto nustatymai)`;
             }
             document.title = `${title} — MeshCore Admin`;
         }
@@ -1741,7 +1934,7 @@ $isLoggedIn = isAdminLoggedIn();
             try {
                 const params = new URLSearchParams(window.location.search);
                 let tab = params.get('tab') || 'nodes';
-                if (!['nodes', 'telemetry', 'raw', 'tools', 'settings'].includes(tab)) {
+                if (!['nodes', 'bots', 'telemetry', 'raw', 'tools', 'settings'].includes(tab)) {
                     tab = 'nodes';
                 }
 
@@ -1842,6 +2035,8 @@ $isLoggedIn = isAdminLoggedIn();
                     }
 
                     loadRawPackets(rawPage);
+                } else if (tab === 'bots') {
+                    loadBots();
                 } else if (tab === 'tools') {
                     loadNodeQueue();
                 } else if (tab === 'settings') {
@@ -1859,12 +2054,13 @@ $isLoggedIn = isAdminLoggedIn();
 
         // Skirtukų perjungimas
         function switchTab(tabName, pushState = true) {
-            if (!['nodes', 'telemetry', 'raw', 'tools', 'settings'].includes(tabName)) {
+            if (!['nodes', 'bots', 'telemetry', 'raw', 'tools', 'settings'].includes(tabName)) {
                 tabName = 'nodes';
             }
 
             if (activePacketModalId) closeModal('packetModal', false);
             if (activeEditNodeKey) closeModal('editNodeModal', false);
+            if (activeEditBotId) closeModal('editBotModal', false);
 
             currentTab = tabName;
             document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -1883,6 +2079,7 @@ $isLoggedIn = isAdminLoggedIn();
             updateTableSortHeaders(tabName === 'tools' ? 'queue' : tabName);
 
             if (tabName === 'nodes') loadNodes(nodesPage);
+            else if (tabName === 'bots') loadBots();
             else if (tabName === 'telemetry') loadTelemetry(telPage);
             else if (tabName === 'raw') loadRawPackets(rawPage);
             else if (tabName === 'tools') loadNodeQueue();
@@ -1954,6 +2151,7 @@ $isLoggedIn = isAdminLoggedIn();
         function refreshCurrentTab() {
             loadStats();
             if (currentTab === 'nodes') loadNodes();
+            else if (currentTab === 'bots') loadBots();
             else if (currentTab === 'telemetry') loadTelemetry(telPage);
             else if (currentTab === 'raw') loadRawPackets(rawPage);
             showToast('Duomenys atnaujinti!');
@@ -1975,6 +2173,10 @@ $isLoggedIn = isAdminLoggedIn();
                     document.getElementById('statQueuePending').innerText = r.pending || 0;
                     document.getElementById('statErrorsCount').innerText = r.errors || 0;
                     document.getElementById('statTelemetryCount').innerText = t.total_records || 0;
+
+                    if (document.getElementById('statBotsCount') && data.bots) {
+                        document.getElementById('statBotsCount').innerText = `${data.bots.active_bots || 0}/${data.bots.total_bots || 0}`;
+                    }
                 }
             } catch (e) {
                 console.error('Klaida gaunant statistiką:', e);
@@ -1985,12 +2187,13 @@ $isLoggedIn = isAdminLoggedIn();
         async function loadNodes(page = 0) {
             nodesPage = page;
             const search = document.getElementById('nodesSearch')?.value || '';
+            const botId = document.getElementById('nodesBotFilter')?.value || '';
             const status = document.getElementById('nodesStatusFilter')?.value || '';
             const type = document.getElementById('nodesTypeFilter')?.value || '';
             const update = document.getElementById('nodesUpdateFilter')?.value || '';
             const offset = page * nodesLimit;
 
-            const url = `api.php?action=nodes&search=${encodeURIComponent(search)}&status=${encodeURIComponent(status)}&type=${encodeURIComponent(type)}&update=${encodeURIComponent(update)}&limit=${nodesLimit}&offset=${offset}&sort_by=${encodeURIComponent(nodesSort.col)}&sort_dir=${nodesSort.dir}`;
+            const url = `api.php?action=nodes&search=${encodeURIComponent(search)}&bot_id=${encodeURIComponent(botId)}&status=${encodeURIComponent(status)}&type=${encodeURIComponent(type)}&update=${encodeURIComponent(update)}&limit=${nodesLimit}&offset=${offset}&sort_by=${encodeURIComponent(nodesSort.col)}&sort_dir=${nodesSort.dir}`;
             try {
                 const res = await fetch(url);
                 const data = await res.json();
@@ -2042,6 +2245,7 @@ $isLoggedIn = isAdminLoggedIn();
                 const hasLoc = (n.latitude && n.longitude && Math.abs(n.latitude) > 0.001);
                 const pass = n.password !== null && n.password !== undefined ? n.password : '';
                 const botId = n.bot_id || 'KLP';
+                const isBotLocked = (n.is_bot_locked == 1 || n.is_bot_locked === true || n.is_bot_locked === '1');
                 const failCount = parseInt(n.telemetry_fail_count || 0, 10);
 
                 const lastPath = (n.last_path || '').trim();
@@ -2075,7 +2279,7 @@ $isLoggedIn = isAdminLoggedIn();
                             ${isRep ? '<span class="badge badge-cyan">KARTOTUVAS</span>' : '<span class="badge badge-gray">KLIENTAS</span>'}
                         </td>
                         <td>
-                            <span class="badge badge-purple" title="ESP32 Šaltinis (BOT_ID)">🤖 ${escapeHtml(botId)}</span>
+                            <span class="badge badge-purple" style="cursor: pointer;" onclick="filterNodesByBot('${escapeHtml(botId)}')" title="ESP32 Šaltinis: ${escapeHtml(n.bot_name || botId)}${isBotLocked ? ' (UŽRAKINTAS - neperrašomas per adverto koordinates)' : ''}. Paspauskite filtruoti.">🤖 ${escapeHtml(botId)}${isBotLocked ? ' 🔒' : ''}</span>
                         </td>
                         <td>
                             ${isUp ? '<span class="badge badge-green">TAIP</span>' : '<span class="badge badge-gray">NE</span>'}
@@ -2099,9 +2303,8 @@ $isLoggedIn = isAdminLoggedIn();
                             ` : `
                                 <button class="btn btn-secondary btn-icon" style="margin-left: 3px; color: #ff6b81;" onclick="quickToggleNodeDisabled('${escapeHtml(key)}', true)" title="Išjungti mazgą (Disable)">⏸️</button>
                             `}
-                            ${failCount > 0 ? `
-                                <button class="btn btn-secondary btn-icon" style="margin-left: 3px;" onclick="resetNodeFailCount('${id}', '${escapeHtml(name)}')" title="Nuresetinti nesėkmingų bandymų (fail) skaičių į 0">🧹</button>
-                            ` : ''}
+                            <button class="btn btn-secondary btn-icon" style="margin-left: 3px;" onclick="resetSingleRequestedDate('${escapeHtml(key)}', '${escapeHtml(name)}')" title="Resetinti šio mazgo eilę (atstatyti requested_date į NULL, nukreipti į eilės pradžią)">⚡</button>
+                            <button class="btn btn-secondary btn-icon" style="margin-left: 3px; ${failCount > 0 ? 'color: #ff6b81;' : ''}" onclick="resetNodeFailCount('${escapeHtml(key)}', '${escapeHtml(name)}')" title="Nuresetinti nesėkmingų bandymų (fail=${failCount}) skaičių į 0">🧹</button>
                             <button class="btn btn-secondary btn-icon" style="margin-left: 3px;" onclick="filterTelemetryByNode('${id}')" title="Atidaryti telemetrijos įrašus">📊</button>
                             <button class="btn btn-secondary btn-icon" style="margin-left: 3px;" onclick="filterRawByNode('${id}')" title="Atidaryti RAW paketus">📦</button>
                         </td>
@@ -2193,6 +2396,17 @@ $isLoggedIn = isAdminLoggedIn();
             }
 
             document.getElementById('editNodeTitle').innerText = `Mazgo Nustatymai: ${node.node_name || node.node_id || ''}`;
+
+            populateBotDropdowns();
+            const botSel = document.getElementById('editNodeBotId');
+            if (botSel) {
+                botSel.value = (node.bot_id || 'KLP').toUpperCase();
+            }
+            const botLockedCheckbox = document.getElementById('editNodeBotLocked');
+            if (botLockedCheckbox) {
+                botLockedCheckbox.checked = (node.is_bot_locked == 1 || node.is_bot_locked === true || node.is_bot_locked === '1');
+            }
+
             openModal('editNodeModal');
             updateDocumentTitle();
         }
@@ -2210,6 +2424,8 @@ $isLoggedIn = isAdminLoggedIn();
                 public_key: publicKey,
                 node_name: document.getElementById('editNodeName').value,
                 password: document.getElementById('editNodePassword').value,
+                bot_id: document.getElementById('editNodeBotId')?.value || 'KLP',
+                is_bot_locked: document.getElementById('editNodeBotLocked')?.checked ? 1 : 0,
                 last_path: finalPath,
                 update: document.getElementById('editNodeUpdate').checked ? 1 : 0,
                 is_disabled: document.getElementById('editNodeIsDisabled')?.checked ? 1 : 0,
@@ -2283,6 +2499,329 @@ $isLoggedIn = isAdminLoggedIn();
             document.getElementById('telemetryNodeFilterTag').style.display = 'none';
             updateHistory({ tab: 'telemetry', node: '', page: 0 }, 'push');
             loadTelemetry(0);
+        }
+
+        // ==========================================
+        // 🤖 BOTŲ VALDYMAS (ESP32 GATEWAY BOTAI)
+        // ==========================================
+        async function loadBots() {
+            try {
+                const res = await fetch('api.php?action=bots');
+                const data = await res.json();
+                if (data && data.success && Array.isArray(data.bots)) {
+                    allBotsData = data.bots;
+                    populateBotDropdowns();
+                    renderBotsTable();
+
+                    const statCard = document.getElementById('statBotsCount');
+                    if (statCard) {
+                        const activeCount = allBotsData.filter(b => b.enabled == 1 || b.enabled === true).length;
+                        statCard.innerText = `${activeCount}/${allBotsData.length}`;
+                    }
+                }
+            } catch (err) {
+                console.error('Klaida kraunant botus:', err);
+            }
+        }
+
+        function populateBotDropdowns() {
+            if (!allBotsData || !Array.isArray(allBotsData)) return;
+
+            // 1. Mazgų filtro dropdown (nodesBotFilter)
+            const nodeBotFilter = document.getElementById('nodesBotFilter');
+            if (nodeBotFilter) {
+                const currentVal = nodeBotFilter.value;
+                nodeBotFilter.innerHTML = '<option value="">Visi botai</option>';
+                allBotsData.forEach(b => {
+                    const opt = document.createElement('option');
+                    opt.value = b.bot_id;
+                    opt.textContent = `${b.bot_id} (${b.name || 'Botas'})`;
+                    nodeBotFilter.appendChild(opt);
+                });
+                if (currentVal) nodeBotFilter.value = currentVal;
+            }
+
+            // 2. Mazgo redagavimo modal dropdown (editNodeBotId)
+            const editNodeBotSel = document.getElementById('editNodeBotId');
+            if (editNodeBotSel) {
+                const currentVal = editNodeBotSel.value;
+                editNodeBotSel.innerHTML = '';
+                allBotsData.forEach(b => {
+                    const opt = document.createElement('option');
+                    opt.value = b.bot_id;
+                    opt.textContent = `${b.bot_id} - ${b.name || 'Botas'}${b.enabled == 0 ? ' [IŠJUNGTAS]' : ''}`;
+                    editNodeBotSel.appendChild(opt);
+                });
+                if (currentVal) editNodeBotSel.value = currentVal;
+            }
+
+            // 3. Eilės filtro dropdown (queueBotFilter)
+            const queueBotFilter = document.getElementById('queueBotFilter');
+            if (queueBotFilter) {
+                const currentVal = queueBotFilter.value;
+                queueBotFilter.innerHTML = '<option value="">Visi botai</option>';
+                allBotsData.forEach(b => {
+                    const opt = document.createElement('option');
+                    opt.value = b.bot_id;
+                    opt.textContent = `Botas: ${b.bot_id} (${b.name || ''})`;
+                    queueBotFilter.appendChild(opt);
+                });
+                if (currentVal) queueBotFilter.value = currentVal;
+            }
+        }
+
+        function renderBotsTable() {
+            const tbody = document.getElementById('botsTableBody');
+            const badge = document.getElementById('botsCountBadge');
+            if (!tbody) return;
+
+            const searchInput = (document.getElementById('botsSearch')?.value || '').toLowerCase().trim();
+            const statusFilter = document.getElementById('botsStatusFilter')?.value || '';
+
+            let filtered = allBotsData.filter(bot => {
+                const isEnabled = (bot.enabled == 1 || bot.enabled === true);
+                if (statusFilter === 'enabled' && !isEnabled) return false;
+                if (statusFilter === 'disabled' && isEnabled) return false;
+
+                if (searchInput) {
+                    const id = (bot.bot_id || '').toLowerCase();
+                    const name = (bot.name || '').toLowerCase();
+                    const pk = (bot.public_key || '').toLowerCase();
+                    const desc = (bot.description || '').toLowerCase();
+                    if (!id.includes(searchInput) && !name.includes(searchInput) && !pk.includes(searchInput) && !desc.includes(searchInput)) {
+                        return false;
+                    }
+                }
+                return true;
+            });
+
+            if (badge) {
+                badge.innerText = `${filtered.length} iš ${allBotsData.length} botų`;
+            }
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 28px; color: var(--text-muted);">
+                    Botų nerasta pagal pasirinktus paieškos kriterijus.
+                </td></tr>`;
+                return;
+            }
+
+            let html = '';
+            filtered.forEach(bot => {
+                const isEnabled = (bot.enabled == 1 || bot.enabled === true);
+                const statusBadge = isEnabled
+                    ? `<span class="badge badge-green" style="cursor: pointer;" onclick="quickToggleBot('${escapeHtml(bot.bot_id)}', false)" title="Paspauskite, kad išjungtumėte">● Aktyvus</span>`
+                    : `<span class="badge badge-red" style="cursor: pointer;" onclick="quickToggleBot('${escapeHtml(bot.bot_id)}', true)" title="Paspauskite, kad įjungtumėte">○ Išjungtas</span>`;
+
+                let coordsHtml = '<span style="color: var(--text-dim); font-size: 0.8rem;">Nenurodytos</span>';
+                if (bot.latitude && bot.longitude) {
+                    const lat = parseFloat(bot.latitude).toFixed(5);
+                    const lon = parseFloat(bot.longitude).toFixed(5);
+                    coordsHtml = `<a href="https://www.google.com/maps?q=${lat},${lon}" target="_blank" style="color: var(--accent-cyan); text-decoration: none; font-family: var(--font-mono); font-size: 0.82rem;" title="Atidaryti žemėlapyje">📍 ${lat}, ${lon}</a>`;
+                }
+
+                let pkHtml = '<span style="color: var(--text-dim); font-size: 0.8rem;">—</span>';
+                if (bot.public_key) {
+                    const shortPk = bot.public_key.substring(0, 10) + '...' + bot.public_key.substring(bot.public_key.length - 8);
+                    pkHtml = `<span style="font-family: var(--font-mono); font-size: 0.78rem; color: #a4b0be; cursor: pointer;" onclick="copyText('${escapeHtml(bot.public_key)}')" title="Spustelėkite nukopijuoti">${escapeHtml(shortPk)}</span>`;
+                }
+
+                const totalNodes = parseInt(bot.total_nodes_count || 0, 10);
+                const repCount = parseInt(bot.repeaters_count || 0, 10);
+                const nodesBadge = `<span class="badge badge-cyan" style="cursor: pointer;" onclick="filterNodesByBot('${escapeHtml(bot.bot_id)}')" title="Rodyti šio boto mazgus">${totalNodes} mazg. (${repCount} kart.)</span>`;
+
+                let lastSeen = '<span style="color: var(--text-dim);">—</span>';
+                if (bot.last_seen_at) {
+                    lastSeen = `<span style="font-size: 0.82rem; color: var(--text-muted);">${escapeHtml(bot.last_seen_at)}</span>`;
+                }
+
+                const descSub = bot.description ? `<div style="font-size: 0.75rem; color: var(--text-dim); margin-top: 3px;">${escapeHtml(bot.description)}</div>` : '';
+
+                html += `<tr>
+                    <td>
+                        <span class="badge badge-purple" style="font-family: var(--font-mono); font-weight: 700; font-size: 0.88rem;">${escapeHtml(bot.bot_id)}</span>
+                    </td>
+                    <td>
+                        <div style="font-weight: 600; color: #ffffff;">${escapeHtml(bot.name || bot.bot_id)}</div>
+                        ${descSub}
+                    </td>
+                    <td>${pkHtml}</td>
+                    <td>${statusBadge}</td>
+                    <td>${coordsHtml}</td>
+                    <td>${nodesBadge}</td>
+                    <td>${lastSeen}</td>
+                    <td style="text-align: right; white-space: nowrap;">
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="openEditBotModal('${escapeHtml(bot.bot_id)}')" title="Redaguoti boto nustatymus">
+                            ✏️ Redaguoti
+                        </button>
+                        <button type="button" class="btn btn-danger btn-sm" onclick="deleteBot('${escapeHtml(bot.bot_id)}', '${escapeHtml(bot.name || bot.bot_id)}')" title="Ištrinti botą">
+                            🗑️
+                        </button>
+                    </td>
+                </tr>`;
+            });
+
+            tbody.innerHTML = html;
+        }
+
+        function openCreateBotModal() {
+            activeEditBotId = null;
+            document.getElementById('editBotTitle').innerText = '➕ Naujas Botas (ESP32 Gateway)';
+            document.getElementById('editBotIsNew').value = '1';
+            document.getElementById('editBotOriginalId').value = '';
+
+            const idInput = document.getElementById('editBotId');
+            idInput.value = '';
+            idInput.disabled = false;
+
+            document.getElementById('editBotName').value = '';
+            document.getElementById('editBotPublicKey').value = '';
+            document.getElementById('editBotLat').value = '';
+            document.getElementById('editBotLon').value = '';
+            document.getElementById('editBotDescription').value = '';
+            document.getElementById('editBotEnabled').checked = true;
+
+            openModal('editBotModal');
+            updateDocumentTitle();
+        }
+
+        function openEditBotModal(botId) {
+            const bot = allBotsData.find(b => b.bot_id.toUpperCase() === botId.toUpperCase());
+            if (!bot) return;
+
+            activeEditBotId = bot.bot_id;
+            document.getElementById('editBotTitle').innerText = `🤖 Boto Nustatymai: ${bot.name || bot.bot_id}`;
+            document.getElementById('editBotIsNew').value = '0';
+            document.getElementById('editBotOriginalId').value = bot.bot_id;
+
+            const idInput = document.getElementById('editBotId');
+            idInput.value = bot.bot_id;
+            idInput.disabled = false;
+
+            document.getElementById('editBotName').value = bot.name || '';
+            document.getElementById('editBotPublicKey').value = bot.public_key || '';
+            document.getElementById('editBotLat').value = bot.latitude || '';
+            document.getElementById('editBotLon').value = bot.longitude || '';
+            document.getElementById('editBotDescription').value = bot.description || '';
+            document.getElementById('editBotEnabled').checked = (bot.enabled == 1 || bot.enabled === true);
+
+            openModal('editBotModal');
+            updateDocumentTitle();
+        }
+
+        async function handleSaveBot(e) {
+            e.preventDefault();
+            const isNew = document.getElementById('editBotIsNew').value === '1';
+            const originalBotId = document.getElementById('editBotOriginalId').value;
+            const botId = document.getElementById('editBotId').value.trim().toUpperCase();
+            const name = document.getElementById('editBotName').value.trim();
+            const publicKey = document.getElementById('editBotPublicKey').value.trim();
+            const lat = document.getElementById('editBotLat').value;
+            const lon = document.getElementById('editBotLon').value;
+            const description = document.getElementById('editBotDescription').value.trim();
+            const enabled = document.getElementById('editBotEnabled').checked;
+
+            if (!botId) {
+                showToast('Privaloma įvesti Boto ID!', 'error');
+                return;
+            }
+
+            const payload = {
+                is_new: isNew,
+                original_bot_id: originalBotId,
+                bot_id: botId,
+                name: name,
+                public_key: publicKey,
+                latitude: lat ? parseFloat(lat) : null,
+                longitude: lon ? parseFloat(lon) : null,
+                description: description,
+                enabled: enabled
+            };
+
+            try {
+                const res = await fetch('api.php?action=save_bot', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (!data.success) {
+                    throw new Error(data.error || 'Nepavyko išsaugoti boto');
+                }
+
+                showToast(data.message || 'Botas sėkmingai išsaugotas!', 'success');
+                closeModal('editBotModal', false);
+                await loadBots();
+                await loadStats();
+                if (currentTab === 'nodes') {
+                    await loadNodes(nodesPage);
+                }
+            } catch (err) {
+                console.error('Klaida saugant botą:', err);
+                showToast(err.message, 'error');
+            }
+        }
+
+        async function quickToggleBot(botId, enable) {
+            try {
+                const res = await fetch('api.php?action=toggle_bot', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ bot_id: botId })
+                });
+                const data = await res.json();
+                if (!data.success) {
+                    throw new Error(data.error || 'Nepavyko pakeisti boto būsenos');
+                }
+
+                showToast(data.message || 'Būsena pakeista!', 'success');
+                await loadBots();
+                await loadStats();
+            } catch (err) {
+                console.error('Klaida perjungiant boto būseną:', err);
+                showToast(err.message, 'error');
+            }
+        }
+
+        async function deleteBot(botId, name) {
+            if (!confirm(`Ar tikrai norite ištrinti botą '${botId}' (${name})?\n\nVisi šiam botui priskirti mazgai bus saugiai perleisti numatytajam 'KLP' botui.`)) {
+                return;
+            }
+
+            try {
+                const res = await fetch('api.php?action=delete_bot', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ bot_id: botId })
+                });
+                const data = await res.json();
+                if (!data.success) {
+                    throw new Error(data.error || 'Nepavyko ištrinti boto');
+                }
+
+                showToast(data.message || 'Botas ištrintas!', 'success');
+                await loadBots();
+                await loadStats();
+                if (currentTab === 'nodes') {
+                    await loadNodes(nodesPage);
+                }
+            } catch (err) {
+                console.error('Klaida trinant botą:', err);
+                showToast(err.message, 'error');
+            }
+        }
+
+        function filterNodesByBot(botId) {
+            const sel = document.getElementById('nodesBotFilter');
+            if (sel) {
+                sel.value = botId;
+            }
+            switchTab('nodes');
+            onNodesFilterChange();
+        }
+
+        function onBotsSearchInput() {
+            renderBotsTable();
         }
 
         async function loadTelemetry(page = 0) {
@@ -3164,15 +3703,30 @@ $isLoggedIn = isAdminLoggedIn();
                 }
 
                 showToast(`🚀 ${nodeName || identifier} nukreiptas į eilės pradžią (fail nuresetintas į 0)!`, 'success');
-                await loadNodeQueue(false);
+                if (currentTab === 'nodes') {
+                    await loadNodes();
+                    await loadStats();
+                } else if (currentTab === 'queue') {
+                    await loadNodeQueue(false);
+                } else {
+                    await loadNodeQueue(false);
+                }
             } catch (err) {
                 alert('Klaida: ' + err.message);
             }
         }
 
         async function resetAllRequestedDates() {
-            const botFilter = document.getElementById('queueBotFilter')?.value || '';
-            const monitoredFilter = document.getElementById('queueMonitoredFilter')?.value === '1';
+            let botFilter = '';
+            let monitoredFilter = false;
+
+            if (currentTab === 'nodes') {
+                botFilter = document.getElementById('nodesBotFilter')?.value || '';
+                monitoredFilter = (document.getElementById('nodesUpdateFilter')?.value === '1');
+            } else {
+                botFilter = document.getElementById('queueBotFilter')?.value || '';
+                monitoredFilter = (document.getElementById('queueMonitoredFilter')?.value === '1');
+            }
 
             let msg = 'Ar tikrai norite nuresetinti visų mazgų requested_date datą į NULL?\n\nVisi mazgai bus imami nuo pradžių sekantiems telemetrijos atnaujinimams ir jų fail skaičiai bus atstatyti į 0.';
             if (botFilter) {
@@ -3196,7 +3750,14 @@ $isLoggedIn = isAdminLoggedIn();
                 }
 
                 showToast(data.message || 'Eilė sėkmingai nuresetinta!', 'success');
-                await loadNodeQueue(false);
+                if (currentTab === 'nodes') {
+                    await loadNodes();
+                    await loadStats();
+                } else if (currentTab === 'queue') {
+                    await loadNodeQueue(false);
+                } else {
+                    await loadNodeQueue(false);
+                }
             } catch (err) {
                 alert('Klaida nuresetinant eilę: ' + err.message);
             }
@@ -3219,6 +3780,7 @@ $isLoggedIn = isAdminLoggedIn();
                     await loadNodeQueue(false);
                 } else if (currentTab === 'nodes') {
                     await loadNodes();
+                    await loadStats();
                 } else {
                     await loadNodeQueue(false);
                 }
@@ -3228,7 +3790,13 @@ $isLoggedIn = isAdminLoggedIn();
         }
 
         async function resetAllFailCounts() {
-            const botFilter = document.getElementById('queueBotFilter')?.value || '';
+            let botFilter = '';
+            if (currentTab === 'nodes') {
+                botFilter = document.getElementById('nodesBotFilter')?.value || '';
+            } else {
+                botFilter = document.getElementById('queueBotFilter')?.value || '';
+            }
+
             let msg = 'Ar tikrai norite nuresetinti VISŲ mazgų nesėkmingų bandymų (fail) skaičių į 0?\n\nVisi anksčiau sustabdyti mazgai vėl taps tinkami telemetrijos užklausoms.';
             if (botFilter) {
                 msg = `Ar tikrai norite nuresetinti boto "${botFilter}" mazgų fail skaičių į 0?`;
@@ -3254,6 +3822,7 @@ $isLoggedIn = isAdminLoggedIn();
                     await loadNodeQueue(false);
                 } else if (currentTab === 'nodes') {
                     await loadNodes();
+                    await loadStats();
                 } else {
                     await loadNodeQueue(false);
                 }
@@ -3267,6 +3836,17 @@ $isLoggedIn = isAdminLoggedIn();
             const name = document.getElementById('editNodeName')?.value || key;
             if (!key) return;
             await resetNodeFailCount(key, name);
+            const failLabel = document.getElementById('editNodeFailLabel');
+            if (failLabel) {
+                failLabel.innerHTML = `Nesėkmingi bandymai (fail): <span style="color: #2ed573; font-weight: 700;">0</span>`;
+            }
+        }
+
+        async function resetActiveEditNodeQueue() {
+            const key = document.getElementById('editNodePublicKey')?.value;
+            const name = document.getElementById('editNodeName')?.value || key;
+            if (!key) return;
+            await resetSingleRequestedDate(key, name);
             const failLabel = document.getElementById('editNodeFailLabel');
             if (failLabel) {
                 failLabel.innerHTML = `Nesėkmingi bandymai (fail): <span style="color: #2ed573; font-weight: 700;">0</span>`;
@@ -3311,7 +3891,8 @@ $isLoggedIn = isAdminLoggedIn();
                 } else {
                     if (id === 'packetModal') activePacketModalId = null;
                     if (id === 'editNodeModal') activeEditNodeKey = null;
-                    updateHistory({ packet: null, edit_node: null }, 'push');
+                    if (id === 'editBotModal') activeEditBotId = null;
+                    updateHistory({ packet: null, edit_node: null, edit_bot: null }, 'push');
                 }
             }
 
@@ -3322,6 +3903,9 @@ $isLoggedIn = isAdminLoggedIn();
             if (id === 'editNodeModal') {
                 activeEditNodeKey = null;
                 pendingEditNodeKey = null;
+            }
+            if (id === 'editBotModal') {
+                activeEditBotId = null;
             }
             updateDocumentTitle();
         }
@@ -3587,12 +4171,14 @@ $isLoggedIn = isAdminLoggedIn();
             if (e.key === 'Escape') {
                 const openPacketModal = document.getElementById('packetModal')?.classList.contains('active');
                 const openEditModal = document.getElementById('editNodeModal')?.classList.contains('active');
+                const openBotModal = document.getElementById('editBotModal')?.classList.contains('active');
                 if (openPacketModal) closeModal('packetModal', true);
                 else if (openEditModal) closeModal('editNodeModal', true);
+                else if (openBotModal) closeModal('editBotModal', true);
             }
         });
 
-        ['packetModal', 'editNodeModal'].forEach(id => {
+        ['packetModal', 'editNodeModal', 'editBotModal'].forEach(id => {
             const el = document.getElementById(id);
             if (el) {
                 el.addEventListener('click', (e) => {
@@ -3616,6 +4202,7 @@ $isLoggedIn = isAdminLoggedIn();
             <?php if ($isLoggedIn): ?>
                 ['nodes', 'telemetry', 'raw', 'queue'].forEach(t => updateTableSortHeaders(t));
                 loadStats();
+                loadBots();
                 applyUrlState(true);
             <?php endif; ?>
         });

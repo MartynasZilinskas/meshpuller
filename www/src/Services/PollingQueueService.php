@@ -88,6 +88,20 @@ class PollingQueueService implements PollingQueueServiceInterface
             return [];
         }
 
+        $cleanBotId = strtoupper(substr(trim((string)$botId), 0, 16));
+
+        // Patikriname ar šis botas nėra išjungtas (enabled = 0) bots lentelėje
+        if ($this->pdo) {
+            try {
+                $bCheck = $this->pdo->prepare("SELECT enabled FROM bots WHERE UPPER(bot_id) = :b_id LIMIT 1");
+                $bCheck->execute([':b_id' => $cleanBotId]);
+                $bEnabled = $bCheck->fetchColumn();
+                if ($bEnabled !== false && !$bEnabled) {
+                    return []; // Botas išjungtas per administravimo pultą
+                }
+            } catch (\Throwable $e) {}
+        }
+
         $repeaters = [];
         $knownKeys = [];
         $driver = $this->pdo ? $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME) : null;
@@ -279,6 +293,20 @@ class PollingQueueService implements PollingQueueServiceInterface
     {
         if (empty($botId)) {
             return null;
+        }
+
+        $cleanBotId = strtoupper(substr(trim((string)$botId), 0, 16));
+
+        // Patikriname ar šis botas nėra išjungtas (enabled = 0) bots lentelėje
+        if ($this->pdo) {
+            try {
+                $bCheck = $this->pdo->prepare("SELECT enabled FROM bots WHERE UPPER(bot_id) = :b_id LIMIT 1");
+                $bCheck->execute([':b_id' => $cleanBotId]);
+                $bEnabled = $bCheck->fetchColumn();
+                if ($bEnabled !== false && !$bEnabled) {
+                    return null; // Botas išjungtas per administravimo pultą
+                }
+            } catch (\Throwable $e) {}
         }
 
         $driver = $this->pdo ? $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME) : null;
@@ -755,10 +783,22 @@ SQL;
             return [];
         }
         try {
-            $stmt = $this->pdo->query("SELECT DISTINCT bot_id FROM nodes WHERE bot_id IS NOT NULL AND bot_id != '' ORDER BY bot_id ASC");
+            $stmt = $this->pdo->query("
+                SELECT DISTINCT bot_id FROM (
+                    SELECT bot_id FROM bots WHERE bot_id IS NOT NULL AND bot_id != ''
+                    UNION
+                    SELECT bot_id FROM nodes WHERE bot_id IS NOT NULL AND bot_id != ''
+                ) combined_bots
+                ORDER BY bot_id ASC
+            ");
             return $stmt->fetchAll(PDO::FETCH_COLUMN) ?: [];
         } catch (\Throwable $e) {
-            return [];
+            try {
+                $stmt = $this->pdo->query("SELECT DISTINCT bot_id FROM nodes WHERE bot_id IS NOT NULL AND bot_id != '' ORDER BY bot_id ASC");
+                return $stmt->fetchAll(PDO::FETCH_COLUMN) ?: [];
+            } catch (\Throwable $e2) {
+                return [];
+            }
         }
     }
 

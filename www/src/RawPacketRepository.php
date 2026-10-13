@@ -4,6 +4,7 @@ namespace MeshCore;
 
 require_once __DIR__ . '/autoload.php';
 
+use MeshCore\Contracts\BotRepositoryInterface;
 use MeshCore\Contracts\DatabaseConnectionInterface;
 use MeshCore\Contracts\GeolocationServiceInterface;
 use MeshCore\Contracts\NodeRepositoryInterface;
@@ -13,6 +14,7 @@ use MeshCore\Contracts\SettingsRepositoryInterface;
 use MeshCore\Contracts\TelemetryRepositoryInterface;
 use MeshCore\Database\DatabaseManager;
 use MeshCore\Database\SchemaManager;
+use MeshCore\Repositories\BotRepository;
 use MeshCore\Repositories\NodeRepository;
 use MeshCore\Repositories\RawPacketStorage;
 use MeshCore\Repositories\SettingsRepository;
@@ -42,7 +44,8 @@ class RawPacketRepository implements
     TelemetryRepositoryInterface,
     SettingsRepositoryInterface,
     GeolocationServiceInterface,
-    PollingQueueServiceInterface
+    PollingQueueServiceInterface,
+    BotRepositoryInterface
 {
     public const DEFAULT_CONFIG = DatabaseManager::DEFAULT_CONFIG;
     public const DEFAULT_SYSTEM_SETTINGS = SettingsRepository::DEFAULT_SYSTEM_SETTINGS;
@@ -55,6 +58,7 @@ class RawPacketRepository implements
     private NodeRepository $nodeRepo;
     private TelemetryRepository $telemetryRepo;
     private RawPacketStorage $rawPacketStorage;
+    private BotRepository $botRepo;
 
     public function __construct(
         ?array $config = null,
@@ -66,7 +70,8 @@ class RawPacketRepository implements
         ?PollingQueueService $pollingQueueService = null,
         ?NodeRepository $nodeRepo = null,
         ?TelemetryRepository $telemetryRepo = null,
-        ?RawPacketStorage $rawPacketStorage = null
+        ?RawPacketStorage $rawPacketStorage = null,
+        ?BotRepository $botRepo = null
     ) {
         $this->dbManager = $dbManager ?? new DatabaseManager($config, $pdo);
         $activePdo = $this->dbManager->getPdo();
@@ -76,11 +81,13 @@ class RawPacketRepository implements
         $this->settingsRepo = $settingsRepo ?? new SettingsRepository($activePdo);
         $this->geoService = $geoService ?? new GeolocationService($this->settingsRepo, $activePdo);
         $this->pollingQueueService = $pollingQueueService ?? new PollingQueueService($activePdo, $this->settingsRepo);
+        $this->botRepo = $botRepo ?? new BotRepository($activePdo);
 
         $this->nodeRepo = $nodeRepo ?? new NodeRepository(
             $activePdo,
             $this->settingsRepo,
             $this->pollingQueueService,
+            $this->botRepo,
             $tableName
         );
 
@@ -142,6 +149,11 @@ class RawPacketRepository implements
     public function getRawPacketStorage(): RawPacketStorage
     {
         return $this->rawPacketStorage;
+    }
+
+    public function getBotRepository(): BotRepository
+    {
+        return $this->botRepo;
     }
 
     // =========================================================================
@@ -455,5 +467,59 @@ class RawPacketRepository implements
     public function resetAllRequestedDates(?string $botId = null, bool $monitoredOnly = true, bool $resetFailCount = false): int
     {
         return $this->pollingQueueService->resetAllRequestedDates($botId, $monitoredOnly, $resetFailCount);
+    }
+
+    // =========================================================================
+    // 🤖 BOT REPOSITORY INTERFACE
+    // =========================================================================
+
+    public function getAllBots(): array
+    {
+        return $this->botRepo->getAllBots();
+    }
+
+    public function getBotsWithNodeCounts(): array
+    {
+        return $this->botRepo->getBotsWithNodeCounts();
+    }
+
+    public function getBotById(string $botId): ?array
+    {
+        return $this->botRepo->getBotById($botId);
+    }
+
+    public function getBotByPublicKey(string $publicKey): ?array
+    {
+        return $this->botRepo->getBotByPublicKey($publicKey);
+    }
+
+    public function createBot(array $data): bool
+    {
+        return $this->botRepo->createBot($data);
+    }
+
+    public function updateBot(string $botId, array $data): bool
+    {
+        return $this->botRepo->updateBot($botId, $data);
+    }
+
+    public function deleteBot(string $botId): bool
+    {
+        return $this->botRepo->deleteBot($botId);
+    }
+
+    public function touchBotSeen(string $botId): bool
+    {
+        return $this->botRepo->touchBotSeen($botId);
+    }
+
+    public function isBotEnabled(string $botId): bool
+    {
+        return $this->botRepo->isBotEnabled($botId);
+    }
+
+    public function findClosestBot(float $latitude, float $longitude, bool $onlyEnabled = false): ?array
+    {
+        return $this->botRepo->findClosestBot($latitude, $longitude, $onlyEnabled);
     }
 }

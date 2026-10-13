@@ -57,9 +57,9 @@ try {
     output("Vartotojas: " . RawPacketRepository::DEFAULT_CONFIG['user'], "info");
     output("Duomenų bazė: " . RawPacketRepository::DEFAULT_CONFIG['dbname'], "info");
 
-    // 1. Sukuriame lenteles 'raw_packets', 'nodes' ir 'telemetry' bei indeksus
+    // 1. Sukuriame lenteles 'bots', 'nodes', 'telemetry' ir 'raw_packets' bei indeksus
     $repo->createTableIfNotExists();
-    output("Lentelės 'raw_packets', 'nodes' ir 'telemetry' bei jų indeksai sėkmingai patikrinti / sukurti!", "success");
+    output("Lentelės 'bots', 'nodes', 'telemetry' ir 'raw_packets' bei jų indeksai sėkmingai patikrinti / sukurti!", "success");
 
     // Užtikriname, kad esamiems įrašams būtų priskirtas numatytasis 'KLP' bot_id
     try {
@@ -104,8 +104,8 @@ try {
         output("Sinchronizuota 'telemetry_updated_at' data esamiems mazgams iš 'telemetry' lentelės", "info");
     } catch (\Throwable $e) {}
 
-    // 2. Patikriname visų trijų lentelių stulpelius
-    $tablesToCheck = ['raw_packets', 'nodes', 'telemetry'];
+    // 2. Patikriname visų keturių lentelių stulpelius
+    $tablesToCheck = ['bots', 'nodes', 'telemetry', 'raw_packets'];
 
     foreach ($tablesToCheck as $tbl) {
         if ($driver === 'mysql') {
@@ -202,6 +202,8 @@ try {
     $telemetryStats = $repo->getTelemetryStats();
 
     output("\n📊 Esama sistemos būsena:", "info");
+    $allBots = $repo->getAllBots();
+    output("  [bots] Iš viso registruotų botų (vartų): " . count($allBots), "info");
     output("  [raw_packets] Iš viso paketų: " . ($rawStats['total_count'] ?? 0), "info");
     output("  [raw_packets] Laukia eilėje: " . ($rawStats['pending_never_processed'] ?? 0), "info");
     output("  [raw_packets] Apdorota: " . ($rawStats['completed_count'] ?? 0), "info");

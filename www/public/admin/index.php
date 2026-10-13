@@ -9,6 +9,11 @@ $isLoggedIn = isAdminLoggedIn();
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MeshCore Administravimo Pultas</title>
     
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="../favicon.svg">
+    <link rel="alternate icon" href="../favicon.ico">
+    <link rel="apple-touch-icon" href="../favicon-32x32.png">
+
     <!-- Šriftai ir stiliai -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -555,6 +560,7 @@ $isLoggedIn = isAdminLoggedIn();
             align-items: center;
             justify-content: center;
             padding: 20px;
+            overflow-y: auto;
         }
 
         .modal-overlay.active {
@@ -568,14 +574,24 @@ $isLoggedIn = isAdminLoggedIn();
             width: 100%;
             max-width: 650px;
             max-height: 90vh;
+            max-height: 90dvh;
             display: flex;
             flex-direction: column;
             overflow: hidden;
             box-shadow: 0 14px 45px rgba(0, 0, 0, 0.8);
+            margin: auto;
         }
 
         .modal-card.modal-lg {
             max-width: 850px;
+        }
+
+        .modal-card form {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
         }
 
         .modal-header {
@@ -585,6 +601,7 @@ $isLoggedIn = isAdminLoggedIn();
             display: flex;
             align-items: center;
             justify-content: space-between;
+            flex-shrink: 0;
         }
 
         .modal-header h3 {
@@ -610,9 +627,30 @@ $isLoggedIn = isAdminLoggedIn();
             padding: 20px;
             overflow-y: auto;
             flex: 1;
+            min-height: 0;
             display: flex;
             flex-direction: column;
             gap: 14px;
+            overscroll-behavior: contain;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+        }
+
+        .modal-body::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .modal-body::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .modal-body::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.25);
+            border-radius: 4px;
+        }
+
+        .modal-body::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.4);
         }
 
         .modal-footer {
@@ -622,6 +660,7 @@ $isLoggedIn = isAdminLoggedIn();
             display: flex;
             justify-content: flex-end;
             gap: 10px;
+            flex-shrink: 0;
         }
 
         /* JSON Pre peržiūra */
@@ -798,7 +837,13 @@ $isLoggedIn = isAdminLoggedIn();
                         </select>
                     </div>
 
-                    <div>
+                    <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="resetAllRequestedDates()" title="Išvalyti visų (arba pasirinkto boto) mazgų requested_date datą į NULL (atstatyti eilę į pradžią)">
+                            <span>⚡ Resetinti eilę</span>
+                        </button>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="resetAllFailCounts()" title="Nuresetinti visų (arba pasirinkto boto) mazgų nesėkmingų bandymų (fail) skaičių į 0">
+                            <span>🧹 Resetinti fail (0)</span>
+                        </button>
                         <span id="nodesCountBadge" class="badge badge-gray">0 mazgų</span>
                     </div>
                 </div>
@@ -2099,9 +2144,8 @@ $isLoggedIn = isAdminLoggedIn();
                             ` : `
                                 <button class="btn btn-secondary btn-icon" style="margin-left: 3px; color: #ff6b81;" onclick="quickToggleNodeDisabled('${escapeHtml(key)}', true)" title="Išjungti mazgą (Disable)">⏸️</button>
                             `}
-                            ${failCount > 0 ? `
-                                <button class="btn btn-secondary btn-icon" style="margin-left: 3px;" onclick="resetNodeFailCount('${id}', '${escapeHtml(name)}')" title="Nuresetinti nesėkmingų bandymų (fail) skaičių į 0">🧹</button>
-                            ` : ''}
+                            <button class="btn btn-secondary btn-icon" style="margin-left: 3px;" onclick="resetSingleRequestedDate('${escapeHtml(key)}', '${escapeHtml(name)}')" title="Resetinti šio mazgo eilę (atstatyti requested_date į NULL, nukreipti į eilės pradžią)">⚡</button>
+                            <button class="btn btn-secondary btn-icon" style="margin-left: 3px; ${failCount > 0 ? 'color: #ff6b81;' : ''}" onclick="resetNodeFailCount('${escapeHtml(key)}', '${escapeHtml(name)}')" title="Nuresetinti nesėkmingų bandymų (fail=${failCount}) skaičių į 0">🧹</button>
                             <button class="btn btn-secondary btn-icon" style="margin-left: 3px;" onclick="filterTelemetryByNode('${id}')" title="Atidaryti telemetrijos įrašus">📊</button>
                             <button class="btn btn-secondary btn-icon" style="margin-left: 3px;" onclick="filterRawByNode('${id}')" title="Atidaryti RAW paketus">📦</button>
                         </td>
@@ -3164,7 +3208,14 @@ $isLoggedIn = isAdminLoggedIn();
                 }
 
                 showToast(`🚀 ${nodeName || identifier} nukreiptas į eilės pradžią (fail nuresetintas į 0)!`, 'success');
-                await loadNodeQueue(false);
+                if (currentTab === 'nodes') {
+                    await loadNodes();
+                    await loadStats();
+                } else if (currentTab === 'queue') {
+                    await loadNodeQueue(false);
+                } else {
+                    await loadNodeQueue(false);
+                }
             } catch (err) {
                 alert('Klaida: ' + err.message);
             }
@@ -3172,7 +3223,9 @@ $isLoggedIn = isAdminLoggedIn();
 
         async function resetAllRequestedDates() {
             const botFilter = document.getElementById('queueBotFilter')?.value || '';
-            const monitoredFilter = document.getElementById('queueMonitoredFilter')?.value === '1';
+            const monitoredFilter = (currentTab === 'nodes')
+                ? (document.getElementById('nodesUpdateFilter')?.value === '1')
+                : (document.getElementById('queueMonitoredFilter')?.value === '1');
 
             let msg = 'Ar tikrai norite nuresetinti visų mazgų requested_date datą į NULL?\n\nVisi mazgai bus imami nuo pradžių sekantiems telemetrijos atnaujinimams ir jų fail skaičiai bus atstatyti į 0.';
             if (botFilter) {
@@ -3196,7 +3249,14 @@ $isLoggedIn = isAdminLoggedIn();
                 }
 
                 showToast(data.message || 'Eilė sėkmingai nuresetinta!', 'success');
-                await loadNodeQueue(false);
+                if (currentTab === 'nodes') {
+                    await loadNodes();
+                    await loadStats();
+                } else if (currentTab === 'queue') {
+                    await loadNodeQueue(false);
+                } else {
+                    await loadNodeQueue(false);
+                }
             } catch (err) {
                 alert('Klaida nuresetinant eilę: ' + err.message);
             }
@@ -3219,6 +3279,7 @@ $isLoggedIn = isAdminLoggedIn();
                     await loadNodeQueue(false);
                 } else if (currentTab === 'nodes') {
                     await loadNodes();
+                    await loadStats();
                 } else {
                     await loadNodeQueue(false);
                 }
@@ -3254,6 +3315,7 @@ $isLoggedIn = isAdminLoggedIn();
                     await loadNodeQueue(false);
                 } else if (currentTab === 'nodes') {
                     await loadNodes();
+                    await loadStats();
                 } else {
                     await loadNodeQueue(false);
                 }

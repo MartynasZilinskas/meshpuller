@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS `nodes` (
     `node_name`         VARCHAR(128) NULL DEFAULT NULL COMMENT 'Mazgo pavadinimas (pvz. LT-LM Tilžė B9DD)',
     `node_id`           VARCHAR(16) NULL DEFAULT NULL COMMENT 'Trumpasis mazgo ID (pvz. b9dd)',
     `bot_id`            VARCHAR(16) NOT NULL DEFAULT 'KLP' COMMENT 'ESP32 boto identifikatorius (iš kurio mazgas gautas/atnaujintas)',
+    `is_bot_locked`     TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Ar boto priskyrimas yra užrakintas (neperrašomas per adverto koordinates ar fallback)',
     `advert_format`     VARCHAR(8) NULL DEFAULT NULL COMMENT 'Skelbimo formatas: A (su parašu, >=101B) arba B (be parašo)',
     `advert_timestamp`  BIGINT UNSIGNED NULL DEFAULT NULL COMMENT 'Mazgo paskutinio skelbimo laiko žyma (timestamp)',
     `signature`         VARCHAR(128) NULL DEFAULT NULL COMMENT 'Ed25519 parašas (64 baitai = 128 hex simboliai)',
@@ -148,3 +149,30 @@ CREATE TABLE IF NOT EXISTS `telemetry` (
     INDEX `idx_telemetry_time` (`recorded_at`),
     INDEX `idx_telemetry_raw_packet` (`raw_packet_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Kompaktiška telemetrijos ir kartotuvų būsenos lentelė grafikams ir statistikai';
+
+
+-- -----------------------------------------------------------------------------
+-- 4. LENTELĖ: bots (ESP32 vartai / stotys / botai)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `bots` (
+    `id`                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    `bot_id`            VARCHAR(32) NOT NULL UNIQUE COMMENT 'Unikalus boto identifikatorius (pvz. KLP, VILNIUS)',
+    `name`              VARCHAR(128) NULL DEFAULT NULL COMMENT 'Boto pavadinimas / aprašas (pvz. Klaipėdos ESP32 stotis)',
+    `public_key`        VARCHAR(64) NULL DEFAULT NULL COMMENT 'Boto Ed25519 viešasis raktas (64 hex simboliai)',
+    `enabled`           TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'Ar botas yra aktyvus (1=taip, 0=išjungtas)',
+    `latitude`          DECIMAL(10, 7) NULL DEFAULT NULL COMMENT 'Boto GPS Platuma',
+    `longitude`         DECIMAL(10, 7) NULL DEFAULT NULL COMMENT 'Boto GPS Ilguma',
+    `description`       TEXT NULL DEFAULT NULL COMMENT 'Pastabos arba papildoma informacija apie šį botą',
+    `last_seen_at`      TIMESTAMP NULL DEFAULT NULL COMMENT 'Kada paskutinį kartą matytas paketas iš šio boto',
+    `created_at`        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'Boto sukūrimo data',
+    `updated_at`        TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT 'Paskutinio atnaujinimo data',
+
+    INDEX `idx_bots_bot_id` (`bot_id`),
+    INDEX `idx_bots_public_key` (`public_key`),
+    INDEX `idx_bots_enabled` (`enabled`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='ESP32 botų (vartų) valdymo lentelė';
+
+-- Numatytasis pradinis botas:
+INSERT IGNORE INTO `bots` (`bot_id`, `name`, `enabled`, `created_at`) 
+VALUES ('KLP', 'Klaipėdos ESP32 Vartai', 1, CURRENT_TIMESTAMP);
+

@@ -109,6 +109,7 @@ SQL;
                 "update" BOOLEAN NOT NULL DEFAULT false,
                 is_disabled BOOLEAN NOT NULL DEFAULT false,
                 bot_id VARCHAR(16) NOT NULL DEFAULT 'KLP',
+                is_bot_locked BOOLEAN NOT NULL DEFAULT false,
                 advert_format VARCHAR(8) NULL,
                 advert_timestamp BIGINT NULL,
                 signature VARCHAR(128) NULL,
@@ -157,6 +158,7 @@ SQL;
                 `update`            TINYINT(1) NOT NULL DEFAULT 0,
                 `is_disabled`       TINYINT(1) NOT NULL DEFAULT 0,
                 `bot_id`            VARCHAR(16) NOT NULL DEFAULT 'KLP',
+                `is_bot_locked`     TINYINT(1) NOT NULL DEFAULT 0,
                 `advert_format`     VARCHAR(8) NULL DEFAULT NULL,
                 `advert_timestamp`  BIGINT UNSIGNED NULL DEFAULT NULL,
                 `signature`         VARCHAR(128) NULL DEFAULT NULL,
@@ -205,6 +207,7 @@ SQL;
                 $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS "update" BOOLEAN NOT NULL DEFAULT false');
                 $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS is_disabled BOOLEAN NOT NULL DEFAULT false');
                 $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS bot_id VARCHAR(16) NOT NULL DEFAULT \'KLP\'');
+                $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS is_bot_locked BOOLEAN NOT NULL DEFAULT false');
                 $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS temperature_c NUMERIC(4, 1) NULL');
                 $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS requested_date TIMESTAMP WITHOUT TIME ZONE NULL');
                 $this->pdo->exec('ALTER TABLE nodes ADD COLUMN IF NOT EXISTS telemetry_updated_at TIMESTAMP WITHOUT TIME ZONE NULL');
@@ -235,6 +238,7 @@ SQL;
                 $hasUpdate = false;
                 $hasIsDisabled = false;
                 $hasBotId = false;
+                $hasIsBotLocked = false;
                 $hasReqDate = false;
                 $hasTelemDate = false;
                 $hasTempC = false;
@@ -248,6 +252,7 @@ SQL;
                     if ($fn === 'update' || $fn === 'updete') $hasUpdate = true;
                     if ($fn === 'is_disabled') $hasIsDisabled = true;
                     if ($fn === 'bot_id') $hasBotId = true;
+                    if ($fn === 'is_bot_locked') $hasIsBotLocked = true;
                     if ($fn === 'requested_date') $hasReqDate = true;
                     if ($fn === 'telemetry_updated_at') $hasTelemDate = true;
                     if ($fn === 'temperature_c') $hasTempC = true;
@@ -278,6 +283,9 @@ SQL;
                     try {
                         $this->pdo->exec("ALTER TABLE `nodes` ADD INDEX `idx_nodes_bot_id` (`bot_id`)");
                     } catch (\Throwable $e) {}
+                }
+                if (!$hasIsBotLocked) {
+                    $this->pdo->exec("ALTER TABLE `nodes` ADD COLUMN `is_bot_locked` TINYINT(1) NOT NULL DEFAULT 0 AFTER `bot_id`");
                 }
                 if (!$hasReqDate) {
                     $this->pdo->exec("ALTER TABLE `nodes` ADD COLUMN `requested_date` TIMESTAMP NULL DEFAULT NULL AFTER `last_seen_at`");
@@ -449,6 +457,94 @@ SQL;
                         `setting_value` TEXT NULL,
                         `updated_at`    TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                ");
+            }
+        } catch (\Throwable $e) {}
+
+        // 5. bots lentelė (ESP32 vartai / botai su public_key, enabled ir GPS koordinatėmis)
+        try {
+            if ($driver === 'pgsql') {
+                $botsSql = <<<SQL
+                CREATE TABLE IF NOT EXISTS bots (
+                    id BIGSERIAL PRIMARY KEY,
+                    bot_id VARCHAR(32) NOT NULL UNIQUE,
+                    name VARCHAR(128) NULL,
+                    public_key VARCHAR(64) NULL,
+                    enabled BOOLEAN NOT NULL DEFAULT true,
+                    latitude NUMERIC(10, 7) NULL,
+                    longitude NUMERIC(10, 7) NULL,
+                    description TEXT NULL,
+                    last_seen_at TIMESTAMP WITHOUT TIME ZONE NULL,
+                    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITHOUT TIME ZONE NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_bots_bot_id ON bots (bot_id);
+                CREATE INDEX IF NOT EXISTS idx_bots_public_key ON bots (public_key);
+                CREATE INDEX IF NOT EXISTS idx_bots_enabled ON bots (enabled);
+SQL;
+                $this->pdo->exec($botsSql);
+
+                // Jei anksčiau buvo sukurtas stulpelis 'altitude', saugiai jį pašaliname
+                try {
+                    $this->pdo->exec("ALTER TABLE bots DROP COLUMN IF EXISTS altitude");
+                } catch (\Throwable $e) {}
+
+                // Užpildome esamus bot_id iš 'nodes', jei bots lentelėje jų nėra
+                $this->pdo->exec("
+                    INSERT INTO bots (bot_id, name, enabled, created_at)
+                    SELECT DISTINCT bot_id, 'Botas ' || bot_id, true, CURRENT_TIMESTAMP
+                    FROM nodes
+                    WHERE bot_id IS NOT NULL AND bot_id != ''
+                    ON CONFLICT (bot_id) DO NOTHING
+                ");
+
+                // Užtikriname bent vieną numatytąjį 'KLP' botą
+                $this->pdo->exec("
+                    INSERT INTO bots (bot_id, name, enabled, created_at)
+                    VALUES ('KLP', 'Klaipėdos ESP32 Vartai', true, CURRENT_TIMESTAMP)
+                    ON CONFLICT (bot_id) DO NOTHING
+                ");
+            } else {
+                $botsSql = <<<SQL
+                CREATE TABLE IF NOT EXISTS `bots` (
+                    `id`                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    `bot_id`            VARCHAR(32) NOT NULL UNIQUE,
+                    `name`              VARCHAR(128) NULL DEFAULT NULL,
+                    `public_key`        VARCHAR(64) NULL DEFAULT NULL,
+                    `enabled`           TINYINT(1) NOT NULL DEFAULT 1,
+                    `latitude`          DECIMAL(10, 7) NULL DEFAULT NULL,
+                    `longitude`         DECIMAL(10, 7) NULL DEFAULT NULL,
+                    `description`       TEXT NULL DEFAULT NULL,
+                    `last_seen_at`      TIMESTAMP NULL DEFAULT NULL,
+                    `created_at`        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    `updated_at`        TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX `idx_bots_bot_id` (`bot_id`),
+                    INDEX `idx_bots_public_key` (`public_key`),
+                    INDEX `idx_bots_enabled` (`enabled`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+SQL;
+                $this->pdo->exec($botsSql);
+
+                // Jei anksčiau buvo sukurtas stulpelis 'altitude', saugiai jį pašaliname
+                try {
+                    $colCheck = $this->pdo->query("SHOW COLUMNS FROM `bots` LIKE 'altitude'");
+                    if ($colCheck && $colCheck->fetch()) {
+                        $this->pdo->exec("ALTER TABLE `bots` DROP COLUMN `altitude`");
+                    }
+                } catch (\Throwable $e) {}
+
+                // Užpildome esamus bot_id iš 'nodes', jei jų dar nėra
+                $this->pdo->exec("
+                    INSERT IGNORE INTO `bots` (`bot_id`, `name`, `enabled`, `created_at`)
+                    SELECT DISTINCT `bot_id`, CONCAT('Botas ', `bot_id`), 1, CURRENT_TIMESTAMP
+                    FROM `nodes`
+                    WHERE `bot_id` IS NOT NULL AND `bot_id` != ''
+                ");
+
+                // Užtikriname numatytąjį 'KLP' botą
+                $this->pdo->exec("
+                    INSERT IGNORE INTO `bots` (`bot_id`, `name`, `enabled`, `created_at`)
+                    VALUES ('KLP', 'Klaipėdos ESP32 Vartai', 1, CURRENT_TIMESTAMP)
                 ");
             }
         } catch (\Throwable $e) {}

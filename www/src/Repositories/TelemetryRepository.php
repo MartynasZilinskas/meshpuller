@@ -440,8 +440,14 @@ SQL;
                   AND t.type IN ('TELEMETRY', 'STATUS')
                 ORDER BY t.recorded_at DESC, t.id DESC 
                 LIMIT 1
-            ) AS last_telemetry_at
+            ) AS last_telemetry_at,
+            b.name AS bot_name,
+            b.enabled AS bot_enabled,
+            b.public_key AS bot_public_key,
+            b.latitude AS bot_latitude,
+            b.longitude AS bot_longitude
         FROM nodes n
+        LEFT JOIN bots b ON UPPER(n.bot_id) = UPPER(b.bot_id)
         {$whereClause}
         ORDER BY 
             CASE WHEN n.telemetry_updated_at IS NOT NULL THEN 0 ELSE 1 END,
@@ -473,6 +479,11 @@ SQL;
                 'name'                 => !empty($row['node_name']) ? (string)$row['node_name'] : $nodeId,
                 'node_id'              => $nodeId,
                 'bot_id'               => !empty($row['bot_id']) ? (string)$row['bot_id'] : 'KLP',
+                'bot_name'             => $row['bot_name'] ?? null,
+                'bot_enabled'          => isset($row['bot_enabled']) ? (bool)$row['bot_enabled'] : true,
+                'bot_public_key'       => $row['bot_public_key'] ?? null,
+                'bot_latitude'         => isset($row['bot_latitude']) && $row['bot_latitude'] !== null ? (float)$row['bot_latitude'] : null,
+                'bot_longitude'        => isset($row['bot_longitude']) && $row['bot_longitude'] !== null ? (float)$row['bot_longitude'] : null,
                 'is_repeater'          => (bool)$row['is_repeater'],
                 'is_disabled'          => (bool)($row['is_disabled'] ?? false),
                 'latitude'             => $lat,
