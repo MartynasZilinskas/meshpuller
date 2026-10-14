@@ -1,6 +1,10 @@
 <IfModule mod_rewrite.c>
     RewriteEngine On
+    RewriteBase /node/
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteCond %{REQUEST_FILENAME} !-d
-    RewriteRule ^(.*)$ index.php?subpath=$1 [L,QSA]
+    RewriteRule ^(.*)$ /node/index.php?subpath=$1 [L,QSA]
 </IfModule>
+
+FallbackResource /node/index.php
+ErrorDocument 404 /node/index.php

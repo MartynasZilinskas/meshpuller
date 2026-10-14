@@ -502,6 +502,7 @@ if ($isTelemetryEndpoint) {
 // Kešuojamas pagal administravimo pulto 'api_cache_ttl_mins' nustatymą (minutėmis).
 // -----------------------------------------------------------------------------
 if ($isNodeListEndpoint) {
+    http_response_code(200);
     if ($method !== 'GET') {
         http_response_code(405);
         echo json_encode([
@@ -605,6 +606,7 @@ if ($isNodeListEndpoint) {
 // Kešuojamas pagal tą patį TTL nustatymą ('api_cache_ttl_mins', minutėmis).
 // -----------------------------------------------------------------------------
 if ($isNodeDetailEndpoint) {
+    http_response_code(200);
     if ($method !== 'GET') {
         http_response_code(405);
         echo json_encode([
