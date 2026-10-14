@@ -6,8 +6,11 @@ DirectoryIndex index.html index.php
     # Peradresuoti pasenusį /api/api/* į /api/* (301 Permanent Redirect)
     RewriteRule ^api/api/(.*)$ /api/$1 [R=301,L,QSA]
 
-    # Nukreipti node ir api/node visus kelius į src/app.php
-    RewriteRule ^(api/)?node(/.*)?$ src/app.php [L,QSA]
+    # Nukreipti /api/node/{key} ir /node/{key} į atitinkamus index.php failus
+    RewriteRule ^api/node/(.+)$ /api/node/index.php?subpath=$1 [L,QSA]
+    RewriteRule ^node/(.+)$ /node/index.php?subpath=$1 [L,QSA]
+    RewriteRule ^api/node/?$ /api/node/index.php [L,QSA]
+    RewriteRule ^node/?$ /node/index.php [L,QSA]
 
     # Jei failas ar katalogas egzistuoja fiziškai - atidaryti jį
     RewriteCond %{REQUEST_FILENAME} -f [OR]
