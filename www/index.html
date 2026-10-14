@@ -19,6 +19,23 @@
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     
+    <script>
+        // Ankstyvosios funkcijos, apsaugančios nuo ReferenceError prieš pilną JS užsikrovimą
+        window.fetchNodesData = function(a) { if (window._fetchNodesData) return window._fetchNodesData(a); };
+        window.onTelemetryToggleChange = function(c) { if (window._onTelemetryToggleChange) return window._onTelemetryToggleChange(c); };
+        window.switchMobileView = function(v) { if (window._switchMobileView) return window._switchMobileView(v); };
+        window.setColorFilter = function(c) { if (window._setColorFilter) return window._setColorFilter(c); };
+        window.onVoltSelectChange = function(v) { if (window._onVoltSelectChange) return window._onVoltSelectChange(v); };
+        window.onStaleFilterChange = function(v) { if (window._onStaleFilterChange) return window._onStaleFilterChange(v); };
+        window.onVoltCustomInputChange = function(v) { if (window._onVoltCustomInputChange) return window._onVoltCustomInputChange(v); };
+        window.resetAllFilters = function() { if (window._resetAllFilters) return window._resetAllFilters(); };
+        window.onSearchInput = function() { if (window._onSearchInput) return window._onSearchInput(); };
+        window.toggleMobileView = function() { if (window._toggleMobileView) return window._toggleMobileView(); };
+        window.closeMobileSheet = function() { if (window._closeMobileSheet) return window._closeMobileSheet(); };
+        window.sheetActionFocus = function() { if (window._sheetActionFocus) return window._sheetActionFocus(); };
+        window.sheetActionNavigate = function() { if (window._sheetActionNavigate) return window._sheetActionNavigate(); };
+    </script>
+    
     <style>
         :root {
             --bg-base: #1a1a1a;
@@ -827,7 +844,8 @@
             flex-shrink: 0;
         }
 
-        .filter-select-volt {
+        .filter-select-volt,
+        .filter-select-stale {
             background: #252525;
             border: 1px solid var(--border-color);
             color: var(--text-main);
@@ -841,7 +859,8 @@
             transition: border-color 0.15s ease;
         }
 
-        .filter-select-volt:focus, .filter-select-volt.active-filter {
+        .filter-select-volt:focus, .filter-select-volt.active-filter,
+        .filter-select-stale:focus, .filter-select-stale.active-filter {
             border-color: var(--accent-cyan);
             color: var(--accent-cyan);
         }
@@ -1604,6 +1623,16 @@
             </select>
             <input type="number" id="mapVoltCustomInput" class="filter-input-volt-custom" step="0.05" min="0" max="15" placeholder="Iki V" style="display: none;" oninput="onVoltCustomInputChange(this.value)">
 
+            <div class="filter-divider"></div>
+
+            <span class="filter-section-title">Senumas:</span>
+            <select id="mapStaleFilterSelect" class="filter-select-stale" onchange="onStaleFilterChange(this.value)" title="Slėpti senai neatnaujintus mazgus, gavusius telemetriją anksčiau">
+                <option value="">Visi įrašai</option>
+                <option value="7">Slėpti senesnius nei 7 d.</option>
+                <option value="14">Slėpti senesnius nei 14 d.</option>
+                <option value="30">Slėpti senesnius nei 30 d.</option>
+            </select>
+
             <button type="button" class="filter-clear-btn" id="mapClearFiltersBtn" onclick="resetAllFilters()" title="Atstatyti visus filtrus" style="display: none;">
                 ✕ Išvalyti
             </button>
@@ -2159,10 +2188,21 @@
                 if (isChecked) wrap.classList.add('active');
                 else wrap.classList.remove('active');
             }
+
+            const savedStale = localStorage.getItem('meshcore_hide_stale_days');
+            if (savedStale && ['7', '14', '30'].includes(savedStale)) {
+                activeStaleDays = parseInt(savedStale, 10);
+                const staleSel = document.getElementById('mapStaleFilterSelect');
+                if (staleSel) {
+                    staleSel.value = savedStale;
+                    staleSel.classList.add('active-filter');
+                }
+            }
         }
 
         let activeColorFilter = 'all'; // 'all', 'blue', 'orange', 'red'
         let activeMaxVolt = null;       // null arba skaičius pvz. 3.80
+        let activeStaleDays = null;     // null arba 7, 14, 30
         let isFirstMapLoad = true;
 
         // Nustato mazgo telemetrijos senumo spalvą ('blue', 'orange', 'red')
@@ -2207,6 +2247,23 @@
             applyActiveFilters(false);
         }
 
+        // Senumo filtro nustatymas (slėpti senesnius nei 7, 14, 30 d., gavusius telemetriją anksčiau)
+        function onStaleFilterChange(val) {
+            const days = (val !== '' && val !== null && !isNaN(parseInt(val, 10))) ? parseInt(val, 10) : null;
+            activeStaleDays = days;
+            if (activeStaleDays !== null) {
+                localStorage.setItem('meshcore_hide_stale_days', String(activeStaleDays));
+            } else {
+                localStorage.removeItem('meshcore_hide_stale_days');
+            }
+            const sel = document.getElementById('mapStaleFilterSelect');
+            if (sel) {
+                sel.value = val || '';
+                sel.classList.toggle('active-filter', activeStaleDays !== null);
+            }
+            applyActiveFilters(false);
+        }
+
         // Srovės / įtampos rankinės įvesties apdorojimas
         function onVoltCustomInputChange(val) {
             const num = parseFloat(val);
@@ -2239,12 +2296,20 @@
         function resetAllFilters() {
             activeColorFilter = 'all';
             activeMaxVolt = null;
+            activeStaleDays = null;
+            localStorage.removeItem('meshcore_hide_stale_days');
 
             const searchInput = document.getElementById('searchInput');
             if (searchInput) searchInput.value = '';
 
             const customMap = document.getElementById('mapVoltCustomInput');
             if (customMap) { customMap.value = ''; customMap.style.display = 'none'; }
+
+            const staleSel = document.getElementById('mapStaleFilterSelect');
+            if (staleSel) {
+                staleSel.value = '';
+                staleSel.classList.remove('active-filter');
+            }
 
             syncVoltSelectsUI('');
             updateFilterButtonsUI();
@@ -2267,7 +2332,25 @@
                     return false;
                 }
 
-                // 3. Spalvos filtras (senumas: melyna, orandzini, raudona)
+                // 3. Senumo filtras: slėpti senai neatnaujintus mazgus (> 7, 14, 30 d.), kurie kadaise buvo gavę telemetriją
+                if (activeStaleDays !== null && hasNodeTelemetry(node)) {
+                    const telemTime = node.telemetry_updated_at || (node.telemetry ? (node.telemetry.telemetry_updated_at || node.telemetry.last_telemetry_at) : null) || '';
+                    if (telemTime) {
+                        const parsedTelemDate = parseToLithuanianDate(telemTime);
+                        if (parsedTelemDate && !isNaN(parsedTelemDate.getTime())) {
+                            const ageDays = (Date.now() - parsedTelemDate.getTime()) / (1000 * 60 * 60 * 24);
+                            if (ageDays > activeStaleDays) {
+                                return false;
+                            }
+                        } else {
+                            return false;
+                        }
+                    } else {
+                        return false;
+                    }
+                }
+
+                // 4. Spalvos filtras (senumas: melyna, orandzini, raudona)
                 if (activeColorFilter && activeColorFilter !== 'all') {
                     const nodeColor = getNodeStatusColor(node);
                     if (nodeColor !== activeColorFilter) {
@@ -2275,7 +2358,7 @@
                     }
                 }
 
-                // 4. Srovės / įtampos (V) filtras: "iki kokios srovės kad rodyti" (<= activeMaxVolt)
+                // 5. Srovės / įtampos (V) filtras: "iki kokios srovės kad rodyti" (<= activeMaxVolt)
                 if (activeMaxVolt !== null && activeMaxVolt !== undefined) {
                     const battV = node.battery_v !== null ? parseFloat(node.battery_v) : (node.telemetry && node.telemetry.battery_v !== null ? parseFloat(node.telemetry.battery_v) : null);
                     if (battV === null || battV > activeMaxVolt) {
@@ -2283,7 +2366,7 @@
                     }
                 }
 
-                // 5. Tekstinė paieška
+                // 6. Tekstinė paieška
                 if (searchQuery) {
                     const name = (node.name || '').toLowerCase();
                     const id = (node.node_id || '').toLowerCase();
@@ -2302,7 +2385,7 @@
             renderNodes(repeaters, fitBounds);
 
             // Valdymo elementų būsenos indikatorius
-            const isAnyFilterActive = (activeColorFilter !== 'all' || activeMaxVolt !== null || searchQuery !== '');
+            const isAnyFilterActive = (activeColorFilter !== 'all' || activeMaxVolt !== null || activeStaleDays !== null || searchQuery !== '');
             const clearBtn = document.getElementById('mapClearFiltersBtn');
             if (clearBtn) clearBtn.style.display = isAnyFilterActive ? 'inline-flex' : 'none';
 
@@ -2317,6 +2400,9 @@
 
             const mapVoltSel = document.getElementById('mapVoltSelect');
             if (mapVoltSel) mapVoltSel.classList.toggle('active-filter', activeMaxVolt !== null);
+
+            const mapStaleSel = document.getElementById('mapStaleFilterSelect');
+            if (mapStaleSel) mapStaleSel.classList.toggle('active-filter', activeStaleDays !== null);
         }
 
         function onTelemetryToggleChange(checked) {
@@ -2805,9 +2891,38 @@
             if (map) map.invalidateSize();
         });
 
+        // Prijungiame globalias funkcijas prie window ir suderiname su ankstyvaisiais stubs
+        window.fetchNodesData = window._fetchNodesData = fetchNodesData;
+        window.onTelemetryToggleChange = window._onTelemetryToggleChange = onTelemetryToggleChange;
+        window.switchMobileView = window._switchMobileView = switchMobileView;
+        window.setColorFilter = window._setColorFilter = setColorFilter;
+        window.onVoltSelectChange = window._onVoltSelectChange = onVoltSelectChange;
+        window.onStaleFilterChange = window._onStaleFilterChange = onStaleFilterChange;
+        window.onVoltCustomInputChange = window._onVoltCustomInputChange = onVoltCustomInputChange;
+        window.resetAllFilters = window._resetAllFilters = resetAllFilters;
+        window.onSearchInput = window._onSearchInput = onSearchInput;
+        window.toggleMobileView = window._toggleMobileView = toggleMobileView;
+        window.closeMobileSheet = window._closeMobileSheet = closeMobileSheet;
+        window.openMobileSheet = window._openMobileSheet = openMobileSheet;
+        window.sheetActionFocus = window._sheetActionFocus = sheetActionFocus;
+        window.sheetActionNavigate = window._sheetActionNavigate = sheetActionNavigate;
+        window.focusNode = focusNode;
+
         // Paleidžiame žemėlapį užsikrovus DOM
         document.addEventListener('DOMContentLoaded', () => {
             initMap();
+
+            const refreshBtn = document.getElementById('refreshBtn');
+            if (refreshBtn) refreshBtn.onclick = () => fetchNodesData(true);
+
+            const hideTelemInput = document.getElementById('hideNoTelemetryInput');
+            if (hideTelemInput) hideTelemInput.onchange = (e) => onTelemetryToggleChange(e.target.checked);
+
+            const staleSel = document.getElementById('mapStaleFilterSelect');
+            if (staleSel) staleSel.onchange = (e) => onStaleFilterChange(e.target.value);
+
+            const voltSel = document.getElementById('mapVoltSelect');
+            if (voltSel) voltSel.onchange = (e) => onVoltSelectChange(e.target.value);
         });
     </script>
 </body>

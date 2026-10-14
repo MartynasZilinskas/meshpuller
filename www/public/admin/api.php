@@ -124,12 +124,18 @@ if ($action === 'stats') {
         $nodeStats = $repository->getNodeStats();
         $rawStats  = $repository->getStats();
         $telStats  = $repository->getTelemetryStats();
+        $botsList  = $repository->getAllBots();
 
         echo json_encode([
             'success'   => true,
             'nodes'     => $nodeStats,
             'raw'       => $rawStats,
-            'telemetry' => $telStats
+            'telemetry' => $telStats,
+            'bots'      => [
+                'total_bots'    => count($botsList),
+                'active_bots'   => count(array_filter($botsList, fn($b) => !empty($b['enabled']))),
+                'disabled_bots' => count(array_filter($botsList, fn($b) => empty($b['enabled']))),
+            ]
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
     } catch (\Throwable $e) {
         http_response_code(500);
@@ -242,6 +248,7 @@ if ($action === 'nodes') {
         'update'      => isset($_GET['update']) && $_GET['update'] !== '' ? $_GET['update'] : null,
         'status'      => $_GET['status'] ?? null,
         'is_disabled' => isset($_GET['is_disabled']) && $_GET['is_disabled'] !== '' ? $_GET['is_disabled'] : null,
+        'bot_id'      => $_GET['bot_id'] ?? null,
     ];
     $limit   = max(1, min(500, (int)($_GET['limit'] ?? 50)));
     $offset  = max(0, (int)($_GET['offset'] ?? 0));
@@ -304,6 +311,12 @@ if ($action === 'update_node') {
     if (array_key_exists('last_path', $data)) {
         $fieldsToUpdate['last_path'] = $data['last_path'];
     }
+    if (array_key_exists('bot_id', $data)) {
+        $fieldsToUpdate['bot_id'] = $data['bot_id'];
+    }
+    if (array_key_exists('is_bot_locked', $data)) {
+        $fieldsToUpdate['is_bot_locked'] = !empty($data['is_bot_locked']) ? 1 : 0;
+    }
 
     try {
         $updated = $repository->updateNodeDetails($publicKeyOrNodeId, $fieldsToUpdate);
@@ -316,6 +329,194 @@ if ($action === 'update_node') {
             echo json_encode([
                 'success' => false,
                 'error'   => 'Mazgas nerastas arba duomenys nepasikeitė'
+            ]);
+        }
+    } catch (\Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// -----------------------------------------------------------------------------
+// 🤖 BOTŲ VALDYMAS (ESP32 Gateway Botai)
+// -----------------------------------------------------------------------------
+
+// Botų sąrašas su priskirtų mazgų statistika
+if ($action === 'bots') {
+    try {
+        $bots = $repository->getBotsWithNodeCounts();
+        echo json_encode([
+            'success' => true,
+            'count'   => count($bots),
+            'bots'    => $bots
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    } catch (\Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// Boto išsaugojimas (sukūrimas arba redagavimas)
+if ($action === 'save_bot') {
+    if ($method !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['success' => false, 'error' => 'Metodas nepalaikomas']);
+        exit;
+    }
+
+    $rawInput = file_get_contents('php://input');
+    $data = json_decode($rawInput, true) ?: $_POST;
+
+    $botId = strtoupper(substr(trim((string)($data['bot_id'] ?? '')), 0, 32));
+    if (empty($botId)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Privaloma nurodyti Boto ID (pvz. KLP, VILNIUS)']);
+        exit;
+    }
+
+    $isNew = !empty($data['is_new']) || empty($data['original_bot_id']);
+    $originalBotId = !empty($data['original_bot_id']) 
+        ? strtoupper(substr(trim((string)$data['original_bot_id']), 0, 32)) 
+        : $botId;
+
+    try {
+        $existing = $repository->getBotById($originalBotId);
+
+        if ($isNew && $existing) {
+            http_response_code(409);
+            echo json_encode(['success' => false, 'error' => "Botas su identifikatoriumi '{$botId}' jau egzistuoja!"]);
+            exit;
+        }
+
+        if (!$isNew && $existing) {
+            // Atnaujinimas (Update)
+            $updateData = [
+                'name'        => $data['name'] ?? null,
+                'public_key'  => $data['public_key'] ?? null,
+                'enabled'     => isset($data['enabled']) ? (bool)$data['enabled'] : true,
+                'latitude'    => $data['latitude'] ?? null,
+                'longitude'   => $data['longitude'] ?? null,
+                'description' => $data['description'] ?? null,
+            ];
+            if ($botId !== $originalBotId) {
+                $updateData['new_bot_id'] = $botId;
+            }
+
+            $ok = $repository->updateBot($originalBotId, $updateData);
+            if ($ok) {
+                echo json_encode([
+                    'success' => true,
+                    'message' => "Boto '{$botId}' duomenys sėkmingai atnaujinti!"
+                ]);
+            } else {
+                echo json_encode([
+                    'success' => false,
+                    'error'   => 'Nepavyko atnaujinti boto duomenų arba duomenys nepasikeitė'
+                ]);
+            }
+        } else {
+            // Sukūrimas (Create)
+            $createData = [
+                'bot_id'      => $botId,
+                'name'        => !empty($data['name']) ? $data['name'] : "Botas {$botId}",
+                'public_key'  => $data['public_key'] ?? null,
+                'enabled'     => isset($data['enabled']) ? (bool)$data['enabled'] : true,
+                'latitude'    => $data['latitude'] ?? null,
+                'longitude'   => $data['longitude'] ?? null,
+                'description' => $data['description'] ?? null,
+            ];
+
+            $ok = $repository->createBot($createData);
+            if ($ok) {
+                echo json_encode([
+                    'success' => true,
+                    'message' => "Naujas botas '{$botId}' sėkmingai sukurtas!"
+                ]);
+            } else {
+                echo json_encode([
+                    'success' => false,
+                    'error'   => 'Nepavyko sukurti naujo boto'
+                ]);
+            }
+        }
+    } catch (\Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// Boto įjungimas / išjungimas (Toggle)
+if ($action === 'toggle_bot') {
+    if ($method !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['success' => false, 'error' => 'Metodas nepalaikomas']);
+        exit;
+    }
+
+    $rawInput = file_get_contents('php://input');
+    $data = json_decode($rawInput, true) ?: $_POST;
+    $botId = strtoupper(substr(trim((string)($data['bot_id'] ?? '')), 0, 32));
+
+    if (empty($botId)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Nenurodytas Boto ID']);
+        exit;
+    }
+
+    try {
+        $bot = $repository->getBotById($botId);
+        if (!$bot) {
+            http_response_code(404);
+            echo json_encode(['success' => false, 'error' => "Botas '{$botId}' nerastas"]);
+            exit;
+        }
+
+        $newEnabled = empty($bot['enabled']);
+        $repository->updateBot($botId, ['enabled' => $newEnabled]);
+        echo json_encode([
+            'success' => true,
+            'enabled' => $newEnabled,
+            'message' => "Boto '{$botId}' būsena pakeista į: " . ($newEnabled ? 'Aktyvus' : 'Išjungtas')
+        ]);
+    } catch (\Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// Boto trynimas
+if ($action === 'delete_bot') {
+    if ($method !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['success' => false, 'error' => 'Metodas nepalaikomas']);
+        exit;
+    }
+
+    $rawInput = file_get_contents('php://input');
+    $data = json_decode($rawInput, true) ?: $_POST;
+    $botId = strtoupper(substr(trim((string)($data['bot_id'] ?? '')), 0, 32));
+
+    if (empty($botId)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Nenurodytas Boto ID']);
+        exit;
+    }
+
+    try {
+        $deleted = $repository->deleteBot($botId);
+        if ($deleted) {
+            echo json_encode([
+                'success' => true,
+                'message' => "Botas '{$botId}' sėkmingai pašalintas"
+            ]);
+        } else {
+            echo json_encode([
+                'success' => false,
+                'error'   => "Nepavyko pašalinti boto '{$botId}'"
             ]);
         }
     } catch (\Throwable $e) {

@@ -960,7 +960,7 @@ $isLoggedIn = isAdminLoggedIn();
                         <thead>
                             <tr>
                                 <th class="sortable" onclick="handleSortTable('telemetry', 'id')" data-sort="id">ID <span class="sort-icon"></span></th>
-                                <th class="sortable" onclick="handleSortTable('telemetry', 'node_id')" data-sort="node_id">Mazgas <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('telemetry', 'node_id')" data-sort="node_id">Mazgas / Pavadinimas <span class="sort-icon"></span></th>
                                 <th class="sortable" onclick="handleSortTable('telemetry', 'type')" data-sort="type">Tipas <span class="sort-icon"></span></th>
                                 <th class="sortable" onclick="handleSortTable('telemetry', 'battery_v')" data-sort="battery_v">Baterija <span class="sort-icon"></span></th>
                                 <th class="sortable" onclick="handleSortTable('telemetry', 'temperature_c')" data-sort="temperature_c">Temperatūra <span class="sort-icon"></span></th>
@@ -2867,12 +2867,20 @@ $isLoggedIn = isAdminLoggedIn();
                 const batt = r.battery_v !== null ? `${parseFloat(r.battery_v).toFixed(2)} V` : '-';
                 const temp = r.temperature_c !== null ? `${parseFloat(r.temperature_c).toFixed(1)} °C` : '-';
                 const uptime = r.uptime_seconds ? formatUptime(r.uptime_seconds) : '-';
+                const displayName = r.node_name || r.node_id;
 
                 return `
                     <tr>
                         <td style="font-family: var(--font-mono); font-size: 0.72rem;">#${r.id}</td>
                         <td>
-                            <b style="color: #ffffff;">${escapeHtml(r.node_id)}</b>
+                            <div style="font-weight: 600; color: #ffffff;" title="${escapeHtml(displayName)}">
+                                ${escapeHtml(displayName)}
+                            </div>
+                            ${r.node_name && r.node_id && r.node_name !== r.node_id ? `
+                                <div style="font-size: 0.70rem; color: #a78bfa; font-family: var(--font-mono);">
+                                    ${escapeHtml(r.node_id)}
+                                </div>
+                            ` : ''}
                         </td>
                         <td><span class="badge badge-gray">${escapeHtml(r.type)}</span></td>
                         <td><span style="color:#2ed573; font-family:var(--font-mono); font-weight:600;">${batt}</span></td>
@@ -2978,16 +2986,33 @@ $isLoggedIn = isAdminLoggedIn();
                     statusBadge = '<span class="badge badge-amber">Eilėje</span>';
                 }
 
-                const sender = p.sender_name || (p.sender_public_key ? p.sender_public_key.substring(0, 6) : '-');
-                const target = p.target_name || (p.target_public_key ? p.target_public_key.substring(0, 6) : '-');
+                const senderName = p.sender_node_name || p.sender_name || (p.sender_public_key ? p.sender_public_key.substring(0, 8) : '-');
+                const senderSub = (p.sender_public_key && (p.sender_node_name || p.sender_name))
+                    ? p.sender_public_key.substring(0, 8)
+                    : (p.sender_name && p.sender_node_name && p.sender_name !== p.sender_node_name ? p.sender_name : '');
+
+                const targetName = p.target_node_name || p.target_name || (p.target_public_key ? p.target_public_key.substring(0, 8) : '-');
+                const targetSub = (p.target_public_key && (p.target_node_name || p.target_name))
+                    ? p.target_public_key.substring(0, 8)
+                    : (p.target_name && p.target_node_name && p.target_name !== p.target_node_name ? p.target_name : '');
 
                 return `
                     <tr>
                         <td style="font-family: var(--font-mono); font-size: 0.72rem;">#${p.id}</td>
                         <td><span class="badge badge-purple" style="font-size:0.7rem;">${escapeHtml(p.bot_id || 'KLP')}</span></td>
                         <td>${dirBadge}</td>
-                        <td><b>${escapeHtml(sender)}</b></td>
-                        <td><b>${escapeHtml(target)}</b></td>
+                        <td>
+                            <div style="font-weight: 600; color: #ffffff;" title="${escapeHtml(senderName)}">
+                                ${escapeHtml(senderName)}
+                            </div>
+                            ${senderSub ? `<div style="font-size: 0.70rem; color: #a78bfa; font-family: var(--font-mono);">${escapeHtml(senderSub)}</div>` : ''}
+                        </td>
+                        <td>
+                            <div style="font-weight: 600; color: #ffffff;" title="${escapeHtml(targetName)}">
+                                ${escapeHtml(targetName)}
+                            </div>
+                            ${targetSub ? `<div style="font-size: 0.70rem; color: #a78bfa; font-family: var(--font-mono);">${escapeHtml(targetSub)}</div>` : ''}
+                        </td>
                         <td style="font-family: var(--font-mono); font-size: 0.72rem;">
                             ${p.length ? p.length + ' B' : '-'} 
                             ${p.rssi ? `| ${p.rssi} dBm` : ''}
@@ -3025,9 +3050,14 @@ $isLoggedIn = isAdminLoggedIn();
                     activePacketData = p;
                     document.getElementById('packetModalTitle').innerText = `RAW Paketas #${p.id} (${p.direction || 'RX'})`;
                     
+                    const senderDisp = p.sender_node_name || p.sender_name || (p.sender_public_key ? p.sender_public_key.substring(0, 8) : null);
+                    const targetDisp = p.target_node_name || p.target_name || (p.target_public_key ? p.target_public_key.substring(0, 8) : null);
+
                     const metaRow = document.getElementById('packetMetaRow');
                     metaRow.innerHTML = `
                         <span class="badge badge-purple">🤖 Botas: ${escapeHtml(p.bot_id || 'KLP')}</span>
+                        ${senderDisp ? `<span class="badge badge-gray" title="Siuntėjas">📤 ${escapeHtml(senderDisp)}</span>` : ''}
+                        ${targetDisp ? `<span class="badge badge-gray" title="Taikinys">📥 ${escapeHtml(targetDisp)}</span>` : ''}
                         <span class="badge badge-blue">Ilgis: ${p.length || 0} B</span>
                         <span class="badge badge-gray">RSSI: ${p.rssi !== null && p.rssi !== undefined ? p.rssi : '-'} dBm</span>
                         <span class="badge badge-gray">SNR: ${p.snr !== null && p.snr !== undefined ? p.snr : '-'} dB</span>
@@ -3061,6 +3091,9 @@ $isLoggedIn = isAdminLoggedIn();
         function generateDebugBundle(p) {
             if (!p) return '';
 
+            const senderDisp = p.sender_node_name || p.sender_name || 'N/A';
+            const targetDisp = p.target_node_name || p.target_name || 'N/A';
+
             const lines = [];
             lines.push(`### 🐞 MeshCore RAW Paketo Derinimo Duomenys (Paketas #${p.id})`);
             lines.push('');
@@ -3070,8 +3103,8 @@ $isLoggedIn = isAdminLoggedIn();
             lines.push(`- **Ilgis:** ${p.length ? p.length + ' B' : 'N/A'}`);
             lines.push(`- **RSSI / SNR:** ${p.rssi !== null && p.rssi !== undefined ? p.rssi + ' dBm' : 'N/A'} / ${p.snr !== null && p.snr !== undefined ? p.snr + ' dB' : 'N/A'}`);
             lines.push(`- **Šifruotas (is_encrypted):** ${p.is_encrypted ? 'TAIP (1)' : 'NE (0)'}`);
-            lines.push(`- **Siuntėjas:** ${p.sender_name || 'N/A'} (Raktas: \`${p.sender_public_key || 'N/A'}\`)`);
-            lines.push(`- **Taikinys:** ${p.target_name || 'N/A'} (Raktas: \`${p.target_public_key || 'N/A'}\`)`);
+            lines.push(`- **Siuntėjas:** ${senderDisp}${p.sender_node_name && p.sender_name && p.sender_node_name !== p.sender_name ? ` (${p.sender_name})` : ''} (Raktas: \`${p.sender_public_key || 'N/A'}\`)`);
+            lines.push(`- **Taikinys:** ${targetDisp}${p.target_node_name && p.target_name && p.target_node_name !== p.target_name ? ` (${p.target_name})` : ''} (Raktas: \`${p.target_public_key || 'N/A'}\`)`);
             if (p.my_public_key) {
                 lines.push(`- **Mūsų mazgo raktas (my_public_key):** \`${p.my_public_key}\``);
             }

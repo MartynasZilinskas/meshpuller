@@ -538,58 +538,67 @@ SQL;
 
         if (!empty($filters['node_id'])) {
             $cleanNode = trim(strtolower($filters['node_id']));
-            $where[] = "(LOWER(node_id) = :node_id1 OR LOWER(public_key) = :node_id2)";
+            $where[] = "(LOWER(t.node_id) = :node_id1 OR LOWER(t.public_key) = :node_id2 OR EXISTS (SELECT 1 FROM nodes n WHERE ((n.public_key = t.public_key AND n.public_key != '') OR (n.node_id = t.node_id AND n.node_id != '')) AND LOWER(n.node_name) LIKE :node_name))";
             $params[':node_id1'] = $cleanNode;
             $params[':node_id2'] = $cleanNode;
+            $params[':node_name'] = '%' . $cleanNode . '%';
         }
 
         if (!empty($filters['type'])) {
             $cleanType = strtoupper(trim($filters['type']));
             if ($cleanType === 'STATUS' || $cleanType === 'TELEMETRY') {
-                $where[] = "type = :type";
+                $where[] = "t.type = :type";
                 $params[':type'] = $cleanType;
             } else {
-                $where[] = "type IN ('TELEMETRY', 'STATUS')";
+                $where[] = "t.type IN ('TELEMETRY', 'STATUS')";
             }
         } else {
-            $where[] = "type IN ('TELEMETRY', 'STATUS')";
+            $where[] = "t.type IN ('TELEMETRY', 'STATUS')";
         }
 
         if (!empty($filters['from'])) {
-            $where[] = "recorded_at >= :from_date";
+            $where[] = "t.recorded_at >= :from_date";
             $params[':from_date'] = $filters['from'];
         }
 
         if (!empty($filters['to'])) {
-            $where[] = "recorded_at <= :to_date";
+            $where[] = "t.recorded_at <= :to_date";
             $params[':to_date'] = $filters['to'];
         }
 
         $whereSql = !empty($where) ? ('WHERE ' . implode(' AND ', $where)) : '';
 
-        $countSql = "SELECT COUNT(*) FROM telemetry {$whereSql}";
+        $countSql = "SELECT COUNT(*) FROM telemetry t {$whereSql}";
         $countStmt = $this->pdo->prepare($countSql);
         $countStmt->execute($params);
         $totalCount = (int)$countStmt->fetchColumn();
 
         $allowedCols = [
-            'id'             => 'id',
-            'node_id'        => 'node_id',
-            'type'           => 'type',
-            'battery_v'      => 'battery_v',
-            'temperature_c'  => 'temperature_c',
-            'rssi'           => 'rssi',
-            'snr'            => 'snr',
-            'uptime'         => 'uptime_seconds',
-            'uptime_seconds' => 'uptime_seconds',
-            'packets'        => 'packets_recv',
-            'packets_recv'   => 'packets_recv',
-            'recorded_at'    => 'recorded_at',
+            'id'             => 't.id',
+            'node_id'        => 't.node_id',
+            'type'           => 't.type',
+            'battery_v'      => 't.battery_v',
+            'temperature_c'  => 't.temperature_c',
+            'rssi'           => 't.rssi',
+            'snr'            => 't.snr',
+            'uptime'         => 't.uptime_seconds',
+            'uptime_seconds' => 't.uptime_seconds',
+            'packets'        => 't.packets_recv',
+            'packets_recv'   => 't.packets_recv',
+            'recorded_at'    => 't.recorded_at',
         ];
-        $orderCol = $allowedCols[$sortBy ?? ''] ?? 'recorded_at';
+        $orderCol = $allowedCols[$sortBy ?? ''] ?? 't.recorded_at';
         $orderDir = (strtoupper((string)$sortDir) === 'ASC') ? 'ASC' : 'DESC';
 
-        $sql = "SELECT * FROM telemetry {$whereSql} ORDER BY {$orderCol} {$orderDir}, id DESC LIMIT " . (int)$limit . " OFFSET " . (int)$offset;
+        $sql = "SELECT t.*, 
+                       COALESCE(
+                           (SELECT n1.node_name FROM nodes n1 WHERE n1.public_key = t.public_key AND n1.public_key != '' LIMIT 1),
+                           (SELECT n2.node_name FROM nodes n2 WHERE n2.node_id = t.node_id AND n2.node_id != '' LIMIT 1)
+                       ) AS node_name
+                FROM telemetry t 
+                {$whereSql} 
+                ORDER BY {$orderCol} {$orderDir}, t.id DESC 
+                LIMIT " . (int)$limit . " OFFSET " . (int)$offset;
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
         $records = $stmt->fetchAll() ?: [];

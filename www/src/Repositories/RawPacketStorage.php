@@ -471,65 +471,91 @@ SQL;
 
         if (!empty($filters['node'])) {
             $n = '%' . trim(strtolower($filters['node'])) . '%';
-            $where[] = "(LOWER(target_name) LIKE :node_search1 OR LOWER(target_public_key) LIKE :node_search2 OR LOWER(sender_name) LIKE :node_search3 OR LOWER(sender_public_key) LIKE :node_search4)";
+            $where[] = "(LOWER(rp.target_name) LIKE :node_search1 
+                         OR LOWER(rp.target_public_key) LIKE :node_search2 
+                         OR LOWER(rp.sender_name) LIKE :node_search3 
+                         OR LOWER(rp.sender_public_key) LIKE :node_search4
+                         OR EXISTS (SELECT 1 FROM nodes n WHERE ((n.public_key = rp.sender_public_key AND n.public_key != '') OR (n.public_key = rp.target_public_key AND n.public_key != '') OR (n.node_id = rp.sender_name AND n.node_id != '') OR (n.node_id = rp.target_name AND n.node_id != '')) AND LOWER(n.node_name) LIKE :node_search5))";
             $params[':node_search1'] = $n;
             $params[':node_search2'] = $n;
             $params[':node_search3'] = $n;
             $params[':node_search4'] = $n;
+            $params[':node_search5'] = $n;
         }
 
         if (!empty($filters['direction'])) {
-            $where[] = "direction = :direction";
+            $where[] = "rp.direction = :direction";
             $params[':direction'] = strtoupper(trim($filters['direction']));
         }
 
         if (isset($filters['status']) && $filters['status'] !== '') {
             if ($filters['status'] === 'errors') {
-                $where[] = "(error_message IS NOT NULL AND error_message != '')";
+                $where[] = "(rp.error_message IS NOT NULL AND rp.error_message != '')";
             } elseif ($filters['status'] === 'pending') {
-                $where[] = "(processed = 0 OR processed = false)";
+                $where[] = "(rp.processed = 0 OR rp.processed = false)";
             } elseif ($filters['status'] === 'processed') {
-                $where[] = "(processed = 1 OR processed = true)";
+                $where[] = "(rp.processed = 1 OR rp.processed = true)";
             }
         }
 
         if (!empty($filters['search'])) {
             $s = '%' . trim(strtolower($filters['search'])) . '%';
-            $where[] = "(LOWER(raw_hex) LIKE :text_search1 OR LOWER(target_name) LIKE :text_search2 OR LOWER(sender_name) LIKE :text_search3 OR LOWER(error_message) LIKE :text_search4)";
+            $where[] = "(LOWER(rp.raw_hex) LIKE :text_search1 
+                         OR LOWER(rp.target_name) LIKE :text_search2 
+                         OR LOWER(rp.sender_name) LIKE :text_search3 
+                         OR LOWER(rp.error_message) LIKE :text_search4
+                         OR EXISTS (SELECT 1 FROM nodes n WHERE ((n.public_key = rp.sender_public_key AND n.public_key != '') OR (n.public_key = rp.target_public_key AND n.public_key != '') OR (n.node_id = rp.sender_name AND n.node_id != '') OR (n.node_id = rp.target_name AND n.node_id != '')) AND LOWER(n.node_name) LIKE :text_search5))";
             $params[':text_search1'] = $s;
             $params[':text_search2'] = $s;
             $params[':text_search3'] = $s;
             $params[':text_search4'] = $s;
+            $params[':text_search5'] = $s;
         }
 
         $whereSql = !empty($where) ? ('WHERE ' . implode(' AND ', $where)) : '';
 
-        $countSql = "SELECT COUNT(*) FROM raw_packets {$whereSql}";
+        $countSql = "SELECT COUNT(*) FROM {$this->table} rp {$whereSql}";
         $countStmt = $this->pdo->prepare($countSql);
         $countStmt->execute($params);
         $totalCount = (int)$countStmt->fetchColumn();
 
         $allowedCols = [
-            'id'            => 'id',
-            'bot_id'        => 'bot_id',
-            'direction'     => 'direction',
-            'sender'        => 'sender_name',
-            'sender_name'   => 'sender_name',
-            'target'        => 'target_name',
-            'target_name'   => 'target_name',
-            'length'        => 'length',
-            'rssi'          => 'rssi',
-            'snr'           => 'snr',
-            'status'        => 'processed',
-            'processed'     => 'processed',
-            'error'         => 'error_message',
-            'error_message' => 'error_message',
-            'created_at'    => 'id',
+            'id'            => 'rp.id',
+            'bot_id'        => 'rp.bot_id',
+            'direction'     => 'rp.direction',
+            'sender'        => 'rp.sender_name',
+            'sender_name'   => 'rp.sender_name',
+            'target'        => 'rp.target_name',
+            'target_name'   => 'rp.target_name',
+            'length'        => 'rp.length',
+            'rssi'          => 'rp.rssi',
+            'snr'           => 'rp.snr',
+            'status'        => 'rp.processed',
+            'processed'     => 'rp.processed',
+            'error'         => 'rp.error_message',
+            'error_message' => 'rp.error_message',
+            'created_at'    => 'rp.id',
         ];
-        $orderCol = $allowedCols[$sortBy ?? ''] ?? 'id';
+        $orderCol = $allowedCols[$sortBy ?? ''] ?? 'rp.id';
         $orderDir = (strtoupper((string)$sortDir) === 'ASC') ? 'ASC' : 'DESC';
 
-        $sql = "SELECT id, bot_id, direction, length, rssi, snr, target_name, target_public_key, sender_name, sender_public_key, is_encrypted, processed, created_at, processed_at, completed_at, error_message, SUBSTRING(raw_hex, 1, 80) AS raw_hex_preview FROM raw_packets {$whereSql} ORDER BY {$orderCol} {$orderDir} LIMIT " . (int)$limit . " OFFSET " . (int)$offset;
+        $sql = "SELECT rp.id, rp.bot_id, rp.direction, rp.length, rp.rssi, rp.snr, 
+                       rp.target_name, rp.target_public_key, 
+                       rp.sender_name, rp.sender_public_key, 
+                       COALESCE(
+                           (SELECT n1.node_name FROM nodes n1 WHERE (n1.public_key = rp.sender_public_key AND n1.public_key != '') OR (n1.node_id = rp.sender_name AND n1.node_id != '') LIMIT 1),
+                           rp.sender_name
+                       ) AS sender_node_name,
+                       COALESCE(
+                           (SELECT n2.node_name FROM nodes n2 WHERE (n2.public_key = rp.target_public_key AND n2.public_key != '') OR (n2.node_id = rp.target_name AND n2.node_id != '') LIMIT 1),
+                           rp.target_name
+                       ) AS target_node_name,
+                       rp.is_encrypted, rp.processed, rp.created_at, rp.processed_at, rp.completed_at, rp.error_message, 
+                       SUBSTRING(rp.raw_hex, 1, 80) AS raw_hex_preview 
+                FROM {$this->table} rp 
+                {$whereSql} 
+                ORDER BY {$orderCol} {$orderDir} 
+                LIMIT " . (int)$limit . " OFFSET " . (int)$offset;
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
         $packets = $stmt->fetchAll() ?: [];
@@ -553,6 +579,23 @@ SQL;
             $stmt->execute([':id' => $id]);
             $row = $stmt->fetch();
             if (!$row) return null;
+
+            $row['sender_node_name'] = null;
+            $row['target_node_name'] = null;
+            if (!empty($row['sender_public_key']) || !empty($row['sender_name'])) {
+                try {
+                    $sStmt = $this->pdo->prepare("SELECT node_name FROM nodes WHERE (public_key = :pk AND public_key != '') OR (node_id = :name AND node_id != '') LIMIT 1");
+                    $sStmt->execute([':pk' => (string)$row['sender_public_key'], ':name' => (string)$row['sender_name']]);
+                    $row['sender_node_name'] = $sStmt->fetchColumn() ?: null;
+                } catch (\Throwable $e) {}
+            }
+            if (!empty($row['target_public_key']) || !empty($row['target_name'])) {
+                try {
+                    $tStmt = $this->pdo->prepare("SELECT node_name FROM nodes WHERE (public_key = :pk AND public_key != '') OR (node_id = :name AND node_id != '') LIMIT 1");
+                    $tStmt->execute([':pk' => (string)$row['target_public_key'], ':name' => (string)$row['target_name']]);
+                    $row['target_node_name'] = $tStmt->fetchColumn() ?: null;
+                } catch (\Throwable $e) {}
+            }
 
             $row['telemetry_records'] = [];
             try {
