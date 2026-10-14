@@ -29,7 +29,8 @@ class SettingsRepository implements SettingsRepositoryInterface
         'telemetry_chart_days'               => 7,
         'max_telemetry_age_days'             => 0,
         'api_cache_ttl_mins'                 => 5,
-        'api_node_telemetry_days'            => 7,
+        'api_node_telemetry_limit'           => 50,
+        'api_node_telemetry_days'            => 50,
     ];
 
     public function __construct(PDO $pdo)

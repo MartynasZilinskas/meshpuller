@@ -1519,16 +1519,16 @@ $isLoggedIn = isAdminLoggedIn();
                             <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
                                 <div style="max-width: 580px;">
                                     <div style="font-size: 0.95rem; font-weight: 600; color: #ffffff;">
-                                        Mazgo telemetrijos istorijos periodas viešam API (dienomis)
+                                        Mazgo telemetrijos įrašų kiekis viešam API
                                     </div>
                                     <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
-                                        Kelių dienų surinktą telemetrijos istoriją atiduoda endpointas <code>/node/{public_key}</code>.
-                                        <br><span style="color: var(--accent-cyan);">Numatyta reikšmė: <b>7</b> d. Galite nurodyti pvz. <b>1</b>, <b>3</b>, <b>7</b>, <b>14</b> ar <b>30</b> dienų.</span>
+                                        Kiek paskutinių telemetrijos įrašų atiduoda endpointas <code>/api/node/{bot_id}</code> (arba <code>/node/{public_key}</code>).
+                                        <br><span style="color: var(--accent-cyan);">Numatyta reikšmė: <b>50</b> įrašų. Galite nurodyti pvz. <b>20</b>, <b>50</b>, <b>100</b>, <b>200</b> ar <b>500</b>.</span>
                                     </div>
                                 </div>
                                 <div style="display: flex; align-items: center; gap: 8px;">
-                                    <input type="number" min="1" max="365" step="1" id="settingApiNodeTelemetryDays" class="form-control" style="width: 100px; font-weight: 700; text-align: center; font-size: 1rem;" placeholder="7" required>
-                                    <span style="font-size: 0.82rem; color: var(--text-muted);">d.</span>
+                                    <input type="number" min="1" max="5000" step="1" id="settingApiNodeTelemetryLimit" class="form-control" style="width: 100px; font-weight: 700; text-align: center; font-size: 1rem;" placeholder="50" required>
+                                    <span style="font-size: 0.82rem; color: var(--text-muted);">įr.</span>
                                 </div>
                             </div>
                         </div>
@@ -4249,8 +4249,10 @@ $isLoggedIn = isAdminLoggedIn();
 
                 const apiTtlEl = document.getElementById('settingApiCacheTtlMins');
                 if (apiTtlEl) apiTtlEl.value = currentSettings.api_cache_ttl_mins ?? 5;
-                const apiTelemDaysEl = document.getElementById('settingApiNodeTelemetryDays');
-                if (apiTelemDaysEl) apiTelemDaysEl.value = currentSettings.api_node_telemetry_days ?? 7;
+                const apiTelemLimitEl = document.getElementById('settingApiNodeTelemetryLimit') || document.getElementById('settingApiNodeTelemetryDays');
+                if (apiTelemLimitEl) {
+                    apiTelemLimitEl.value = currentSettings.api_node_telemetry_limit ?? (currentSettings.api_node_telemetry_days && currentSettings.api_node_telemetry_days > 14 ? currentSettings.api_node_telemetry_days : 50);
+                }
 
                 const autoAddRepEl = document.getElementById('settingAutoAddNewRepeaters');
                 if (autoAddRepEl) autoAddRepEl.checked = !!currentSettings.auto_add_new_repeaters;
@@ -4327,7 +4329,8 @@ $isLoggedIn = isAdminLoggedIn();
                     telemetry_chart_days: parseInt(document.getElementById('settingTelemetryChartDays')?.value || '7', 10),
                     max_telemetry_age_days: parseInt(document.getElementById('settingMaxTelemetryAgeDays')?.value || '0', 10),
                     api_cache_ttl_mins: parseInt(document.getElementById('settingApiCacheTtlMins')?.value || '5', 10),
-                    api_node_telemetry_days: parseInt(document.getElementById('settingApiNodeTelemetryDays')?.value || '7', 10),
+                    api_node_telemetry_limit: parseInt((document.getElementById('settingApiNodeTelemetryLimit') || document.getElementById('settingApiNodeTelemetryDays'))?.value || '50', 10),
+                    api_node_telemetry_days: parseInt((document.getElementById('settingApiNodeTelemetryLimit') || document.getElementById('settingApiNodeTelemetryDays'))?.value || '50', 10),
                     auto_add_new_repeaters: document.getElementById('settingAutoAddNewRepeaters')?.checked ?? false
                 };
 

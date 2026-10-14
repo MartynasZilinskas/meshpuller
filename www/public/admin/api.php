@@ -218,8 +218,14 @@ if ($action === 'save_settings') {
         if (isset($data['api_cache_ttl_mins']) && is_numeric($data['api_cache_ttl_mins'])) {
             $newSettings['api_cache_ttl_mins'] = max(0, min(1440, (int)$data['api_cache_ttl_mins']));
         }
-        if (isset($data['api_node_telemetry_days']) && is_numeric($data['api_node_telemetry_days'])) {
-            $newSettings['api_node_telemetry_days'] = max(1, min(365, (int)$data['api_node_telemetry_days']));
+        if (isset($data['api_node_telemetry_limit']) && is_numeric($data['api_node_telemetry_limit'])) {
+            $val = max(1, min(5000, (int)$data['api_node_telemetry_limit']));
+            $newSettings['api_node_telemetry_limit'] = $val;
+            $newSettings['api_node_telemetry_days'] = $val;
+        } elseif (isset($data['api_node_telemetry_days']) && is_numeric($data['api_node_telemetry_days'])) {
+            $val = max(1, min(5000, (int)$data['api_node_telemetry_days']));
+            $newSettings['api_node_telemetry_limit'] = $val;
+            $newSettings['api_node_telemetry_days'] = $val;
         }
         if (isset($data['auto_add_new_repeaters'])) {
             $newSettings['auto_add_new_repeaters'] = ($data['auto_add_new_repeaters'] === true || $data['auto_add_new_repeaters'] === '1' || $data['auto_add_new_repeaters'] === 1);

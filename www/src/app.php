@@ -642,13 +642,26 @@ if ($isNodeDetailEndpoint) {
     $strippedTarget = ltrim($cleanTarget, '!#');
 
     $apiCacheTtlMins = $repository ? (int)$repository->getSetting('api_cache_ttl_mins', 5) : 5;
-    $configuredDays = $repository ? (int)$repository->getSetting('api_node_telemetry_days', 7) : 7;
-    $days = (isset($_GET['days']) && is_numeric($_GET['days']) && (int)$_GET['days'] > 0)
-        ? min(365, (int)$_GET['days'])
-        : $configuredDays;
+    $configuredLimit = 50;
+    if ($repository) {
+        $val = $repository->getSetting('api_node_telemetry_limit', null);
+        if ($val === null) {
+            $val = $repository->getSetting('api_node_telemetry_days', 50);
+        }
+        $configuredLimit = max(1, (int)$val);
+    }
+
+    $limit = $configuredLimit;
+    if (isset($_GET['limit']) && is_numeric($_GET['limit']) && (int)$_GET['limit'] > 0) {
+        $limit = min(5000, max(1, (int)$_GET['limit']));
+    } elseif (isset($_GET['count']) && is_numeric($_GET['count']) && (int)$_GET['count'] > 0) {
+        $limit = min(5000, max(1, (int)$_GET['count']));
+    } elseif (isset($_GET['records']) && is_numeric($_GET['records']) && (int)$_GET['records'] > 0) {
+        $limit = min(5000, max(1, (int)$_GET['records']));
+    }
 
     $cacheService = new \MeshCore\Services\ApiCacheService();
-    $cacheKey = 'node_' . md5($cleanTarget . '_' . $days);
+    $cacheKey = 'node_' . md5($cleanTarget . '_' . $limit);
 
     // Tikriname kešą
     $cached = $cacheService->get($cacheKey, $apiCacheTtlMins);
@@ -673,6 +686,7 @@ if ($isNodeDetailEndpoint) {
     $nodeInfo = null;
     $resolvedNodeId = $strippedTarget;
     $resolvedPublicKey = $cleanTarget;
+    $resolvedBotId = '';
 
     try {
         $pdo = $repository->getPdo();
@@ -686,6 +700,7 @@ if ($isNodeDetailEndpoint) {
             WHERE LOWER(n.public_key) = :pk1
                OR LOWER(n.node_id) = :nid1
                OR LOWER(n.node_id) = :nid2
+               OR LOWER(n.bot_id) = :bid1
                OR (LENGTH(:pk_prefix) >= 4 AND LOWER(n.public_key) LIKE :pk_prefix_like)
                OR LOWER(n.node_name) = :name1
             LIMIT 1
@@ -694,6 +709,7 @@ if ($isNodeDetailEndpoint) {
             ':pk1'            => $cleanTarget,
             ':nid1'           => $cleanTarget,
             ':nid2'           => $strippedTarget,
+            ':bid1'           => $cleanTarget,
             ':pk_prefix'      => $strippedTarget,
             ':pk_prefix_like' => $strippedTarget . '%',
             ':name1'          => $cleanTarget,
@@ -703,6 +719,7 @@ if ($isNodeDetailEndpoint) {
         if ($nodeRow) {
             $resolvedNodeId = $nodeRow['node_id'] ?: $strippedTarget;
             $resolvedPublicKey = $nodeRow['public_key'] ? strtolower($nodeRow['public_key']) : $cleanTarget;
+            $resolvedBotId = !empty($nodeRow['bot_id']) ? strtolower($nodeRow['bot_id']) : '';
 
             $nodeInfo = [
                 'node_id'              => $nodeRow['node_id'],
@@ -723,12 +740,12 @@ if ($isNodeDetailEndpoint) {
         }
     } catch (\Throwable $e) {}
 
-    // 2. Nuskaitome telemetrijos įrašus nurodytam dienų skaičiui
-    $fromDate = date('Y-m-d H:i:s', strtotime("-{$days} days"));
+    // 2. Nuskaitome telemetrijos įrašus pagal nurodytą paskutinių įrašų limitą
     $telemetryRecords = [];
 
     try {
         $pdo = $repository->getPdo();
+        $safeLimit = (int)$limit;
         $tSql = "
             SELECT id, recorded_at, type, battery_v, battery_mv, temperature_c,
                    rssi, snr, noise_floor, uptime_seconds, air_time_seconds,
@@ -738,23 +755,27 @@ if ($isNodeDetailEndpoint) {
                 LOWER(public_key) = :pk
                 OR LOWER(node_id) = :nid
                 OR LOWER(node_id) = :nid_strip
+                OR (:bot_id <> '' AND LOWER(bot_id) = :bot_id)
                 OR (LENGTH(:pk_prefix) >= 4 AND LOWER(public_key) LIKE :pk_prefix_like)
             )
             AND type IN ('TELEMETRY', 'STATUS')
-            AND recorded_at >= :from_date
-            ORDER BY recorded_at ASC
-            LIMIT 5000
+            ORDER BY recorded_at DESC, id DESC
+            LIMIT {$safeLimit}
         ";
         $tStmt = $pdo->prepare($tSql);
         $tStmt->execute([
             ':pk'             => $resolvedPublicKey,
             ':nid'            => $resolvedNodeId,
             ':nid_strip'      => ltrim($resolvedNodeId, '!#'),
+            ':bot_id'         => $resolvedBotId ?: $cleanTarget,
             ':pk_prefix'      => substr($resolvedPublicKey, 0, 8),
             ':pk_prefix_like' => substr($resolvedPublicKey, 0, 8) . '%',
-            ':from_date'      => $fromDate,
         ]);
         $rows = $tStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+        // Kadangi paėmėme naujausius įrašus (ORDER BY recorded_at DESC),
+        // apverčiame masyvą, kad telemetrijos taškai eitų chronologine tvarka (seniausias -> naujausias)
+        $rows = array_reverse($rows);
 
         $tz = new DateTimeZone('Europe/Vilnius');
 
@@ -806,7 +827,7 @@ if ($isNodeDetailEndpoint) {
             'success'    => false,
             'error'      => 'Mazgas su nurodytu raktu nerastas arba neturi telemetrijos duomenų.',
             'public_key' => $cleanTarget,
-            'days'       => $days,
+            'limit'      => $limit,
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
         exit;
     }
@@ -815,7 +836,7 @@ if ($isNodeDetailEndpoint) {
         'success'     => true,
         'endpoint'    => '/node/' . $cleanTarget,
         'public_key'  => $resolvedPublicKey ?: $cleanTarget,
-        'days'        => $days,
+        'limit'       => $limit,
         'ttl_minutes' => $apiCacheTtlMins,
         'cached'      => false,
         'node'        => $nodeInfo,
@@ -866,7 +887,7 @@ if ($method === 'GET') {
             'GET /api/repyters'     => 'Grąžina visų stebimų kartotuvų sąrašą tiksliai tokiu formatu, kokio reikalauja ESP32 bot (name, public_id, password, isDirect, status, telemetry).',
             'GET /api/nodes'        => 'Grąžina žemėlapiui optimizuotus kartotuvus (nodes) su paskutine telemetrija, surūšiuotus pagal telemetrijos atnaujinimo datą nuo naujausio.',
             'GET /api/node/list'    => 'Grąžina visus įjungtus (enabled) mazgus su telemetrija. Atsakymas kešuojamas (TTL nustatomas admine minutėmis).',
-            'GET /node/{public_key}' => 'Grąžina konkretaus mazgo surinktą telemetriją per nurodytą dienų skaičių (nustatoma admine dienomis). Kešuojamas pagal TTL.',
+            'GET /node/{public_key}' => 'Grąžina konkretaus mazgo paskutinius telemetrijos įrašus (kiekis nustatomas admine arba per ?limit=). Kešuojamas pagal TTL.',
             'POST /api/raw'         => 'Visas LoRa srautas (RX/TX) išsaugomas DB eilėje (processed = false). Dekodavimas vyksta fone per process_queue.php.',
         ],
         'deprecated_endpoints' => [
