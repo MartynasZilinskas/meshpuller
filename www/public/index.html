@@ -1092,31 +1092,32 @@
             justify-content: space-between;
         }
 
-        /* ℹ️ Info mygtukas žemėlapio popup kortelėje */
+        /* 📈 Grafiko mygtukas žemėlapio popup kortelėje */
         .card-info-btn {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            width: 24px;
-            height: 24px;
+            width: 28px;
+            height: 28px;
             background: rgba(255, 255, 255, 0.08);
             border: 1px solid var(--border-light);
             color: #ffffff;
             border-radius: 50%;
-            font-size: 0.75rem;
+            font-size: 0.95rem;
             cursor: pointer;
             flex-shrink: 0;
             transition: all 0.15s ease;
             text-decoration: none;
             line-height: 1;
             padding: 0;
+            margin-left: 6px;
         }
 
         .card-info-btn:hover {
             background: rgba(0, 210, 255, 0.25);
             border-color: var(--accent-cyan);
             color: #00d2ff;
-            transform: scale(1.08);
+            transform: scale(1.12);
         }
 
         .card-info-btn:active {
@@ -3076,7 +3077,7 @@
                                     <span class="node-badge-id" style="margin-right: 6px; flex-shrink:0;">${nodeId.toUpperCase()}</span>
                                     <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${name}</span>
                                 </div>
-                                <button class="card-info-btn" onclick="event.stopPropagation(); openMobileSheet(findNodeByIdentifier('${node.public_key || node.node_id || nodeId}'));" title="Išsami informacija / Statistika">ℹ️</button>
+                                <button class="card-info-btn" onclick="event.stopPropagation(); openMobileSheet(findNodeByIdentifier('${node.public_key || node.node_id || nodeId}'));" title="Telemetrijos grafikas / Statistika">📈</button>
                             </div>
                             <div class="popup-id">${node.is_repeater ? 'KARTOTUVAS' : 'MAZGAS'} • <span style="color:#c084fc; font-weight:600;" title="${botTitle}">🤖 ${botId}${botName ? ` (${botName})` : ''}</span></div>
                             
