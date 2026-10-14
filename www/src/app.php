@@ -664,13 +664,16 @@ if ($isNodeDetailEndpoint) {
     $cacheKey = 'node_' . md5($cleanTarget . '_' . $limit);
 
     // Tikriname kešą
-    $cached = $cacheService->get($cacheKey, $apiCacheTtlMins);
-    if ($cached !== null) {
-        $remaining = $cacheService->getRemainingTtl($cacheKey, $apiCacheTtlMins);
-        header('X-Cache: HIT');
-        header('Cache-Control: public, max-age=' . $remaining);
-        echo $cached;
-        exit;
+    $bypassCache = isset($_GET['nocache']) || isset($_GET['no_cache']) || isset($_GET['force']);
+    if (!$bypassCache) {
+        $cached = $cacheService->get($cacheKey, $apiCacheTtlMins);
+        if ($cached !== null) {
+            $remaining = $cacheService->getRemainingTtl($cacheKey, $apiCacheTtlMins);
+            header('X-Cache: HIT');
+            header('Cache-Control: public, max-age=' . $remaining);
+            echo $cached;
+            exit;
+        }
     }
 
     if (!$dbConnected || !$repository) {
@@ -686,7 +689,6 @@ if ($isNodeDetailEndpoint) {
     $nodeInfo = null;
     $resolvedNodeId = $strippedTarget;
     $resolvedPublicKey = $cleanTarget;
-    $resolvedBotId = '';
 
     try {
         $pdo = $repository->getPdo();
@@ -719,7 +721,6 @@ if ($isNodeDetailEndpoint) {
         if ($nodeRow) {
             $resolvedNodeId = $nodeRow['node_id'] ?: $strippedTarget;
             $resolvedPublicKey = $nodeRow['public_key'] ? strtolower($nodeRow['public_key']) : $cleanTarget;
-            $resolvedBotId = !empty($nodeRow['bot_id']) ? strtolower($nodeRow['bot_id']) : '';
 
             $nodeInfo = [
                 'node_id'              => $nodeRow['node_id'],
@@ -745,7 +746,13 @@ if ($isNodeDetailEndpoint) {
 
     try {
         $pdo = $repository->getPdo();
-        $safeLimit = (int)$limit;
+        $safeLimit = max(1, min(5000, (int)$limit));
+
+        $pk4 = (strlen($resolvedPublicKey) >= 4) ? substr($resolvedPublicKey, 0, 4) : $resolvedNodeId;
+        $pk8 = (strlen($resolvedPublicKey) >= 8) ? substr($resolvedPublicKey, 0, 8) : $resolvedNodeId;
+        $cleanStrip = ltrim($cleanTarget, '!#');
+        $nodeIdStrip = ltrim($resolvedNodeId, '!#');
+
         $tSql = "
             SELECT id, recorded_at, type, battery_v, battery_mv, temperature_c,
                    rssi, snr, noise_floor, uptime_seconds, air_time_seconds,
@@ -753,23 +760,30 @@ if ($isNodeDetailEndpoint) {
             FROM telemetry
             WHERE (
                 LOWER(public_key) = :pk
+                OR LOWER(public_key) = :clean_target
                 OR LOWER(node_id) = :nid
                 OR LOWER(node_id) = :nid_strip
-                OR (:bot_id <> '' AND LOWER(bot_id) = :bot_id)
+                OR LOWER(node_id) = :clean_target
+                OR LOWER(node_id) = :clean_strip
+                OR LOWER(node_id) = :pk4
+                OR LOWER(node_id) = :pk8
                 OR (LENGTH(:pk_prefix) >= 4 AND LOWER(public_key) LIKE :pk_prefix_like)
             )
-            AND type IN ('TELEMETRY', 'STATUS')
+            AND (type IN ('TELEMETRY', 'STATUS') OR type IS NULL OR type = '')
             ORDER BY recorded_at DESC, id DESC
             LIMIT {$safeLimit}
         ";
         $tStmt = $pdo->prepare($tSql);
         $tStmt->execute([
             ':pk'             => $resolvedPublicKey,
+            ':clean_target'   => $cleanTarget,
             ':nid'            => $resolvedNodeId,
-            ':nid_strip'      => ltrim($resolvedNodeId, '!#'),
-            ':bot_id'         => $resolvedBotId ?: $cleanTarget,
-            ':pk_prefix'      => substr($resolvedPublicKey, 0, 8),
-            ':pk_prefix_like' => substr($resolvedPublicKey, 0, 8) . '%',
+            ':nid_strip'      => $nodeIdStrip,
+            ':clean_strip'    => $cleanStrip,
+            ':pk4'            => $pk4,
+            ':pk8'            => $pk8,
+            ':pk_prefix'      => $pk8,
+            ':pk_prefix_like' => $pk8 . '%',
         ]);
         $rows = $tStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
