@@ -288,6 +288,45 @@ $isLoggedIn = isAdminLoggedIn();
             background: #222222;
         }
 
+        .input-clearable-wrapper {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+        }
+
+        .input-clearable-wrapper .form-control {
+            width: 100% !important;
+            padding-right: 28px !important;
+        }
+
+        .input-clear-btn {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 18px;
+            height: 18px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid var(--border-color);
+            color: #aaaaaa;
+            border-radius: 50%;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.65rem;
+            cursor: pointer;
+            padding: 0;
+            line-height: 1;
+            transition: all 0.15s ease;
+            z-index: 2;
+        }
+
+        .input-clear-btn:hover {
+            color: #ffffff;
+            background: rgba(239, 68, 68, 0.5);
+            border-color: #ef4444;
+        }
+
         /* Administravimo pulto pagrindinis turinys */
         .admin-container {
             flex: 1;
@@ -822,7 +861,10 @@ $isLoggedIn = isAdminLoggedIn();
             <div class="tab-content active" id="tab-nodes">
                 <div class="filter-card">
                     <div class="filter-group">
-                        <input type="text" id="nodesSearch" class="form-control" style="width: 240px;" placeholder="Ieškoti pagal vardą, ID ar raktą..." oninput="onNodesSearchInput()" onkeydown="if(event.key==='Enter') onNodesSearchEnter()">
+                        <div class="input-clearable-wrapper" style="width: 240px;">
+                            <input type="text" id="nodesSearch" class="form-control" placeholder="Ieškoti pagal vardą, ID ar raktą..." oninput="updateAdminClearBtn('nodesSearch'); onNodesSearchInput();" onkeydown="if(event.key==='Enter') onNodesSearchEnter()">
+                            <button type="button" class="input-clear-btn" id="nodesSearchClearBtn" onclick="clearNodesSearch()" title="Išvalyti paiešką">✕</button>
+                        </div>
                         
                         <select id="nodesBotFilter" class="form-control" style="width: 170px;" onchange="onNodesFilterChange()">
                             <option value="">Visi botai</option>
@@ -893,7 +935,10 @@ $isLoggedIn = isAdminLoggedIn();
             <div class="tab-content" id="tab-bots">
                 <div class="filter-card">
                     <div class="filter-group">
-                        <input type="text" id="botsSearch" class="form-control" style="width: 260px;" placeholder="Ieškoti pagal ID, pavadinimą ar raktą..." oninput="onBotsSearchInput()">
+                        <div class="input-clearable-wrapper" style="width: 260px;">
+                            <input type="text" id="botsSearch" class="form-control" placeholder="Ieškoti pagal ID, pavadinimą ar raktą..." oninput="updateAdminClearBtn('botsSearch'); onBotsSearchInput();">
+                            <button type="button" class="input-clear-btn" id="botsSearchClearBtn" onclick="clearBotsSearch()" title="Išvalyti paiešką">✕</button>
+                        </div>
                         <select id="botsStatusFilter" class="form-control" style="width: 175px;" onchange="renderBotsTable()">
                             <option value="">Visos būsenos</option>
                             <option value="enabled">Tik aktyvūs (Enabled)</option>
@@ -939,7 +984,10 @@ $isLoggedIn = isAdminLoggedIn();
                             <span class="close-chip" onclick="clearTelemetryNodeFilter()" title="Išvalyti mazgo filtrą">&times;</span>
                         </div>
 
-                        <input type="text" id="telemetryNodeInput" class="form-control" style="width: 180px;" placeholder="Mazgo ID (pvz. b9dd)..." onchange="onTelemetryFilterChange()" onkeydown="if(event.key==='Enter') onTelemetryFilterChange()">
+                        <div class="input-clearable-wrapper" style="width: 180px;">
+                            <input type="text" id="telemetryNodeInput" class="form-control" placeholder="Mazgo ID (pvz. b9dd)..." oninput="updateAdminClearBtn('telemetryNodeInput')" onchange="updateAdminClearBtn('telemetryNodeInput'); onTelemetryFilterChange();" onkeydown="if(event.key==='Enter') onTelemetryFilterChange()">
+                            <button type="button" class="input-clear-btn" id="telemetryNodeInputClearBtn" onclick="clearTelemetryNodeFilter()" title="Išvalyti mazgo filtrą">✕</button>
+                        </div>
                         
                         <select id="telemetryTypeFilter" class="form-control" style="width: 170px;" onchange="onTelemetryFilterChange()">
                             <option value="">Visi (TELEMETRY & STATUS)</option>
@@ -995,7 +1043,10 @@ $isLoggedIn = isAdminLoggedIn();
                             <span class="close-chip" onclick="clearRawNodeFilter()" title="Išvalyti mazgo filtrą">&times;</span>
                         </div>
 
-                        <input type="text" id="rawSearchInput" class="form-control" style="width: 220px;" placeholder="Ieškoti hex, varde ar klaidoje..." oninput="onRawSearchInput()" onkeydown="if(event.key==='Enter') onRawSearchEnter()">
+                        <div class="input-clearable-wrapper" style="width: 220px;">
+                            <input type="text" id="rawSearchInput" class="form-control" placeholder="Ieškoti hex, varde ar klaidoje..." oninput="updateAdminClearBtn('rawSearchInput'); onRawSearchInput();" onkeydown="if(event.key==='Enter') onRawSearchEnter()">
+                            <button type="button" class="input-clear-btn" id="rawSearchInputClearBtn" onclick="clearRawNodeFilter()" title="Išvalyti paiešką">✕</button>
+                        </div>
                         
                         <select id="rawStatusFilter" class="form-control" style="width: 170px;" onchange="onRawFilterChange()">
                             <option value="">Visos būsenos</option>
@@ -1111,7 +1162,10 @@ $isLoggedIn = isAdminLoggedIn();
 
                     <!-- Filtravimo valdymo juosta -->
                     <div class="filter-group" style="flex-wrap: wrap; gap: 10px; padding-top: 10px; border-top: 1px solid var(--border-color);">
-                        <input type="text" id="queueSearchInput" class="form-control" style="width: 240px;" placeholder="Ieškoti mazgo ar ID..." oninput="onQueueFilterChange()" onkeydown="if(event.key==='Enter'){clearTimeout(queueFilterTimeout);loadNodeQueue(false);}">
+                        <div class="input-clearable-wrapper" style="width: 240px;">
+                            <input type="text" id="queueSearchInput" class="form-control" placeholder="Ieškoti mazgo ar ID..." oninput="updateAdminClearBtn('queueSearchInput'); onQueueFilterChange();" onkeydown="if(event.key==='Enter'){clearTimeout(queueFilterTimeout);loadNodeQueue(false);}">
+                            <button type="button" class="input-clear-btn" id="queueSearchInputClearBtn" onclick="clearQueueFilter()" title="Išvalyti paiešką">✕</button>
+                        </div>
 
                         <div style="display: flex; align-items: center; gap: 6px;">
                             <label style="font-size: 0.78rem; color: var(--text-muted);">Šaltinis (Botas):</label>
@@ -2091,10 +2145,60 @@ $isLoggedIn = isAdminLoggedIn();
                 if (isInitialLoad && !params.get('tab')) {
                     updateHistory({ tab: currentTab }, 'replace');
                 }
+                updateAllAdminClearBtns();
                 updateDocumentTitle();
             } finally {
                 isApplyingUrlState = false;
             }
+        }
+
+        // Pagalbinės filtrų išvalymo (X) mygtukų funkcijos
+        function updateAdminClearBtn(inputId) {
+            const input = document.getElementById(inputId);
+            const btn = document.getElementById(inputId + 'ClearBtn');
+            if (btn) {
+                btn.style.display = (input && input.value.trim().length > 0) ? 'inline-flex' : 'none';
+            }
+        }
+
+        function updateAllAdminClearBtns() {
+            ['nodesSearch', 'botsSearch', 'telemetryNodeInput', 'rawSearchInput', 'queueSearchInput'].forEach(updateAdminClearBtn);
+        }
+
+        function clearNodesSearch() {
+            const input = document.getElementById('nodesSearch');
+            if (input) {
+                input.value = '';
+                input.focus();
+            }
+            updateAdminClearBtn('nodesSearch');
+            nodesPage = 0;
+            updateHistory({ tab: 'nodes', search: '', page: 0 }, 'push');
+            loadNodes(0);
+        }
+
+        function clearBotsSearch() {
+            const input = document.getElementById('botsSearch');
+            if (input) {
+                input.value = '';
+                input.focus();
+            }
+            updateAdminClearBtn('botsSearch');
+            updateHistory({ tab: 'bots', search: '', page: 0 }, 'push');
+            renderBotsTable();
+        }
+
+        function clearQueueFilter() {
+            const input = document.getElementById('queueSearchInput');
+            if (input) {
+                input.value = '';
+                input.focus();
+            }
+            updateAdminClearBtn('queueSearchInput');
+            clearTimeout(queueFilterTimeout);
+            queuePage = 0;
+            renderNodeQueueTable();
+            loadNodeQueue(false);
         }
 
         // Skirtukų perjungimas
@@ -2139,6 +2243,7 @@ $isLoggedIn = isAdminLoggedIn();
         }, 300);
 
         function onNodesSearchInput() {
+            updateAdminClearBtn('nodesSearch');
             debouncedLoadNodes();
         }
 
@@ -2178,6 +2283,7 @@ $isLoggedIn = isAdminLoggedIn();
         }, 350);
 
         function onRawSearchInput() {
+            updateAdminClearBtn('rawSearchInput');
             debouncedLoadRaw();
         }
 
@@ -2524,6 +2630,7 @@ $isLoggedIn = isAdminLoggedIn();
             telNodeFilter = nodeId;
             telPage = 0;
             document.getElementById('telemetryNodeInput').value = nodeId;
+            updateAdminClearBtn('telemetryNodeInput');
             document.getElementById('telemetryActiveNodeText').innerText = nodeId;
             document.getElementById('telemetryNodeFilterTag').style.display = 'inline-flex';
             
@@ -2540,7 +2647,12 @@ $isLoggedIn = isAdminLoggedIn();
         function clearTelemetryNodeFilter() {
             telNodeFilter = '';
             telPage = 0;
-            document.getElementById('telemetryNodeInput').value = '';
+            const input = document.getElementById('telemetryNodeInput');
+            if (input) {
+                input.value = '';
+                input.focus();
+            }
+            updateAdminClearBtn('telemetryNodeInput');
             document.getElementById('telemetryNodeFilterTag').style.display = 'none';
             updateHistory({ tab: 'telemetry', node: '', page: 0 }, 'push');
             loadTelemetry(0);
@@ -2866,6 +2978,7 @@ $isLoggedIn = isAdminLoggedIn();
         }
 
         function onBotsSearchInput() {
+            updateAdminClearBtn('botsSearch');
             renderBotsTable();
         }
 
@@ -2957,6 +3070,7 @@ $isLoggedIn = isAdminLoggedIn();
             rawNodeFilter = nodeId;
             rawPage = 0;
             document.getElementById('rawSearchInput').value = nodeId;
+            updateAdminClearBtn('rawSearchInput');
             document.getElementById('rawActiveNodeText').innerText = nodeId;
             document.getElementById('rawNodeFilterTag').style.display = 'inline-flex';
             
@@ -2973,7 +3087,12 @@ $isLoggedIn = isAdminLoggedIn();
         function clearRawNodeFilter() {
             rawNodeFilter = '';
             rawPage = 0;
-            document.getElementById('rawSearchInput').value = '';
+            const input = document.getElementById('rawSearchInput');
+            if (input) {
+                input.value = '';
+                input.focus();
+            }
+            updateAdminClearBtn('rawSearchInput');
             document.getElementById('rawNodeFilterTag').style.display = 'none';
             updateHistory({ tab: 'raw', search: '', page: 0 }, 'push');
             loadRawPackets(0);
@@ -3369,6 +3488,7 @@ $isLoggedIn = isAdminLoggedIn();
         }
 
         function onQueueFilterChange() {
+            updateAdminClearBtn('queueSearchInput');
             queuePage = 0;
             renderNodeQueueTable();
             clearTimeout(queueFilterTimeout);
@@ -4301,6 +4421,7 @@ $isLoggedIn = isAdminLoggedIn();
                 loadStats();
                 loadBots();
                 applyUrlState(true);
+                updateAllAdminClearBtns();
             <?php endif; ?>
         });
     </script>
