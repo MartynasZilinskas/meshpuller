@@ -832,7 +832,9 @@ if ($isNodeDetailEndpoint) {
 
             $telemetryRecords[] = $item;
         }
-    } catch (\Throwable $e) {}
+    } catch (\Throwable $e) {
+        $queryError = $e->getMessage();
+    }
 
     // Jei nerasta nei mazgo informacijos, nei telemetrijos įrašų - grąžiname 404
     if ($nodeInfo === null && empty($telemetryRecords)) {
@@ -856,6 +858,7 @@ if ($isNodeDetailEndpoint) {
         'node'        => $nodeInfo,
         'count'       => count($telemetryRecords),
         'telemetry'   => $telemetryRecords,
+        'query_error' => $queryError,
         'timestamp'   => date('Y-m-d H:i:s'),
     ];
 
