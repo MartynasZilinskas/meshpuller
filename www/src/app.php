@@ -858,7 +858,6 @@ if ($isNodeDetailEndpoint) {
         'node'        => $nodeInfo,
         'count'       => count($telemetryRecords),
         'telemetry'   => $telemetryRecords,
-        'query_error' => $queryError,
         'timestamp'   => date('Y-m-d H:i:s'),
     ];
 
