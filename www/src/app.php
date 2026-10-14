@@ -760,30 +760,30 @@ if ($isNodeDetailEndpoint) {
             FROM telemetry
             WHERE (
                 LOWER(public_key) = :pk
-                OR LOWER(public_key) = :clean_target
+                OR LOWER(public_key) = :clean_target_pk
                 OR LOWER(node_id) = :nid
                 OR LOWER(node_id) = :nid_strip
-                OR LOWER(node_id) = :clean_target
-                OR LOWER(node_id) = :clean_strip
+                OR LOWER(node_id) = :clean_target_nid
+                OR LOWER(node_id) = :clean_strip_nid
                 OR LOWER(node_id) = :pk4
                 OR LOWER(node_id) = :pk8
                 OR (LENGTH(:pk_prefix) >= 4 AND LOWER(public_key) LIKE :pk_prefix_like)
             )
-            AND (type IN ('TELEMETRY', 'STATUS') OR type IS NULL OR type = '')
             ORDER BY recorded_at DESC, id DESC
             LIMIT {$safeLimit}
         ";
         $tStmt = $pdo->prepare($tSql);
         $tStmt->execute([
-            ':pk'             => $resolvedPublicKey,
-            ':clean_target'   => $cleanTarget,
-            ':nid'            => $resolvedNodeId,
-            ':nid_strip'      => $nodeIdStrip,
-            ':clean_strip'    => $cleanStrip,
-            ':pk4'            => $pk4,
-            ':pk8'            => $pk8,
-            ':pk_prefix'      => $pk8,
-            ':pk_prefix_like' => $pk8 . '%',
+            ':pk'               => $resolvedPublicKey,
+            ':clean_target_pk'  => $cleanTarget,
+            ':nid'              => $resolvedNodeId,
+            ':nid_strip'        => $nodeIdStrip,
+            ':clean_target_nid' => $cleanTarget,
+            ':clean_strip_nid'  => $cleanStrip,
+            ':pk4'              => $pk4,
+            ':pk8'              => $pk8,
+            ':pk_prefix'        => $pk8,
+            ':pk_prefix_like'   => $pk8 . '%',
         ]);
         $rows = $tStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
