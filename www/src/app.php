@@ -117,10 +117,32 @@ if (!$isNodeListEndpoint) {
     } elseif ((isset($_GET['endpoint']) && in_array(strtolower($_GET['endpoint']), ['node', 'node_detail'])) && !empty($_GET['public_key'])) {
         $isNodeDetailEndpoint = true;
         $nodeDetailPublicKey = (string)$_GET['public_key'];
-    } elseif (isset($_GET['action']) && in_array(strtolower($_GET['action']), ['node', 'node_detail']) && !empty($_GET['public_key'])) {
+    } elseif (!empty($_GET['public_key'])) {
         $isNodeDetailEndpoint = true;
         $nodeDetailPublicKey = (string)$_GET['public_key'];
+    } elseif (!empty($_GET['node_id'])) {
+        $isNodeDetailEndpoint = true;
+        $nodeDetailPublicKey = (string)$_GET['node_id'];
+    } elseif (!empty($_GET['bot_id']) && (isset($_GET['endpoint']) && in_array(strtolower($_GET['endpoint']), ['node', 'node_detail']))) {
+        $isNodeDetailEndpoint = true;
+        $nodeDetailPublicKey = (string)$_GET['bot_id'];
     }
+}
+
+// Jei kreipiamasi tiesiai į /api/node arba /node be mazgo identifikatoriaus – iškart grąžiname 404 klaidą
+$isDirectNodeRootRequest = (
+    preg_match('#^/(api/)?node/?$#i', $path) ||
+    ((isset($_GET['endpoint']) && in_array(strtolower($_GET['endpoint']), ['node', 'node_detail'])) && empty($nodeDetailPublicKey))
+);
+
+if ($isDirectNodeRootRequest && !$isNodeListEndpoint && !$isNodeDetailEndpoint) {
+    http_response_code(404);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode([
+        'success' => false,
+        'error'   => 'Nenurodytas mazgo identifikatorius (public_key arba node_id). Kreipkitės /api/node/{public_key} arba /api/node/list.'
+    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    exit;
 }
 
 
