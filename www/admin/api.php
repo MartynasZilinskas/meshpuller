@@ -215,11 +215,20 @@ if ($action === 'save_settings') {
         if (isset($data['max_telemetry_age_days']) && is_numeric($data['max_telemetry_age_days'])) {
             $newSettings['max_telemetry_age_days'] = max(0, (int)$data['max_telemetry_age_days']);
         }
+        if (isset($data['api_cache_ttl_mins']) && is_numeric($data['api_cache_ttl_mins'])) {
+            $newSettings['api_cache_ttl_mins'] = max(0, min(1440, (int)$data['api_cache_ttl_mins']));
+        }
+        if (isset($data['api_node_telemetry_days']) && is_numeric($data['api_node_telemetry_days'])) {
+            $newSettings['api_node_telemetry_days'] = max(1, min(365, (int)$data['api_node_telemetry_days']));
+        }
         if (isset($data['auto_add_new_repeaters'])) {
             $newSettings['auto_add_new_repeaters'] = ($data['auto_add_new_repeaters'] === true || $data['auto_add_new_repeaters'] === '1' || $data['auto_add_new_repeaters'] === 1);
         }
 
         $saved = $repository->saveSettings($newSettings);
+        try {
+            (new \MeshCore\Services\ApiCacheService())->clear();
+        } catch (\Throwable $e) {}
         $geoStats = $repository->getGeolocationFilterStats();
 
         echo json_encode([
@@ -232,6 +241,23 @@ if ($action === 'save_settings') {
                 'nodes_outside_lt' => $geoStats['nodes_outside_lt'],
                 'nodes_no_coords'  => $geoStats['nodes_no_coords']
             ]
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    } catch (\Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// Išvalyti API atsakymų kešą
+if ($action === 'clear_api_cache') {
+    try {
+        $cacheService = new \MeshCore\Services\ApiCacheService();
+        $cleared = $cacheService->clear();
+        echo json_encode([
+            'success' => true,
+            'message' => "API kešas sėkmingai išvalytas (pašalinta failų: {$cleared}).",
+            'cleared' => $cleared
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
     } catch (\Throwable $e) {
         http_response_code(500);

@@ -1,0 +1,20 @@
+DirectoryIndex index.html index.php
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Peradresuoti pasenusį /api/api/* į /api/* (301 Permanent Redirect)
+    RewriteRule ^api/api/(.*)$ /api/$1 [R=301,L,QSA]
+
+    # Nukreipti node ir api/node visus kelius į src/app.php
+    RewriteRule ^(api/)?node(/.*)?$ src/app.php [L,QSA]
+
+    # Jei failas ar katalogas egzistuoja fiziškai - atidaryti jį
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # Nukreipti adverts, raw, telemetry, nodes, repyters, repeaters, repeater į src/app.php
+    RewriteRule ^(adverts|raw|telemetry|nodes|repyters|repeaters|repeater|repyter|bots)(\.(php|json))?/?$ src/app.php [L,QSA]
+    RewriteRule ^api/(adverts|raw|telemetry|nodes|repyters|repeaters|repeater|repyter|bots)(\.(php|json))?/?$ src/app.php [L,QSA]
+</IfModule>

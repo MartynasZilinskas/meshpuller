@@ -89,6 +89,41 @@ $isBotsEndpoint = (
     basename($_SERVER['SCRIPT_FILENAME'] ?? '') === 'bots.php'
 );
 
+$subpath = isset($_GET['subpath']) ? trim((string)$_GET['subpath'], '/') : '';
+
+// Nustatome ar kreipiamasi į /api/node/list arba /node/list endpointą
+$isNodeListEndpoint = (
+    preg_match('#/(api/)?node/list(\.json|\.php)?$#i', $path) ||
+    strtolower($subpath) === 'list' ||
+    (isset($_GET['endpoint']) && in_array(strtolower($_GET['endpoint']), ['node_list', 'node/list'])) ||
+    ((isset($_GET['endpoint']) && strtolower($_GET['endpoint']) === 'node') && (isset($_GET['action']) && strtolower($_GET['action']) === 'list')) ||
+    ((isset($_GET['action']) && strtolower($_GET['action']) === 'node_list'))
+);
+
+// Nustatome ar kreipiamasi į /node/{public_key} arba /api/node/{public_key} endpointą
+$isNodeDetailEndpoint = false;
+$nodeDetailPublicKey = null;
+
+if (!$isNodeListEndpoint) {
+    if (!empty($subpath) && !in_array(strtolower($subpath), ['list', 'index', 'index.php', ''])) {
+        $isNodeDetailEndpoint = true;
+        $nodeDetailPublicKey = $subpath;
+    } elseif (preg_match('#/(api/)?node/([a-zA-Z0-9_!\-#\.\+]+)(\.json|\.php)?$#i', $path, $m)) {
+        $rawTarget = trim($m[2]);
+        if (!in_array(strtolower($rawTarget), ['list', 'index', 'index.php', ''])) {
+            $isNodeDetailEndpoint = true;
+            $nodeDetailPublicKey = $rawTarget;
+        }
+    } elseif ((isset($_GET['endpoint']) && in_array(strtolower($_GET['endpoint']), ['node', 'node_detail'])) && !empty($_GET['public_key'])) {
+        $isNodeDetailEndpoint = true;
+        $nodeDetailPublicKey = (string)$_GET['public_key'];
+    } elseif (isset($_GET['action']) && in_array(strtolower($_GET['action']), ['node', 'node_detail']) && !empty($_GET['public_key'])) {
+        $isNodeDetailEndpoint = true;
+        $nodeDetailPublicKey = (string)$_GET['public_key'];
+    }
+}
+
+
 // -----------------------------------------------------------------------------
 // 📡 ENDPOINT: GET /api/api/repeater (arba /api/repeater)
 // Grąžina TIK 1 kartotuvą pagal requested_date prioritetą (tuščia data -> seniausia data)
@@ -240,6 +275,7 @@ if ($isNodesEndpoint) {
     }
 
     $all = isset($_GET['all']) && ($_GET['all'] === '1' || $_GET['all'] === 'true');
+    $targetId = trim((string)($_GET['target'] ?? ($_GET['node_id'] ?? ($_GET['public_key'] ?? ($_GET['node'] ?? '')))));
     $repeaters = $repository->getRepeatersWithLatestTelemetry(!$all);
 
     // =========================================================================
@@ -267,9 +303,93 @@ if ($isNodesEndpoint) {
     }
 
     if ($telemetryOnly) {
-        $repeaters = array_values(array_filter($repeaters, function ($node) {
+        $repeaters = array_values(array_filter($repeaters, function ($node) use ($targetId) {
+            if (!empty($targetId)) {
+                $ct = strtolower(ltrim(trim($targetId), '!#'));
+                if (!empty($node['public_key']) && strtolower($node['public_key']) === $ct) return true;
+                if (!empty($node['node_id']) && strtolower(ltrim($node['node_id'], '!#')) === $ct) return true;
+            }
             return ($node['battery_v'] !== null || $node['temperature_c'] !== null || !empty($node['telemetry_updated_at']));
         }));
+    }
+
+    // Jei buvo nurodytas konkretus mazgas (?target= arba ?node_id= arba ?public_key=), užtikriname, kad jis BŪTŲ grąžintas sąraše
+    if (!empty($targetId) && $repository) {
+        $cleanTarget = strtolower(ltrim(trim($targetId), '!#'));
+        $targetFound = false;
+        foreach ($repeaters as $r) {
+            if (
+                (!empty($r['public_key']) && strtolower($r['public_key']) === $cleanTarget) ||
+                (!empty($r['node_id']) && strtolower(ltrim($r['node_id'], '!#')) === $cleanTarget) ||
+                (strlen($cleanTarget) >= 4 && !empty($r['public_key']) && substr(strtolower($r['public_key']), 0, strlen($cleanTarget)) === $cleanTarget)
+            ) {
+                $targetFound = true;
+                break;
+            }
+        }
+
+        if (!$targetFound) {
+            try {
+                $tStmt = $repository->getPdo()->prepare("
+                    SELECT n.node_id, n.node_name, n.public_key, n.bot_id, n.is_repeater, n.is_disabled,
+                           n.latitude, n.longitude, n.first_seen_at, n.last_seen_at, n.telemetry_updated_at,
+                           b.name AS bot_name, b.enabled AS bot_enabled, b.public_key AS bot_public_key,
+                           b.latitude AS bot_latitude, b.longitude AS bot_longitude
+                    FROM nodes n
+                    LEFT JOIN bots b ON UPPER(n.bot_id) = UPPER(b.bot_id)
+                    WHERE LOWER(n.public_key) = :t1 OR LOWER(n.node_id) = :t2 OR LOWER(n.public_key) LIKE :t3 OR LOWER(n.node_id) LIKE :t4
+                    LIMIT 1
+                ");
+                $tStmt->execute([
+                    ':t1' => $cleanTarget,
+                    ':t2' => $cleanTarget,
+                    ':t3' => $cleanTarget . '%',
+                    ':t4' => '%' . $cleanTarget . '%'
+                ]);
+                $tRow = $tStmt->fetch(PDO::FETCH_ASSOC);
+                if ($tRow) {
+                    $telemStmt = $repository->getPdo()->prepare("
+                        SELECT battery_v, temperature_c, recorded_at
+                        FROM telemetry
+                        WHERE (node_id = :nid OR (public_key IS NOT NULL AND public_key = :pk))
+                          AND type IN ('TELEMETRY', 'STATUS')
+                        ORDER BY recorded_at DESC, id DESC
+                        LIMIT 1
+                    ");
+                    $telemStmt->execute([
+                        ':nid' => $tRow['node_id'] ?: '',
+                        ':pk'  => $tRow['public_key'] ?: ''
+                    ]);
+                    $telemRow = $telemStmt->fetch(PDO::FETCH_ASSOC);
+
+                    $tNodeId = !empty($tRow['node_id']) 
+                        ? (string)$tRow['node_id'] 
+                        : (!empty($tRow['public_key']) ? substr($tRow['public_key'], 0, 4) : 'node');
+
+                    $repeaters[] = [
+                        'name'                 => !empty($tRow['node_name']) ? (string)$tRow['node_name'] : $tNodeId,
+                        'node_id'              => $tNodeId,
+                        'public_key'           => !empty($tRow['public_key']) ? strtolower(trim((string)$tRow['public_key'])) : null,
+                        'bot_id'               => !empty($tRow['bot_id']) ? (string)$tRow['bot_id'] : 'KLP',
+                        'bot_name'             => $tRow['bot_name'] ?? null,
+                        'bot_enabled'          => isset($tRow['bot_enabled']) ? (bool)$tRow['bot_enabled'] : true,
+                        'bot_public_key'       => $tRow['bot_public_key'] ?? null,
+                        'bot_latitude'         => isset($tRow['bot_latitude']) && $tRow['bot_latitude'] !== null ? (float)$tRow['bot_latitude'] : null,
+                        'bot_longitude'        => isset($tRow['bot_longitude']) && $tRow['bot_longitude'] !== null ? (float)$tRow['bot_longitude'] : null,
+                        'is_repeater'          => (bool)$tRow['is_repeater'],
+                        'is_disabled'          => (bool)($tRow['is_disabled'] ?? false),
+                        'latitude'             => ($tRow['latitude'] !== null) ? (float)$tRow['latitude'] : null,
+                        'longitude'            => ($tRow['longitude'] !== null) ? (float)$tRow['longitude'] : null,
+                        'battery_v'            => ($telemRow && $telemRow['battery_v'] !== null) ? (float)$telemRow['battery_v'] : null,
+                        'temperature_c'        => ($telemRow && $telemRow['temperature_c'] !== null) ? (float)$telemRow['temperature_c'] : null,
+                        'telemetry_updated_at' => ($telemRow && !empty($telemRow['recorded_at'])) ? $telemRow['recorded_at'] : $tRow['telemetry_updated_at'],
+                        'telemetry_fail_count' => 0,
+                        'first_seen_at'        => $tRow['first_seen_at'] ?? null,
+                        'last_seen_at'         => $tRow['last_seen_at'],
+                    ];
+                }
+            } catch (\Throwable $e) {}
+        }
     }
 
     $allBots = ($repository) ? $repository->getBotsWithNodeCounts() : [];
@@ -376,6 +496,325 @@ if ($isTelemetryEndpoint) {
     exit;
 }
 
+// -----------------------------------------------------------------------------
+// 📋 ENDPOINT: GET /api/node/list (arba /node/list)
+// Surenka visus įjungtus (enabled) mazgus su telemetrija.
+// Kešuojamas pagal administravimo pulto 'api_cache_ttl_mins' nustatymą (minutėmis).
+// -----------------------------------------------------------------------------
+if ($isNodeListEndpoint) {
+    if ($method !== 'GET') {
+        http_response_code(405);
+        echo json_encode([
+            'success' => false,
+            'error'   => 'Metodas nepalaikomas. /api/node/list priima tik GET užklausas.'
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $apiCacheTtlMins = $repository ? (int)$repository->getSetting('api_cache_ttl_mins', 5) : 5;
+    $cacheService = new \MeshCore\Services\ApiCacheService();
+    $cacheKey = 'node_list';
+
+    // Tikriname kešą
+    $cached = $cacheService->get($cacheKey, $apiCacheTtlMins);
+    if ($cached !== null) {
+        $remaining = $cacheService->getRemainingTtl($cacheKey, $apiCacheTtlMins);
+        header('X-Cache: HIT');
+        header('Cache-Control: public, max-age=' . $remaining);
+        echo $cached;
+        exit;
+    }
+
+    if (!$dbConnected || !$repository) {
+        http_response_code(500);
+        echo json_encode([
+            'success' => false,
+            'error'   => 'Duomenų bazė nepasiekiama: ' . $dbError,
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    // Gauname visus mazgus
+    $allNodes = $repository->getRepeatersWithLatestTelemetry(false);
+
+    // Filtruojame: tik įjungti (is_disabled = false/0/null) IR turintys telemetriją
+    $enabledWithTelemetry = [];
+    foreach ($allNodes as $node) {
+        if (!empty($node['is_disabled'])) {
+            continue;
+        }
+
+        $hasTelemetry = (
+            $node['battery_v'] !== null ||
+            $node['temperature_c'] !== null ||
+            !empty($node['telemetry_updated_at'])
+        );
+
+        if (!$hasTelemetry) {
+            continue;
+        }
+
+        $enabledWithTelemetry[] = [
+            'node_id'              => $node['node_id'],
+            'node_name'            => $node['name'] ?? $node['node_name'] ?? $node['node_id'],
+            'public_key'           => !empty($node['public_key']) ? strtolower(trim((string)$node['public_key'])) : null,
+            'bot_id'               => $node['bot_id'] ?? null,
+            'bot_name'             => $node['bot_name'] ?? null,
+            'bot_enabled'          => isset($node['bot_enabled']) ? (bool)$node['bot_enabled'] : true,
+            'is_repeater'          => (bool)($node['is_repeater'] ?? false),
+            'latitude'             => ($node['latitude'] !== null) ? (float)$node['latitude'] : null,
+            'longitude'            => ($node['longitude'] !== null) ? (float)$node['longitude'] : null,
+            'battery_v'            => ($node['battery_v'] !== null) ? (float)$node['battery_v'] : null,
+            'temperature_c'        => ($node['temperature_c'] !== null) ? (float)$node['temperature_c'] : null,
+            'telemetry_updated_at' => $node['telemetry_updated_at'] ?? null,
+            'last_seen_at'         => $node['last_seen_at'] ?? null,
+            'first_seen_at'        => $node['first_seen_at'] ?? null,
+            'telemetry_fail_count' => (int)($node['telemetry_fail_count'] ?? 0),
+        ];
+    }
+
+    $payload = [
+        'success'     => true,
+        'endpoint'    => '/api/node/list',
+        'ttl_minutes' => $apiCacheTtlMins,
+        'cached'      => false,
+        'count'       => count($enabledWithTelemetry),
+        'nodes'       => $enabledWithTelemetry,
+        'timestamp'   => date('Y-m-d H:i:s'),
+    ];
+
+    $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+    if ($apiCacheTtlMins > 0) {
+        $cacheService->set($cacheKey, $json);
+        header('X-Cache: MISS');
+        header('Cache-Control: public, max-age=' . ($apiCacheTtlMins * 60));
+    } else {
+        header('X-Cache: BYPASS');
+        header('Cache-Control: no-cache, no-store, must-revalidate');
+    }
+
+    echo $json;
+    exit;
+}
+
+// -----------------------------------------------------------------------------
+// 📈 ENDPOINT: GET /node/{public_key} (arba /api/node/{public_key})
+// Grąžina surinktą konkretaus mazgo telemetriją tam tikram dienų skaičiui.
+// Dienų skaičius nustatomas admine ('api_node_telemetry_days', pvz. 7 d.).
+// Kešuojamas pagal tą patį TTL nustatymą ('api_cache_ttl_mins', minutėmis).
+// -----------------------------------------------------------------------------
+if ($isNodeDetailEndpoint) {
+    if ($method !== 'GET') {
+        http_response_code(405);
+        echo json_encode([
+            'success' => false,
+            'error'   => 'Metodas nepalaikomas. /node/{public_key} priima tik GET užklausas.'
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $cleanTarget = strtolower(trim((string)$nodeDetailPublicKey));
+    $strippedTarget = ltrim($cleanTarget, '!#');
+
+    $apiCacheTtlMins = $repository ? (int)$repository->getSetting('api_cache_ttl_mins', 5) : 5;
+    $configuredDays = $repository ? (int)$repository->getSetting('api_node_telemetry_days', 7) : 7;
+    $days = (isset($_GET['days']) && is_numeric($_GET['days']) && (int)$_GET['days'] > 0)
+        ? min(365, (int)$_GET['days'])
+        : $configuredDays;
+
+    $cacheService = new \MeshCore\Services\ApiCacheService();
+    $cacheKey = 'node_' . md5($cleanTarget . '_' . $days);
+
+    // Tikriname kešą
+    $cached = $cacheService->get($cacheKey, $apiCacheTtlMins);
+    if ($cached !== null) {
+        $remaining = $cacheService->getRemainingTtl($cacheKey, $apiCacheTtlMins);
+        header('X-Cache: HIT');
+        header('Cache-Control: public, max-age=' . $remaining);
+        echo $cached;
+        exit;
+    }
+
+    if (!$dbConnected || !$repository) {
+        http_response_code(500);
+        echo json_encode([
+            'success' => false,
+            'error'   => 'Duomenų bazė nepasiekiama: ' . $dbError,
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    // 1. Surandame mazgo duomenis iš 'nodes' lentelės
+    $nodeInfo = null;
+    $resolvedNodeId = $strippedTarget;
+    $resolvedPublicKey = $cleanTarget;
+
+    try {
+        $pdo = $repository->getPdo();
+        $nStmt = $pdo->prepare("
+            SELECT n.node_id, n.node_name, n.public_key, n.bot_id, n.is_repeater, n.is_disabled,
+                   n.latitude, n.longitude, n.battery_v AS advert_battery_v, n.temperature_c AS node_temp_c,
+                   n.first_seen_at, n.last_seen_at, n.telemetry_updated_at, n.telemetry_fail_count,
+                   b.name AS bot_name, b.enabled AS bot_enabled
+            FROM nodes n
+            LEFT JOIN bots b ON UPPER(n.bot_id) = UPPER(b.bot_id)
+            WHERE LOWER(n.public_key) = :pk1
+               OR LOWER(n.node_id) = :nid1
+               OR LOWER(n.node_id) = :nid2
+               OR (LENGTH(:pk_prefix) >= 4 AND LOWER(n.public_key) LIKE :pk_prefix_like)
+               OR LOWER(n.node_name) = :name1
+            LIMIT 1
+        ");
+        $nStmt->execute([
+            ':pk1'            => $cleanTarget,
+            ':nid1'           => $cleanTarget,
+            ':nid2'           => $strippedTarget,
+            ':pk_prefix'      => $strippedTarget,
+            ':pk_prefix_like' => $strippedTarget . '%',
+            ':name1'          => $cleanTarget,
+        ]);
+        $nodeRow = $nStmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($nodeRow) {
+            $resolvedNodeId = $nodeRow['node_id'] ?: $strippedTarget;
+            $resolvedPublicKey = $nodeRow['public_key'] ? strtolower($nodeRow['public_key']) : $cleanTarget;
+
+            $nodeInfo = [
+                'node_id'              => $nodeRow['node_id'],
+                'node_name'            => $nodeRow['node_name'] ?: $nodeRow['node_id'],
+                'public_key'           => $nodeRow['public_key'] ? strtolower($nodeRow['public_key']) : null,
+                'bot_id'               => $nodeRow['bot_id'] ?? null,
+                'bot_name'             => $nodeRow['bot_name'] ?? null,
+                'bot_enabled'          => isset($nodeRow['bot_enabled']) ? (bool)$nodeRow['bot_enabled'] : true,
+                'is_repeater'          => (bool)$nodeRow['is_repeater'],
+                'is_disabled'          => (bool)($nodeRow['is_disabled'] ?? false),
+                'latitude'             => ($nodeRow['latitude'] !== null) ? (float)$nodeRow['latitude'] : null,
+                'longitude'            => ($nodeRow['longitude'] !== null) ? (float)$nodeRow['longitude'] : null,
+                'telemetry_updated_at' => $nodeRow['telemetry_updated_at'],
+                'last_seen_at'         => $nodeRow['last_seen_at'],
+                'first_seen_at'        => $nodeRow['first_seen_at'] ?? null,
+                'telemetry_fail_count' => (int)($nodeRow['telemetry_fail_count'] ?? 0),
+            ];
+        }
+    } catch (\Throwable $e) {}
+
+    // 2. Nuskaitome telemetrijos įrašus nurodytam dienų skaičiui
+    $fromDate = date('Y-m-d H:i:s', strtotime("-{$days} days"));
+    $telemetryRecords = [];
+
+    try {
+        $pdo = $repository->getPdo();
+        $tSql = "
+            SELECT id, recorded_at, type, battery_v, battery_mv, temperature_c,
+                   rssi, snr, noise_floor, uptime_seconds, air_time_seconds,
+                   packets_recv, packets_sent, tx_queue_len, error_count, bot_id
+            FROM telemetry
+            WHERE (
+                LOWER(public_key) = :pk
+                OR LOWER(node_id) = :nid
+                OR LOWER(node_id) = :nid_strip
+                OR (LENGTH(:pk_prefix) >= 4 AND LOWER(public_key) LIKE :pk_prefix_like)
+            )
+            AND type IN ('TELEMETRY', 'STATUS')
+            AND recorded_at >= :from_date
+            ORDER BY recorded_at ASC
+            LIMIT 5000
+        ";
+        $tStmt = $pdo->prepare($tSql);
+        $tStmt->execute([
+            ':pk'             => $resolvedPublicKey,
+            ':nid'            => $resolvedNodeId,
+            ':nid_strip'      => ltrim($resolvedNodeId, '!#'),
+            ':pk_prefix'      => substr($resolvedPublicKey, 0, 8),
+            ':pk_prefix_like' => substr($resolvedPublicKey, 0, 8) . '%',
+            ':from_date'      => $fromDate,
+        ]);
+        $rows = $tStmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+        $tz = new DateTimeZone('Europe/Vilnius');
+
+        foreach ($rows as $r) {
+            $rawDate = $r['recorded_at'];
+            $timeFormatted = $rawDate;
+            $timeShort = $rawDate;
+            $iso = $rawDate;
+
+            try {
+                $dt = new DateTime($rawDate, $tz);
+                $timeFormatted = $dt->format('Y-m-d H:i:s');
+                $timeShort = $dt->format('m-d H:i');
+                $iso = $dt->format(DateTimeInterface::ATOM);
+            } catch (\Throwable $e) {}
+
+            $battV = ($r['battery_v'] !== null)
+                ? (float)$r['battery_v']
+                : (($r['battery_mv'] !== null) ? round(((int)$r['battery_mv']) / 1000.0, 2) : null);
+
+            $tempC = ($r['temperature_c'] !== null) ? (float)$r['temperature_c'] : null;
+
+            $item = [
+                'time'          => $timeFormatted,
+                'time_short'    => $timeShort,
+                'iso'           => $iso,
+                'type'          => $r['type'],
+                'battery_v'     => $battV,
+                'temperature_c' => $tempC,
+            ];
+
+            if ($r['rssi'] !== null) $item['rssi'] = (float)$r['rssi'];
+            if ($r['snr'] !== null) $item['snr'] = (float)$r['snr'];
+            if ($r['noise_floor'] !== null) $item['noise_floor'] = (int)$r['noise_floor'];
+            if ($r['uptime_seconds'] !== null) $item['uptime_seconds'] = (int)$r['uptime_seconds'];
+            if ($r['air_time_seconds'] !== null) $item['air_time_seconds'] = (int)$r['air_time_seconds'];
+            if ($r['packets_recv'] !== null) $item['packets_recv'] = (int)$r['packets_recv'];
+            if ($r['packets_sent'] !== null) $item['packets_sent'] = (int)$r['packets_sent'];
+            if (!empty($r['bot_id'])) $item['bot_id'] = $r['bot_id'];
+
+            $telemetryRecords[] = $item;
+        }
+    } catch (\Throwable $e) {}
+
+    // Jei nerasta nei mazgo informacijos, nei telemetrijos įrašų - grąžiname 404
+    if ($nodeInfo === null && empty($telemetryRecords)) {
+        http_response_code(404);
+        echo json_encode([
+            'success'    => false,
+            'error'      => 'Mazgas su nurodytu raktu nerastas arba neturi telemetrijos duomenų.',
+            'public_key' => $cleanTarget,
+            'days'       => $days,
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $payload = [
+        'success'     => true,
+        'endpoint'    => '/node/' . $cleanTarget,
+        'public_key'  => $resolvedPublicKey ?: $cleanTarget,
+        'days'        => $days,
+        'ttl_minutes' => $apiCacheTtlMins,
+        'cached'      => false,
+        'node'        => $nodeInfo,
+        'count'       => count($telemetryRecords),
+        'telemetry'   => $telemetryRecords,
+        'timestamp'   => date('Y-m-d H:i:s'),
+    ];
+
+    $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+    if ($apiCacheTtlMins > 0) {
+        $cacheService->set($cacheKey, $json);
+        header('X-Cache: MISS');
+        header('Cache-Control: public, max-age=' . ($apiCacheTtlMins * 60));
+    } else {
+        header('X-Cache: BYPASS');
+        header('Cache-Control: no-cache, no-store, must-revalidate');
+    }
+
+    echo $json;
+    exit;
+}
+
 // GET užklausos atveju pateikiame endpoint informaciją, būseną ir eilių statistiką
 if ($method === 'GET') {
     $stats = ($dbConnected && $repository) ? $repository->getStats() : null;
@@ -402,6 +841,8 @@ if ($method === 'GET') {
             'GET /api/repeater' => 'Grąžina TIK 1 kartotuvą eilėje (su tuščia arba seniausia requested_date) ir pažymi DB requested_date = CURRENT_TIMESTAMP.',
             'GET /api/repyters'     => 'Grąžina visų stebimų kartotuvų sąrašą tiksliai tokiu formatu, kokio reikalauja ESP32 bot (name, public_id, password, isDirect, status, telemetry).',
             'GET /api/nodes'        => 'Grąžina žemėlapiui optimizuotus kartotuvus (nodes) su paskutine telemetrija, surūšiuotus pagal telemetrijos atnaujinimo datą nuo naujausio.',
+            'GET /api/node/list'    => 'Grąžina visus įjungtus (enabled) mazgus su telemetrija. Atsakymas kešuojamas (TTL nustatomas admine minutėmis).',
+            'GET /node/{public_key}' => 'Grąžina konkretaus mazgo surinktą telemetriją per nurodytą dienų skaičių (nustatoma admine dienomis). Kešuojamas pagal TTL.',
             'POST /api/raw'         => 'Visas LoRa srautas (RX/TX) išsaugomas DB eilėje (processed = false). Dekodavimas vyksta fone per process_queue.php.',
         ],
         'deprecated_endpoints' => [

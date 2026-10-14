@@ -478,6 +478,7 @@ SQL;
             $result[] = [
                 'name'                 => !empty($row['node_name']) ? (string)$row['node_name'] : $nodeId,
                 'node_id'              => $nodeId,
+                'public_key'           => !empty($row['public_key']) ? strtolower(trim((string)$row['public_key'])) : null,
                 'bot_id'               => !empty($row['bot_id']) ? (string)$row['bot_id'] : 'KLP',
                 'bot_name'             => $row['bot_name'] ?? null,
                 'bot_enabled'          => isset($row['bot_enabled']) ? (bool)$row['bot_enabled'] : true,
@@ -627,13 +628,15 @@ SQL;
         }
 
         $clean = trim(strtolower($nodeIdentifier));
+        $stripped = ltrim($clean, '!#');
         $resolvedNodeId = $clean;
         $resolvedPubKey = $clean;
 
         try {
-            $nStmt = $this->pdo->prepare("SELECT node_id, public_key, node_name FROM nodes WHERE LOWER(node_id) = :id1 OR LOWER(public_key) = :id2 OR LOWER(public_key) LIKE :id3 OR LOWER(node_name) = :id4 LIMIT 1");
+            $nStmt = $this->pdo->prepare("SELECT node_id, public_key, node_name FROM nodes WHERE LOWER(node_id) = :id1 OR LOWER(node_id) = :id1_strip OR LOWER(public_key) = :id2 OR LOWER(public_key) LIKE :id3 OR LOWER(node_name) = :id4 LIMIT 1");
             $nStmt->execute([
                 ':id1' => $clean,
+                ':id1_strip' => $stripped,
                 ':id2' => $clean,
                 ':id3' => $clean . '%',
                 ':id4' => $clean,

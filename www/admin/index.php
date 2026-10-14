@@ -1434,6 +1434,51 @@ $isLoggedIn = isAdminLoggedIn();
                             </div>
                         </div>
 
+                        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 16px; margin-bottom: 20px;">
+                            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
+                                <div style="max-width: 580px;">
+                                    <div style="font-size: 0.95rem; font-weight: 600; color: #ffffff;">
+                                        Viešo API kešavimo TTL (minutėmis)
+                                    </div>
+                                    <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
+                                        Nustato, kiek laiko <code>/api/node/list</code> ir <code>/node/{public_key}</code> atsakymai saugomi spartinančiojoje atmintinėje (failų keše), sumažinant duomenų bazės apkrovą.
+                                        <br><span style="color: var(--accent-cyan);">Numatyta reikšmė: <b>5</b> min. Įveskite <b>0</b>, jei norite kešavimą išjungti (visada realiu laiku iš DB).</span>
+                                    </div>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="number" min="0" max="1440" step="1" id="settingApiCacheTtlMins" class="form-control" style="width: 100px; font-weight: 700; text-align: center; font-size: 1rem;" placeholder="5" required>
+                                    <span style="font-size: 0.82rem; color: var(--text-muted);">min.</span>
+                                </div>
+                            </div>
+
+                            <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.06); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                                <div style="font-size: 0.78rem; color: var(--text-dim);">
+                                    Reikia iškart atnaujinti viešus endpointus ir ištrinti visus kešo failus?
+                                </div>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="clearApiCache()">
+                                    <span>🗑️ Išvalyti API kešą</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 16px; margin-bottom: 20px;">
+                            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
+                                <div style="max-width: 580px;">
+                                    <div style="font-size: 0.95rem; font-weight: 600; color: #ffffff;">
+                                        Mazgo telemetrijos istorijos periodas viešam API (dienomis)
+                                    </div>
+                                    <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
+                                        Kelių dienų surinktą telemetrijos istoriją atiduoda endpointas <code>/node/{public_key}</code>.
+                                        <br><span style="color: var(--accent-cyan);">Numatyta reikšmė: <b>7</b> d. Galite nurodyti pvz. <b>1</b>, <b>3</b>, <b>7</b>, <b>14</b> ar <b>30</b> dienų.</span>
+                                    </div>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="number" min="1" max="365" step="1" id="settingApiNodeTelemetryDays" class="form-control" style="width: 100px; font-weight: 700; text-align: center; font-size: 1rem;" placeholder="7" required>
+                                    <span style="font-size: 0.82rem; color: var(--text-muted);">d.</span>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- Išsaugojimas ir pranešimas -->
                         <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 24px;">
                             <div id="settingsFeedback" style="font-size: 0.85rem; font-weight: 500;"></div>
@@ -4082,6 +4127,11 @@ $isLoggedIn = isAdminLoggedIn();
                 if (chartDaysEl) chartDaysEl.value = currentSettings.telemetry_chart_days ?? 7;
                 if (maxTelemAgeDaysEl) maxTelemAgeDaysEl.value = currentSettings.max_telemetry_age_days ?? 0;
 
+                const apiTtlEl = document.getElementById('settingApiCacheTtlMins');
+                if (apiTtlEl) apiTtlEl.value = currentSettings.api_cache_ttl_mins ?? 5;
+                const apiTelemDaysEl = document.getElementById('settingApiNodeTelemetryDays');
+                if (apiTelemDaysEl) apiTelemDaysEl.value = currentSettings.api_node_telemetry_days ?? 7;
+
                 const autoAddRepEl = document.getElementById('settingAutoAddNewRepeaters');
                 if (autoAddRepEl) autoAddRepEl.checked = !!currentSettings.auto_add_new_repeaters;
 
@@ -4156,6 +4206,8 @@ $isLoggedIn = isAdminLoggedIn();
                     min_retry_interval_mins: parseInt(document.getElementById('settingMinRetryIntervalMins')?.value || '15', 10),
                     telemetry_chart_days: parseInt(document.getElementById('settingTelemetryChartDays')?.value || '7', 10),
                     max_telemetry_age_days: parseInt(document.getElementById('settingMaxTelemetryAgeDays')?.value || '0', 10),
+                    api_cache_ttl_mins: parseInt(document.getElementById('settingApiCacheTtlMins')?.value || '5', 10),
+                    api_node_telemetry_days: parseInt(document.getElementById('settingApiNodeTelemetryDays')?.value || '7', 10),
                     auto_add_new_repeaters: document.getElementById('settingAutoAddNewRepeaters')?.checked ?? false
                 };
 
@@ -4189,6 +4241,18 @@ $isLoggedIn = isAdminLoggedIn();
                     btn.disabled = false;
                     btn.innerHTML = originalBtnHtml;
                 }
+            }
+        }
+
+        async function clearApiCache() {
+            if (!confirm('Ar tikrai norite išvalyti visą viešo API kešą?\n\nKitos /api/node/list ir /node/{public_key} užklausos duomenis nuskaitys tiesiai iš duomenų bazės.')) return;
+            try {
+                const res = await fetch('api.php?action=clear_api_cache');
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || 'Nepavyko išvalyti kešo');
+                showToast(data.message || 'API kešas sėkmingai išvalytas!', 'success');
+            } catch (err) {
+                alert('Klaida valant kešą: ' + err.message);
             }
         }
 

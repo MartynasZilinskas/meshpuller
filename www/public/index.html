@@ -34,6 +34,8 @@
         window.closeMobileSheet = function() { if (window._closeMobileSheet) return window._closeMobileSheet(); };
         window.sheetActionFocus = function() { if (window._sheetActionFocus) return window._sheetActionFocus(); };
         window.sheetActionNavigate = function() { if (window._sheetActionNavigate) return window._sheetActionNavigate(); };
+        window.changeSheetChartDays = function(d) { if (window._changeSheetChartDays) return window._changeSheetChartDays(d); };
+        window.changePopupChartDays = function(n, q, d) { if (window._changePopupChartDays) return window._changePopupChartDays(n, q, d); };
     </script>
     
     <style>
@@ -1061,17 +1063,172 @@
             justify-content: space-between;
         }
 
+        /* ℹ️ Info mygtukas žemėlapio popup kortelėje */
+        .card-info-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid var(--border-light);
+            color: #ffffff;
+            border-radius: 50%;
+            font-size: 0.75rem;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: all 0.15s ease;
+            text-decoration: none;
+            line-height: 1;
+            padding: 0;
+        }
+
+        .card-info-btn:hover {
+            background: rgba(0, 210, 255, 0.25);
+            border-color: var(--accent-cyan);
+            color: #00d2ff;
+            transform: scale(1.08);
+        }
+
+        .card-info-btn:active {
+            background: var(--accent-cyan);
+            color: #000000;
+            transform: scale(0.95);
+        }
+
+        /* 📈 7, 14, 30 dienų grafiko laikotarpio parinkiklis */
+        .chart-days-pill-group {
+            display: inline-flex;
+            align-items: center;
+            background: #141414;
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            padding: 2px;
+            gap: 2px;
+        }
+
+        .chart-days-pill {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            font-size: 0.68rem;
+            font-weight: 700;
+            padding: 2px 7px;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            line-height: 1.2;
+        }
+
+        .chart-days-pill:hover {
+            color: #ffffff;
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .chart-days-pill.active {
+            background: var(--accent-cyan);
+            color: #000000;
+            box-shadow: 0 0 8px rgba(0, 210, 255, 0.4);
+        }
+
+        .sheet-close-btn {
+            width: 26px;
+            height: 26px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid var(--border-color);
+            color: #cccccc;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.82rem;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: all 0.15s ease;
+        }
+
+        .sheet-close-btn:hover {
+            background: rgba(255, 255, 255, 0.16);
+            color: #ffffff;
+            border-color: var(--accent-cyan);
+        }
+
         /* ==========================================================================
            MOBILUS UX/UI PRITAIKYMAS (<= 768px)
            Atskiria sąrašą ir žemėlapį/informaciją, kad kiekvienas rodinys turėtų 100% vietos.
            ========================================================================== */
 
-        /* Dideliuose ekranuose slepiame mobilius elementus */
+        /* Dideliuose ekranuose slepiame mobilius valdymo skirtukus */
         .mobile-view-tabs,
-        .mobile-floating-switcher,
-        .mobile-info-sheet,
-        .card-info-btn {
+        .mobile-floating-switcher {
             display: none;
+        }
+
+        /* Desktop modal lango stilius išsamiai mazgo statistikai (kai atidaroma nuoroda ar spaudžiama info) */
+        @media (min-width: 769px) {
+            .mobile-info-sheet {
+                display: flex;
+                position: fixed;
+                inset: 0;
+                z-index: 3000;
+                align-items: center;
+                justify-content: center;
+                pointer-events: none;
+                opacity: 0;
+                visibility: hidden;
+                transition: opacity 0.25s ease, visibility 0.25s ease;
+            }
+
+            .mobile-info-sheet.active {
+                opacity: 1;
+                visibility: visible;
+                pointer-events: auto;
+            }
+
+            .mobile-info-sheet .sheet-backdrop {
+                position: absolute;
+                inset: 0;
+                background: rgba(0, 0, 0, 0.65);
+                backdrop-filter: blur(4px);
+                -webkit-backdrop-filter: blur(4px);
+            }
+
+            .mobile-info-sheet .sheet-content {
+                position: relative;
+                width: 92%;
+                max-width: 680px;
+                background: #1e1e1e;
+                border: 1px solid var(--border-light);
+                border-radius: var(--radius-lg);
+                padding: 18px 22px;
+                box-shadow: 0 20px 60px rgba(0, 0, 0, 0.9);
+                max-height: 90vh;
+                overflow-y: auto;
+                transform: scale(0.95);
+                transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+            }
+
+            .mobile-info-sheet.active .sheet-content {
+                transform: scale(1);
+            }
+
+            .mobile-info-sheet .sheet-drag-handle {
+                display: none;
+            }
+        }
+
+        .modal-stat-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        @media (max-width: 640px) {
+            .modal-stat-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
         }
 
         @media (max-width: 768px) {
@@ -1257,29 +1414,6 @@
                 font-size: 0.72rem;
             }
 
-            /* Info mygtukas kortelėje tiesioginei peržiūrai */
-            .card-info-btn {
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                width: 28px;
-                height: 28px;
-                background: rgba(255, 255, 255, 0.08);
-                border: 1px solid var(--border-light);
-                color: #ffffff;
-                border-radius: 50%;
-                font-size: 0.75rem;
-                cursor: pointer;
-                flex-shrink: 0;
-                margin-left: 6px;
-                transition: all 0.15s ease;
-            }
-
-            .card-info-btn:active {
-                background: var(--accent-cyan);
-                color: #000000;
-            }
-
             /* Plaukiojantis mygtukas apačioje (Floating Action Pill) */
             .mobile-floating-switcher {
                 display: block;
@@ -1359,10 +1493,10 @@
                 bottom: 0;
                 left: 0;
                 right: 0;
-                background: linear-gradient(180deg, #222222 0%, #1a1a1a 100%);
+                background: #1e1e1e;
                 border-top: 1px solid var(--border-light);
                 border-radius: 18px 18px 0 0;
-                padding: 14px 16px 20px 16px;
+                padding: 12px 14px 20px 14px;
                 padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
                 box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.8);
                 transform: translateY(100%);
@@ -1670,64 +1804,76 @@
             </button>
         </div>
 
-        <!-- Mobilus mazgo informacijos skydelis (Bottom Sheet) -->
+        <!-- Mobilus ir Desktop išsamios informacijos Bottom Sheet / Modal -->
         <div class="mobile-info-sheet" id="mobileInfoSheet">
             <div class="sheet-backdrop" onclick="closeMobileSheet()"></div>
             <div class="sheet-content">
                 <div class="sheet-drag-handle" onclick="closeMobileSheet()"></div>
                 
-                <div class="sheet-header">
-                    <div class="sheet-title-group">
-                        <span class="node-badge-id" id="sheetNodeBadge">ID</span>
-                        <h2 class="sheet-node-name" id="sheetNodeName">Pavadinimas</h2>
-                        <span class="node-bot-badge" id="sheetBotBadge">🤖 KLP</span>
+                <div style="width: 100%; font-family: var(--font-sans);">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px;">
+                        <div style="flex: 1; min-width: 0;">
+                            <div class="popup-header" style="font-size: 1.25rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 3px;">
+                                <span class="node-badge-id" id="sheetNodeBadge" style="margin-right: 8px; font-size: 0.95rem;">ID</span>
+                                <span id="sheetNodeName">Pavadinimas</span>
+                            </div>
+                            <div class="popup-id" style="font-size: 0.8rem; margin-bottom: 0;">
+                                <span id="sheetNodeType">KARTOTUVAS</span> • <span style="color:#c084fc; font-weight:600;" id="sheetBotBadge">🤖 KLP</span>
+                            </div>
+                        </div>
+                        <button class="sheet-close-btn" onclick="closeMobileSheet()" aria-label="Uždaryti" title="Uždaryti">✕</button>
                     </div>
-                    <button class="sheet-close-btn" onclick="closeMobileSheet()" aria-label="Uždaryti">✕</button>
-                </div>
 
-                <div class="sheet-type-pill" id="sheetNodeType">KARTOTUVAS</div>
+                    <!-- 4 stulpelių rodmenų kortelės (Baterija, Temperatūra, Koordinatės, Viešas raktas) -->
+                    <div class="modal-stat-grid">
+                        <div class="popup-stat">
+                            <div class="popup-stat-val" id="sheetBatteryVal">- V</div>
+                            <div class="popup-stat-lbl">🔋 Srovė / Įtampa</div>
+                        </div>
+                        <div class="popup-stat">
+                            <div class="popup-stat-val" style="color: var(--accent-cyan);" id="sheetTempVal">- °C</div>
+                            <div class="popup-stat-lbl">🌡️ Temp.</div>
+                        </div>
+                        <div class="popup-stat">
+                            <div class="popup-stat-val" style="color: #60a5fa; font-size: 0.85rem;" id="sheetCoordsVal">-</div>
+                            <div class="popup-stat-lbl">📍 Koordinatės</div>
+                        </div>
+                        <div class="popup-stat">
+                            <div class="popup-stat-val" style="color: #c084fc; font-size: 0.82rem;" id="sheetPubKeyVal">-</div>
+                            <div class="popup-stat-lbl">🔑 Viešas raktas</div>
+                        </div>
+                    </div>
 
-                <!-- Rodmenų kortelės (Baterija ir Temperatūra) -->
-                <div class="sheet-metrics-grid">
-                    <div class="sheet-metric-card" id="sheetBatteryCard">
-                        <div class="sheet-metric-label">🔋 Baterijos įtampa</div>
-                        <div class="sheet-metric-val" id="sheetBatteryVal">- V</div>
-                        <div class="sheet-metric-sub" id="sheetBatterySub">Atnaujinimas: -</div>
+                    <!-- Telemetrijos grafiko sekcija su 7, 14, 30, 60, 90 d. pasirinkimu -->
+                    <div class="popup-chart-box" style="margin-top: 10px; padding: 12px 14px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px; flex-wrap: wrap; gap: 6px;">
+                            <span style="font-size: 0.82rem; font-weight: 700; color: #ffffff;" id="sheetChartTitle">📈 7 d. telemetrijos grafikas</span>
+                            <div class="chart-days-pill-group">
+                                <button type="button" class="chart-days-pill sheet-days-pill active" data-days="7" onclick="changeSheetChartDays(7)">7 d.</button>
+                                <button type="button" class="chart-days-pill sheet-days-pill" data-days="14" onclick="changeSheetChartDays(14)">14 d.</button>
+                                <button type="button" class="chart-days-pill sheet-days-pill" data-days="30" onclick="changeSheetChartDays(30)">30 d.</button>
+                                <button type="button" class="chart-days-pill sheet-days-pill" data-days="60" onclick="changeSheetChartDays(60)">60 d.</button>
+                                <button type="button" class="chart-days-pill sheet-days-pill" data-days="90" onclick="changeSheetChartDays(90)">90 d.</button>
+                            </div>
+                        </div>
+                        <div style="display:flex; justify-content:flex-end; margin-bottom: 6px;">
+                            <span style="font-size: 0.72rem; color: var(--text-dim);" id="sheetChartSub">Kraunama...</span>
+                        </div>
+                        <div style="position: relative; height: 240px; width: 100%;">
+                            <canvas id="sheetTelemetryChart"></canvas>
+                        </div>
                     </div>
-                    <div class="sheet-metric-card" id="sheetTempCard">
-                        <div class="sheet-metric-label">🌡️ Temperatūra</div>
-                        <div class="sheet-metric-val" id="sheetTempVal">- °C</div>
-                        <div class="sheet-metric-sub" id="sheetTempSub">Atnaujinimas: -</div>
-                    </div>
-                </div>
 
-                <!-- Detalios informacijos sąrašas -->
-                <div class="sheet-details-list">
-                    <div class="sheet-detail-item">
-                        <span class="detail-label">⏱️ Paskutinė telemetrija</span>
-                        <span class="detail-value highlight" id="sheetTelemVal">prieš 2 min.</span>
+                    <div class="popup-footer" style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px; padding-top: 8px; flex-wrap: wrap; gap: 6px; font-size: 0.74rem;">
+                        <div style="color: #a78bfa;">
+                            <span>⏱️ Paskutinė telemetrija: </span>
+                            <strong id="sheetTelemVal">Nėra duomenų</strong>
+                        </div>
+                        <div style="color: var(--text-dim);">
+                            <span>👁️ Paskutinį kartą matytas: </span>
+                            <strong id="sheetSeenVal" style="color: #ffffff;">-</strong>
+                        </div>
                     </div>
-                </div>
-
-                <!-- Telemetrijos grafikas mobiliajame skydelyje -->
-                <div class="sheet-chart-box" style="margin-top: 14px; background: rgba(0, 0, 0, 0.25); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 12px 10px;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px;">
-                        <span style="font-size: 0.82rem; font-weight: 600; color: #ffffff;" id="sheetChartTitle">📈 Savaitės statistikos grafikas</span>
-                        <span style="font-size: 0.70rem; color: var(--text-dim);" id="sheetChartSub">Kraunama...</span>
-                    </div>
-                    <div style="position: relative; height: 160px; width: 100%;">
-                        <canvas id="sheetTelemetryChart"></canvas>
-                    </div>
-                </div>
-
-                <!-- Veiksmų mygtukai -->
-                <div class="sheet-actions">
-                    <button class="sheet-action-btn primary" id="sheetFocusBtn" onclick="sheetActionFocus()">
-                        <span>🗺️ Centruoti žemėlapyje</span>
-                    </button>
-                    <button class="sheet-action-btn secondary" id="sheetNavBtn" onclick="sheetActionNavigate()">
-                        <span>🧭 Google Maps</span>
-                    </button>
                 </div>
             </div>
         </div>
@@ -2087,7 +2233,49 @@
             if (floatingText) floatingText.innerText = isMap ? 'Rodyti sąrašą' : 'Rodyti žemėlapį';
         }
 
-        // Mobilus Bottom Sheet informacijos atidarymas
+        let currentSheetDays = 7;
+        const nodePopupChartDays = {};
+
+        function updateSheetDaysPills(days) {
+            document.querySelectorAll('.sheet-days-pill').forEach(btn => {
+                if (parseInt(btn.getAttribute('data-days'), 10) === days) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+            });
+        }
+
+        function changeSheetChartDays(days) {
+            if (!selectedMobileNode) return;
+            currentSheetDays = days;
+            updateSheetDaysPills(days);
+            const chartTitleEl = document.getElementById('sheetChartTitle');
+            if (chartTitleEl) chartTitleEl.innerText = `📈 ${days} d. grafikas`;
+            const queryChartId = selectedMobileNode.node_id || selectedMobileNode.public_key || 'node';
+            loadAndRenderNodeChart('sheetTelemetryChart', 'sheetChartSub', queryChartId, days);
+        }
+
+        function changePopupChartDays(nodeId, queryChartId, days) {
+            nodePopupChartDays[nodeId] = days;
+            const titleEl = document.getElementById(`popup-chart-title-${nodeId}`);
+            if (titleEl) titleEl.innerText = `📈 ${days} d. grafikas`;
+
+            const popupEl = document.getElementById(`popup-chart-${nodeId}`)?.closest('.popup-card');
+            if (popupEl) {
+                popupEl.querySelectorAll('.popup-days-pill').forEach(btn => {
+                    if (parseInt(btn.getAttribute('data-days'), 10) === days) {
+                        btn.classList.add('active');
+                    } else {
+                        btn.classList.remove('active');
+                    }
+                });
+            }
+
+            loadAndRenderNodeChart(`popup-chart-${nodeId}`, `popup-chart-sub-${nodeId}`, queryChartId, days);
+        }
+
+        // Mobilus ir Desktop informacijos modal/sheet atidarymas
         function openMobileSheet(node) {
             if (!node) return;
             selectedMobileNode = node;
@@ -2095,13 +2283,9 @@
             const nodeId = node.node_id || (node.public_key ? node.public_key.substring(0, 4) : 'node');
             const name = node.name || node.node_id || 'Kartotuvas';
             const botId = String(node.bot_id || 'KLP').replace(/[^a-zA-Z0-9_-]/g, '');
-            const telemTime = node.telemetry_updated_at || '';
-            const lastSeen = node.last_seen_at || '';
-            const battV = node.battery_v !== null ? node.battery_v : null;
-            const tempC = node.temperature_c !== null ? node.temperature_c : null;
-            const lat = node.latitude;
-            const lon = node.longitude;
-            const hasValidCoords = (lat !== null && lon !== null && Math.abs(lat) > 0.001 && Math.abs(lon) > 0.001);
+            const telemTime = node.telemetry_updated_at || (node.telemetry ? (node.telemetry.telemetry_updated_at || node.telemetry.last_telemetry_at) : null) || '';
+            const battV = (node.battery_v !== null && node.battery_v !== undefined) ? node.battery_v : (node.telemetry ? node.telemetry.battery_v : null);
+            const tempC = (node.temperature_c !== null && node.temperature_c !== undefined) ? node.temperature_c : (node.telemetry ? node.telemetry.temperature_c : null);
 
             const battStyle = getBatteryStyle(battV);
             const tempStyle = getTempStyle(tempC);
@@ -2110,37 +2294,73 @@
             const botBadgeText = botName ? `🤖 ${botId} (${botName})` : `🤖 ${botId}`;
             const botBadgeTitle = botName ? `Gauta per ESP32 vartus: ${botName} [${botId}]` : `Gauta per ESP32 vartus: ${botId}`;
 
-            document.getElementById('sheetNodeBadge').innerText = nodeId.toUpperCase();
-            document.getElementById('sheetNodeName').innerText = name;
-            document.getElementById('sheetNodeName').title = name;
-            document.getElementById('sheetBotBadge').innerText = botBadgeText;
-            document.getElementById('sheetBotBadge').title = botBadgeTitle;
-            document.getElementById('sheetNodeType').innerText = node.is_repeater ? 'KARTOTUVAS' : 'MAZGAS';
+            const badgeEl = document.getElementById('sheetNodeBadge');
+            if (badgeEl) badgeEl.innerText = nodeId.toUpperCase();
+            const nameEl = document.getElementById('sheetNodeName');
+            if (nameEl) {
+                nameEl.innerText = name;
+                nameEl.title = name;
+            }
+            const botEl = document.getElementById('sheetBotBadge');
+            if (botEl) {
+                botEl.innerText = botBadgeText;
+                botEl.title = botBadgeTitle;
+            }
+            const typeEl = document.getElementById('sheetNodeType');
+            if (typeEl) typeEl.innerText = node.is_repeater ? 'KARTOTUVAS' : 'MAZGAS';
 
             const battEl = document.getElementById('sheetBatteryVal');
-            battEl.innerText = battV !== null ? `${parseFloat(battV).toFixed(2)} V` : 'N/A';
-            battEl.style.color = battStyle.class === 'crit' ? '#ef4444' : (battStyle.class === 'warn' ? '#ffc107' : '#2ed573');
-            document.getElementById('sheetBatterySub').innerText = telemTime ? `Atnaujinta: ${formatRelativeTime(telemTime)}` : 'Nėra duomenų';
+            if (battEl) {
+                battEl.innerText = battV !== null ? `${parseFloat(battV).toFixed(2)} V` : 'N/A';
+                battEl.style.color = battStyle.class === 'crit' ? '#ef4444' : (battStyle.class === 'warn' ? '#ffc107' : '#10b981');
+            }
 
             const tempEl = document.getElementById('sheetTempVal');
-            tempEl.innerText = tempC !== null ? tempStyle.text : 'N/A';
-            tempEl.style.color = 'var(--accent-cyan)';
-            document.getElementById('sheetTempSub').innerText = telemTime ? `Atnaujinta: ${formatRelativeTime(telemTime)}` : 'Nėra duomenų';
+            if (tempEl) {
+                tempEl.innerText = tempC !== null ? tempStyle.text : 'N/A';
+                tempEl.style.color = 'var(--accent-cyan)';
+            }
+
+            const lat = node.latitude || (node.location ? node.location.latitude : null);
+            const lon = node.longitude || (node.location ? node.location.longitude : null);
+            const hasCoords = (lat !== null && lon !== null && Math.abs(lat) > 0.001 && Math.abs(lon) > 0.001);
+            const coordsEl = document.getElementById('sheetCoordsVal');
+            if (coordsEl) {
+                coordsEl.innerText = hasCoords ? `${parseFloat(lat).toFixed(3)}, ${parseFloat(lon).toFixed(3)}` : 'Be koord.';
+                coordsEl.title = hasCoords ? `${lat}, ${lon}` : 'GPS koordinatės nenurodytos';
+            }
+
+            const pubKey = node.public_key ? String(node.public_key).trim() : '';
+            const pubKeyEl = document.getElementById('sheetPubKeyVal');
+            if (pubKeyEl) {
+                if (pubKey) {
+                    const shortKey = pubKey.length > 10 ? (pubKey.substring(0, 4) + '…' + pubKey.substring(pubKey.length - 4)) : pubKey;
+                    pubKeyEl.innerHTML = `<span style="cursor:pointer;" onclick="if(navigator.clipboard){navigator.clipboard.writeText('${pubKey}');} alert('Nukopijuotas viešas raktas:\\n${pubKey}');" title="Spustelėkite nukopijuoti pilną raktą: ${pubKey}">📋 ${shortKey}</span>`;
+                } else {
+                    pubKeyEl.innerText = 'Nėra';
+                }
+            }
 
             const telemValEl = document.getElementById('sheetTelemVal');
             if (telemValEl) {
-                telemValEl.innerText = telemTime ? `${formatRelativeTime(telemTime)} (${formatLithuanianTime(telemTime)})` : 'Nėra telemetrijos';
+                telemValEl.innerText = telemTime ? `${formatRelativeTime(telemTime)} (${formatLithuanianTime(telemTime, false)})` : 'Nėra telemetrijos';
+                telemValEl.title = telemTime ? formatLithuanianDateTime(telemTime) : '';
             }
 
-            const navBtn = document.getElementById('sheetNavBtn');
-            if (navBtn) {
-                navBtn.style.display = hasValidCoords ? 'flex' : 'none';
+            const lastSeen = node.last_seen || null;
+            const seenEl = document.getElementById('sheetSeenVal');
+            if (seenEl) {
+                seenEl.innerText = lastSeen ? `${formatRelativeTime(lastSeen)} (${formatLithuanianTime(lastSeen, false)})` : 'Nėra duomenų';
+                seenEl.title = lastSeen ? formatLithuanianDateTime(lastSeen) : '';
             }
 
+            const daysToUse = currentSheetDays || telemetryChartDays || 7;
+            updateSheetDaysPills(daysToUse);
             const chartTitleEl = document.getElementById('sheetChartTitle');
-            if (chartTitleEl) chartTitleEl.innerText = `📈 ${telemetryChartDays} d. statistikos grafikas`;
+            if (chartTitleEl) chartTitleEl.innerText = `📈 ${daysToUse} d. telemetrijos grafikas`;
 
-            loadAndRenderNodeChart('sheetTelemetryChart', 'sheetChartSub', nodeId, telemetryChartDays);
+            const queryChartId = node.node_id || node.public_key || nodeId;
+            loadAndRenderNodeChart('sheetTelemetryChart', 'sheetChartSub', queryChartId, daysToUse);
 
             const sheet = document.getElementById('mobileInfoSheet');
             if (sheet) sheet.classList.add('active');
@@ -2422,14 +2642,85 @@
             fetchNodesData(true);
         }
 
+        // Ištraukia mazgo identifikatorių iš URL adreso (#1bbd, #0815fe..., arba ?node=1bbd)
+        function getUrlNodeIdentifier() {
+            if (window.location.hash) {
+                let hash = window.location.hash.replace(/^#[!/]?/, '').trim();
+                if (hash) {
+                    try { hash = decodeURIComponent(hash); } catch (e) {}
+                    return hash;
+                }
+            }
+            try {
+                const params = new URLSearchParams(window.location.search);
+                const q = params.get('node') || params.get('node_id') || params.get('key') || params.get('public_key') || params.get('target');
+                if (q && q.trim()) return q.trim();
+            } catch (e) {}
+            return null;
+        }
+
+        // Tikrina ar mazgas atitinka nurodytą identifikatorių (node_id arba public_key)
+        function matchesNodeIdentifier(node, ident) {
+            if (!node || !ident) return false;
+            const cleanIdent = String(ident).replace(/^0x/i, '').replace(/^[#!]+/, '').trim().toLowerCase();
+            if (!cleanIdent) return false;
+
+            const rawId = String(node.node_id || '').replace(/^0x/i, '').trim().toLowerCase();
+            const cleanId = rawId.replace(/^[#!]+/, '');
+            const pubKey = String(node.public_key || node.public_id || node.key || '').replace(/^0x/i, '').trim().toLowerCase();
+
+            // 1. Tikslus arba prefiksinis public_key sutapimas
+            if (pubKey) {
+                if (pubKey === cleanIdent) return true;
+                if (pubKey.startsWith(cleanIdent)) return true;
+                if (cleanIdent.startsWith(pubKey)) return true;
+            }
+
+            // 2. node_id sutapimas (su arba be šauktuko / grotelių)
+            if (rawId === cleanIdent || cleanId === cleanIdent) return true;
+
+            // 3. Jei cleanIdent yra ilgas public_key (pvz. 64 simbolių), o cleanId yra jo pradžia (pvz. pirmieji 4 simboliai)
+            if (cleanId.length >= 4 && cleanIdent.startsWith(cleanId)) return true;
+
+            // 4. Jei cleanIdent trumpas, o cleanId prasideda juo
+            if (cleanIdent.length >= 4 && cleanId.startsWith(cleanIdent)) return true;
+
+            // 5. Pavadinimo sutapimas
+            const name = String(node.name || '').trim().toLowerCase();
+            if (name && (name === cleanIdent || name === cleanIdent.replace(/^[#!]+/, ''))) return true;
+
+            return false;
+        }
+
+        // Suranda mazgą pagal bet kokį identifikatorių
+        function findNodeByIdentifier(ident) {
+            if (!ident) return null;
+            if (typeof ident === 'object' && ident !== null) return ident;
+            if (Array.isArray(repeaters) && repeaters.length > 0) {
+                const found = repeaters.find(n => matchesNodeIdentifier(n, ident));
+                if (found) return found;
+            }
+            if (Array.isArray(allLoadedNodes) && allLoadedNodes.length > 0) {
+                const found = allLoadedNodes.find(n => matchesNodeIdentifier(n, ident));
+                if (found) return found;
+            }
+            return null;
+        }
+
         // Gauna mazgų duomenis iš /api/nodes
         async function fetchNodesData(animateBtn = false) {
             const btn = document.getElementById('refreshBtn');
             if (animateBtn && btn) btn.classList.add('rotating');
 
+            const deepLinkId = getUrlNodeIdentifier();
             const hideNoTelemetry = localStorage.getItem('meshcore_hide_no_telemetry') === 'true';
             const queryParams = [];
-            if (hideNoTelemetry) queryParams.push('telemetry_only=1');
+            if (deepLinkId) {
+                queryParams.push('all=1');
+                queryParams.push('target=' + encodeURIComponent(deepLinkId));
+            } else if (hideNoTelemetry) {
+                queryParams.push('telemetry_only=1');
+            }
             queryParams.push('_t=' + Date.now());
             const queryString = '?' + queryParams.join('&');
 
@@ -2461,8 +2752,12 @@
                     }
                     const maxTelemAgeDays = parseInt(response.max_telemetry_age_days || '0', 10);
                     const nowMs = Date.now();
+                    const deepLinkId = getUrlNodeIdentifier();
+
                     const rawList = (response.repeaters || response.nodes || []).filter(n => {
                         if (n.is_disabled == 1 || n.is_disabled === true || n.is_disabled === '1') return false;
+                        // Jei atidaryta konkreti nuoroda į šį mazgą, netaikome amžiaus apribojimo jam
+                        if (deepLinkId && matchesNodeIdentifier(n, deepLinkId)) return true;
                         if (maxTelemAgeDays > 0) {
                             const tTime = n.telemetry_updated_at || (n.telemetry ? (n.telemetry.telemetry_updated_at || n.telemetry.last_telemetry_at) : null);
                             if (tTime) {
@@ -2487,9 +2782,21 @@
                         return true;
                     });
                     allLoadedNodes = rawList;
-                    applyActiveFilters(isFirstMapLoad);
-                    if (isFirstMapLoad) {
+
+                    // Tikriname ar atidaryta nuoroda su konkretaus mazgo ID arba viešuoju raktu (#1bbd arba #0815fe...)
+                    const deepLinkNode = deepLinkId ? allLoadedNodes.find(n => matchesNodeIdentifier(n, deepLinkId)) : null;
+
+                    if (isFirstMapLoad && deepLinkNode) {
+                        applyActiveFilters(false);
                         isFirstMapLoad = false;
+                        setTimeout(() => {
+                            focusNode(deepLinkId);
+                        }, 250);
+                    } else {
+                        applyActiveFilters(isFirstMapLoad);
+                        if (isFirstMapLoad) {
+                            isFirstMapLoad = false;
+                        }
                     }
                 } else {
                     document.getElementById('nodeListContainer').innerHTML = `
@@ -2637,6 +2944,7 @@
             nodeList.forEach(node => {
                 const name = node.name || node.node_id || 'Kartotuvas';
                 const nodeId = node.node_id || (node.public_key ? node.public_key.substring(0, 4) : 'node');
+                const cleanId = String(nodeId).replace(/^[#!]+/, '').toLowerCase();
                 const lastSeen = node.last_seen_at || '';
                 const telemTime = node.telemetry_updated_at || (node.telemetry ? (node.telemetry.telemetry_updated_at || node.telemetry.last_telemetry_at) : null) || '';
                 const botId = String(node.bot_id || 'KLP').replace(/[^a-zA-Z0-9_-]/g, '');
@@ -2713,7 +3021,13 @@
 
                     const popupContent = `
                         <div class="popup-card">
-                            <div class="popup-header"><span class="node-badge-id" style="margin-right: 6px;">${nodeId.toUpperCase()}</span>${name}</div>
+                            <div class="popup-header" style="display: flex; justify-content: space-between; align-items: center; padding-right: 22px;">
+                                <div style="display:flex; align-items:center; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                                    <span class="node-badge-id" style="margin-right: 6px; flex-shrink:0;">${nodeId.toUpperCase()}</span>
+                                    <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${name}</span>
+                                </div>
+                                <button class="card-info-btn" onclick="event.stopPropagation(); openMobileSheet(findNodeByIdentifier('${node.public_key || node.node_id || nodeId}'));" title="Išsami informacija / Statistika">ℹ️</button>
+                            </div>
                             <div class="popup-id">${node.is_repeater ? 'KARTOTUVAS' : 'MAZGAS'} • <span style="color:#c084fc; font-weight:600;" title="${botTitle}">🤖 ${botId}${botName ? ` (${botName})` : ''}</span></div>
                             
                             <div class="popup-grid">
@@ -2734,7 +3048,7 @@
                             <!-- Telemetrijos grafiko sekcija -->
                             <div class="popup-chart-box">
                                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
-                                    <span style="font-size: 0.74rem; font-weight: 600; color: #ffffff;">📈 ${telemetryChartDays} d. statistikos grafikas</span>
+                                    <span style="font-size: 0.74rem; font-weight: 600; color: #ffffff;">📈 Telemetrijos grafikas</span>
                                     <span style="font-size: 0.68rem; color: var(--text-dim);" id="popup-chart-sub-${nodeId}">Kraunama...</span>
                                 </div>
                                 <div style="position: relative; height: 140px; width: 100%;">
@@ -2773,15 +3087,26 @@
 
                         // Šoninėje panelėje aktyvuojame atitinkamą kortelę
                         document.querySelectorAll('.node-item-card').forEach(c => c.classList.remove('active'));
-                        const card = document.getElementById(`card-${nodeId}`);
+                        const card = document.getElementById(`card-${nodeId}`) ||
+                                     document.querySelector(`.node-item-card[data-node-id="${cleanId}"], .node-item-card[data-clean-id="${cleanId}"]`);
                         if (card) {
                             card.classList.add('active');
                             card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
                         }
 
+                        // Atnaujiname URL saitą (#1bbd arba public_key)
+                        const currentHash = (window.location.hash || '').replace(/^#[!/]?/, '').toLowerCase();
+                        const isPubKeyHash = currentHash.length > 8 && node.public_key && node.public_key.toLowerCase().startsWith(currentHash);
+                        const targetHash = isPubKeyHash ? node.public_key.toLowerCase() : cleanId;
+                        if (targetHash && window.location.hash !== ('#' + targetHash)) {
+                            if (history.replaceState) {
+                                history.replaceState(null, '', '#' + targetHash);
+                            }
+                        }
+
                         // Užkrauname ir nubraižome telemetrijos grafiką
                         setTimeout(() => {
-                            loadAndRenderNodeChart(`popup-chart-${nodeId}`, `popup-chart-sub-${nodeId}`, nodeId, telemetryChartDays);
+                            loadAndRenderNodeChart(`popup-chart-${nodeId}`, `popup-chart-sub-${nodeId}`, node.node_id || node.public_key || nodeId, telemetryChartDays);
                         }, 50);
                     });
 
@@ -2794,13 +3119,30 @@
                     
                     markersGroup.addLayer(marker);
                     markersMap[nodeId] = marker;
+                    markersMap[cleanId] = marker;
+                    if (node.node_id) {
+                        const rawNid = String(node.node_id).trim().toLowerCase();
+                        markersMap[rawNid] = marker;
+                        markersMap[rawNid.replace(/^[#!]+/, '')] = marker;
+                    }
+                    if (node.public_key) {
+                        const pk = String(node.public_key).trim().toLowerCase();
+                        markersMap[pk] = marker;
+                        if (pk.length >= 4) {
+                            markersMap[pk.substring(0, 4)] = marker;
+                        }
+                    }
                 }
 
                 // 2. ŠONINĖS PANELĖS KORTELĖ
                 const card = document.createElement('div');
                 card.className = 'node-item-card ' + (borderClass || 'border-blue');
                 card.id = `card-${nodeId}`;
-                card.onclick = () => focusNode(nodeId, hasValidCoords ? [lat, lon] : null);
+                card.setAttribute('data-node-id', (node.node_id || '').toLowerCase());
+                card.setAttribute('data-clean-id', cleanId);
+                if (node.public_key) card.setAttribute('data-public-key', String(node.public_key).trim().toLowerCase());
+                const cardClickIdent = node.node_id || node.public_key || nodeId;
+                card.onclick = () => focusNode(cardClickIdent, hasValidCoords ? [lat, lon] : null);
 
                 card.innerHTML = `
                     <div class="node-title-row">
@@ -2808,10 +3150,7 @@
                             <span class="node-badge-id">${nodeId.toUpperCase()}</span>
                             <span class="node-name" title="${name}">${name}</span>
                         </div>
-                        <div style="display:flex; align-items:center; gap:6px;">
-                            <span class="node-bot-badge" title="${botTitle}">🤖 ${botId}</span>
-                            <button class="card-info-btn" onclick="event.stopPropagation(); openMobileSheet(repeaters.find(n => n.node_id === '${nodeId}'));" title="Peržiūrėti informaciją">ℹ️</button>
-                        </div>
+                        <span class="node-bot-badge" title="${botTitle}">🤖 ${botId}</span>
                     </div>
 
                     <div class="node-metrics-row">
@@ -2850,18 +3189,81 @@
             }
         }
 
-        // Paspaudus ant mazgo sąraše – nuskrendame į žemėlapį ir atidarome informaciją
-        function focusNode(nodeId, coords = null) {
+        // Paspaudus ant mazgo sąraše arba atidarius nuorodą su #ident – nuskrendame į žemėlapį ir atidarome statistiką
+        async function focusNode(ident, coords = null) {
+            if (!ident) return;
+
+            const cleanIdent = String(ident).replace(/^0x/i, '').replace(/^[#!]+/, '').trim().toLowerCase();
+            let nodeData = findNodeByIdentifier(ident);
+
+            // Jeigu mazgas dar nerastas lokaliai (pvz. dinamiškai įrašius hash naršyklėje), bandome pasiekti per serverį su target
+            if (!nodeData && cleanIdent) {
+                const endpoints = [
+                    `/api/nodes?target=${encodeURIComponent(cleanIdent)}&all=1&_t=${Date.now()}`,
+                    `/nodes.php?target=${encodeURIComponent(cleanIdent)}&all=1&_t=${Date.now()}`
+                ];
+                for (const url of endpoints) {
+                    try {
+                        const res = await fetch(url, { cache: 'no-store' });
+                        if (res.ok) {
+                            const data = await res.json();
+                            const incoming = data.repeaters || data.nodes || [];
+                            if (incoming.length > 0) {
+                                allLoadedNodes = incoming;
+                                applyActiveFilters(false);
+                                nodeData = findNodeByIdentifier(ident);
+                                break;
+                            }
+                        }
+                    } catch (e) {}
+                }
+            }
+
+            // Jeigu mazgas rastas bendrame sąraše, bet šiuo metu paslėptas po aktyviais filtrais – atstatome filtrus
+            if (nodeData && Array.isArray(repeaters) && !repeaters.some(n => matchesNodeIdentifier(n, ident))) {
+                resetAllFilters();
+                nodeData = findNodeByIdentifier(ident);
+            }
+
+            const actualNodeId = nodeData ? (nodeData.node_id || (nodeData.public_key ? nodeData.public_key.substring(0, 4) : 'node')) : cleanIdent;
+            const cleanActualId = String(actualNodeId).replace(/^[#!]+/, '').toLowerCase();
+            const pubKey = nodeData ? String(nodeData.public_key || '').trim().toLowerCase() : '';
+
+            // 1. Aktyvuojame kortelę šoniniame sąraše ir priskroliname
             document.querySelectorAll('.node-item-card').forEach(c => c.classList.remove('active'));
-            const card = document.getElementById(`card-${nodeId}`);
+            let card = document.getElementById(`card-${actualNodeId}`) || document.getElementById(`card-${cleanActualId}`);
+            if (!card && pubKey) {
+                card = document.querySelector(`.node-item-card[data-public-key="${pubKey}"]`);
+            }
+            if (!card && nodeData) {
+                const cId = (nodeData.node_id || '').replace(/^[#!]+/, '').toLowerCase();
+                card = document.querySelector(`.node-item-card[data-node-id="${cId}"], .node-item-card[data-clean-id="${cId}"]`);
+            }
+            if (!card && cleanIdent.length >= 4) {
+                card = document.querySelector(`.node-item-card[data-clean-id="${cleanIdent.substring(0, 4)}"]`);
+            }
             if (card) {
                 card.classList.add('active');
                 card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             }
 
-            const isMobile = window.innerWidth <= 768;
-            const nodeData = repeaters.find(n => (n.node_id === nodeId || (n.public_key && n.public_key.startsWith(nodeId))));
+            // 2. Sinchronizuojame URL hash (#1bbd arba pilną public_key)
+            const isPubKeySearch = cleanIdent.length > 8;
+            const targetHash = isPubKeySearch
+                ? (pubKey || cleanIdent)
+                : (nodeData && nodeData.node_id ? nodeData.node_id.replace(/^[#!]+/, '').toLowerCase() : cleanIdent);
 
+            if (targetHash && window.location.hash !== ('#' + targetHash)) {
+                if (history.replaceState) {
+                    history.replaceState(null, '', '#' + targetHash);
+                } else {
+                    window.location.hash = targetHash;
+                }
+            }
+
+            const isMobile = window.innerWidth <= 768;
+
+            // 3. Mobiliame įrenginyje: perjungiame į žemėlapį ir atidarome bottom sheet
             if (isMobile) {
                 switchMobileView('map');
                 if (nodeData) {
@@ -2869,16 +3271,46 @@
                 }
             }
 
-            const marker = markersMap[nodeId];
+            // 4. Surandame žymeklį žemėlapyje
+            const marker = (pubKey && markersMap[pubKey]) ||
+                           markersMap[actualNodeId] ||
+                           markersMap[cleanActualId] ||
+                           markersMap[cleanIdent] ||
+                           (cleanIdent.length >= 4 && markersMap[cleanIdent.substring(0, 4)]) ||
+                           (nodeData?.node_id && (markersMap[nodeData.node_id] || markersMap[nodeData.node_id.toLowerCase()] || markersMap[nodeData.node_id.replace(/^[#!]+/, '').toLowerCase()])) ||
+                           (nodeData?.public_key && markersMap[nodeData.public_key.toLowerCase()]);
+
+            const lat = nodeData?.latitude || (nodeData?.location ? nodeData.location.latitude : null);
+            const lon = nodeData?.longitude || (nodeData?.location ? nodeData.location.longitude : null);
+            const hasValidCoords = (lat !== null && lon !== null && Math.abs(lat) > 0.001 && Math.abs(lon) > 0.001);
+            const targetCoords = marker ? marker.getLatLng() : (coords || (hasValidCoords ? [lat, lon] : null));
+
             if (marker) {
-                map.flyTo(marker.getLatLng(), 14, { duration: 1.0 });
+                map.flyTo(marker.getLatLng(), 14, { duration: 0.9 });
                 if (!isMobile) {
-                    setTimeout(() => marker.openPopup(), 1000);
+                    map.closePopup();
+                    setTimeout(() => {
+                        marker.openPopup();
+                    }, 600);
                 }
-            } else if (coords) {
-                map.flyTo(coords, 14, { duration: 1.0 });
+            } else if (targetCoords) {
+                map.flyTo(targetCoords, 14, { duration: 0.9 });
+                if (!isMobile && nodeData) {
+                    openMobileSheet(nodeData);
+                }
+            } else if (!isMobile && nodeData) {
+                // Mazgas neturi GPS koordinačių žemėlapyje – atidarome išsamų modalą su statistika ir grafiku
+                openMobileSheet(nodeData);
             }
         }
+
+        // Stebime URL hash pasikeitimus (naršyklės atgal/pirmyn mygtukai arba tiesioginis nuorodos pakeitimas)
+        window.addEventListener('hashchange', () => {
+            const ident = getUrlNodeIdentifier();
+            if (ident) {
+                focusNode(ident);
+            }
+        });
 
         // Sąrašo filtravimas
         function filterNodesList() {
@@ -2904,9 +3336,14 @@
         window.toggleMobileView = window._toggleMobileView = toggleMobileView;
         window.closeMobileSheet = window._closeMobileSheet = closeMobileSheet;
         window.openMobileSheet = window._openMobileSheet = openMobileSheet;
+        window.changeSheetChartDays = window._changeSheetChartDays = changeSheetChartDays;
+        window.changePopupChartDays = window._changePopupChartDays = changePopupChartDays;
         window.sheetActionFocus = window._sheetActionFocus = sheetActionFocus;
         window.sheetActionNavigate = window._sheetActionNavigate = sheetActionNavigate;
         window.focusNode = focusNode;
+        window.getUrlNodeIdentifier = getUrlNodeIdentifier;
+        window.matchesNodeIdentifier = matchesNodeIdentifier;
+        window.findNodeByIdentifier = findNodeByIdentifier;
 
         // Paleidžiame žemėlapį užsikrovus DOM
         document.addEventListener('DOMContentLoaded', () => {
