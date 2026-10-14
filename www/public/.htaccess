@@ -9,6 +9,11 @@ DirectoryIndex index.html index.php
     # Nukreipti /api/node/{key} ir /node/{key} į /api/node/index.php failą
     RewriteRule ^api/node/(.+)$ /api/node/index.php?subpath=$1 [L,QSA]
     RewriteRule ^node/(.+)$ /api/node/index.php?subpath=$1 [L,QSA]
+
+    # Jei kreipiamasi tiesiai į /api/node arba /node be identifikatoriaus – iškart mesti 404
+    RewriteCond %{QUERY_STRING} !(subpath|public_key|node_id|bot_id|endpoint)
+    RewriteRule ^(api/)?node/?$ - [R=404,L]
+
     RewriteRule ^api/node/?$ /api/node/index.php [L,QSA]
     RewriteRule ^node/?$ /api/node/index.php [L,QSA]
 
