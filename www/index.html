@@ -1095,7 +1095,7 @@
             justify-content: space-between;
         }
 
-        /* 📈 Grafiko mygtukas žemėlapio popup kortelėje */
+        /* 📈 Grafiko ir ⚙️ Admin mygtukai žemėlapio popup kortelėje */
         .card-info-btn {
             display: inline-flex;
             align-items: center;
@@ -1113,7 +1113,7 @@
             text-decoration: none;
             line-height: 1;
             padding: 0;
-            margin-left: 6px;
+            margin-left: 4px;
         }
 
         .card-info-btn:hover {
@@ -1127,6 +1127,357 @@
             background: var(--accent-cyan);
             color: #000000;
             transform: scale(0.95);
+        }
+
+        .card-admin-btn {
+            color: #d8b4fe !important;
+            border-color: rgba(167, 139, 250, 0.4) !important;
+            background: rgba(167, 139, 250, 0.14) !important;
+        }
+
+        .card-admin-btn:hover {
+            background: rgba(167, 139, 250, 0.32) !important;
+            border-color: #c084fc !important;
+            color: #ffffff !important;
+            transform: scale(1.12);
+            box-shadow: 0 0 10px rgba(192, 132, 252, 0.45);
+        }
+
+        /* =========================================================================
+           Admin Mazgo Valdymo Modalas (Žemėlapyje)
+           ========================================================================= */
+        .admin-node-modal-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 4000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 14px;
+            animation: adminFadeIn 0.2s ease-out;
+        }
+
+        .admin-node-modal-backdrop {
+            position: absolute;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.72);
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
+        }
+
+        .admin-node-modal {
+            position: relative;
+            background: #18181b;
+            border: 1px solid rgba(167, 139, 250, 0.35);
+            border-radius: var(--radius-lg);
+            width: 100%;
+            max-width: 580px;
+            max-height: 92vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.85), 0 0 30px rgba(167, 139, 250, 0.15);
+            z-index: 1;
+            overflow: hidden;
+            animation: adminScaleIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes adminFadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes adminScaleIn {
+            from { opacity: 0; transform: scale(0.94); }
+            to { opacity: 1; transform: scale(1); }
+        }
+
+        .admin-node-modal-header {
+            padding: 14px 18px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border-color);
+            background: rgba(255, 255, 255, 0.02);
+            gap: 12px;
+        }
+
+        .admin-node-badge {
+            background: rgba(167, 139, 250, 0.18);
+            border: 1px solid #a78bfa;
+            color: #d8b4fe;
+            padding: 2px 7px;
+            border-radius: var(--radius-sm);
+            font-size: 0.70rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            flex-shrink: 0;
+        }
+
+        .admin-node-modal-title {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #ffffff;
+            margin: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .admin-node-close-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-dim);
+            font-size: 1.3rem;
+            line-height: 1;
+            cursor: pointer;
+            padding: 4px;
+            border-radius: var(--radius-sm);
+            transition: color 0.15s ease, background 0.15s ease;
+            flex-shrink: 0;
+        }
+
+        .admin-node-close-btn:hover {
+            color: #ffffff;
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .admin-node-modal-body {
+            padding: 16px 18px;
+            overflow-y: auto;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .admin-form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .admin-form-row {
+            display: flex;
+            gap: 10px;
+        }
+
+        .admin-form-label {
+            font-size: 0.74rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        .admin-form-hint {
+            font-size: 0.70rem;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }
+
+        .admin-form-input {
+            width: 100%;
+            background: #111113;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            color: #ffffff;
+            padding: 7px 10px;
+            font-size: 0.85rem;
+            font-family: var(--font-sans);
+            outline: none;
+            transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+
+        .admin-form-input:focus {
+            border-color: #a78bfa;
+            box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.25);
+        }
+
+        .admin-form-input[readonly] {
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--text-muted);
+            cursor: default;
+        }
+
+        .admin-checkbox-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .admin-flags-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 8px;
+        }
+
+        @media (min-width: 480px) {
+            .admin-flags-grid {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+
+        .admin-checkbox-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            padding: 8px 10px;
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            cursor: pointer;
+            transition: background 0.15s ease, border-color 0.15s ease;
+        }
+
+        .admin-checkbox-card:hover {
+            background: rgba(255, 255, 255, 0.06);
+            border-color: var(--border-light);
+        }
+
+        .admin-checkbox-card.danger {
+            border-color: rgba(239, 68, 68, 0.3);
+            background: rgba(239, 68, 68, 0.05);
+        }
+
+        .admin-checkbox-card.danger:hover {
+            background: rgba(239, 68, 68, 0.1);
+            border-color: #ef4444;
+        }
+
+        .admin-checkbox-card input[type="checkbox"] {
+            margin-top: 2px;
+            width: 15px;
+            height: 15px;
+            cursor: pointer;
+        }
+
+        .admin-checkbox-title {
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: #ffffff;
+        }
+
+        .admin-checkbox-sub {
+            font-size: 0.68rem;
+            color: var(--text-dim);
+            margin-top: 2px;
+            line-height: 1.25;
+        }
+
+        .admin-fail-card {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            padding: 10px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .admin-node-modal-footer {
+            padding: 12px 18px;
+            border-top: 1px solid var(--border-color);
+            background: rgba(255, 255, 255, 0.02);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .admin-btn-primary {
+            background: linear-gradient(135deg, #a78bfa 0%, #7c3aed 100%);
+            border: none;
+            color: #ffffff;
+            font-size: 0.82rem;
+            font-weight: 600;
+            padding: 8px 16px;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: all 0.15s ease;
+            box-shadow: 0 2px 8px rgba(124, 58, 237, 0.35);
+        }
+
+        .admin-btn-primary:hover {
+            filter: brightness(1.1);
+            box-shadow: 0 4px 14px rgba(124, 58, 237, 0.5);
+            transform: translateY(-1px);
+        }
+
+        .admin-btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .admin-btn-secondary {
+            background: rgba(255, 255, 255, 0.07);
+            border: 1px solid var(--border-light);
+            color: var(--text-main);
+            font-size: 0.82rem;
+            font-weight: 600;
+            padding: 8px 14px;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .admin-btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.12);
+            border-color: #ffffff;
+        }
+
+        .admin-btn-sm {
+            padding: 4px 9px;
+            font-size: 0.72rem;
+        }
+
+        .admin-full-link {
+            font-size: 0.76rem;
+            color: #c084fc;
+            text-decoration: none;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            transition: color 0.15s ease;
+        }
+
+        .admin-full-link:hover {
+            color: #ffffff;
+            text-decoration: underline;
+        }
+
+        /* Toast pranešimai žemėlapyje */
+        .map-toast-msg {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: #18181b;
+            color: #ffffff;
+            border: 1px solid #a78bfa;
+            border-radius: var(--radius-md);
+            padding: 10px 16px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6), 0 0 15px rgba(167, 139, 250, 0.25);
+            z-index: 5000;
+            display: none;
+            align-items: center;
+            gap: 8px;
+            animation: toastPop 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes toastPop {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
         }
 
         /* 📈 7, 14, 30 dienų grafiko laikotarpio parinkiklis */
@@ -1855,7 +2206,10 @@
                                 <span id="sheetNodeType">KARTOTUVAS</span> • <span style="color:#c084fc; font-weight:600;" id="sheetBotBadge">🤖 KLP</span>
                             </div>
                         </div>
-                        <button class="sheet-close-btn" onclick="closeMobileSheet()" aria-label="Uždaryti" title="Uždaryti">✕</button>
+                        <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+                            <button id="sheetAdminEditBtn" class="card-info-btn card-admin-btn" style="display: none;" onclick="openAdminNodeEditModal(selectedMobileNode ? (selectedMobileNode.public_key || selectedMobileNode.node_id) : null)" title="Valdyti mazgo nustatymus (Admin)">⚙️</button>
+                            <button class="sheet-close-btn" onclick="closeMobileSheet()" aria-label="Uždaryti" title="Uždaryti">✕</button>
+                        </div>
                     </div>
 
                     <!-- 4 stulpelių rodmenų kortelės (Baterija, Temperatūra, Koordinatės, Viešas raktas) -->
@@ -1913,7 +2267,144 @@
         </div>
     </div>
 
-    <!-- Leaflet JS -->
+    <!-- Administratoriaus mazgo valdymo modalo langas -->
+    <div class="admin-node-modal-overlay" id="adminNodeModalOverlay" style="display: none;">
+        <div class="admin-node-modal-backdrop" onclick="closeAdminNodeEditModal()"></div>
+        <div class="admin-node-modal" role="dialog" aria-modal="true" aria-labelledby="adminNodeModalTitle">
+            <div class="admin-node-modal-header">
+                <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+                    <span class="admin-node-badge" id="adminNodeModalBadge">⚙️ ADMIN</span>
+                    <h3 class="admin-node-modal-title" id="adminNodeModalTitle">Mazgo nustatymai</h3>
+                </div>
+                <button type="button" class="admin-node-close-btn" onclick="closeAdminNodeEditModal()" aria-label="Uždaryti">✕</button>
+            </div>
+
+            <form id="adminNodeEditForm" onsubmit="handleAdminNodeSave(event)">
+                <input type="hidden" id="adminNodePublicKey">
+
+                <div class="admin-node-modal-body">
+                    <!-- Viešas raktas (Read-only + Copy) -->
+                    <div class="admin-form-group">
+                        <label class="admin-form-label">Viešas raktas (Public Key)</label>
+                        <div style="display: flex; gap: 6px;">
+                            <input type="text" id="adminNodeKeyDisplay" class="admin-form-input" style="font-family: var(--font-mono); font-size: 0.76rem;" readonly>
+                            <button type="button" class="admin-btn-secondary" onclick="copyAdminNodeKey()" title="Kopijuoti raktą">📋</button>
+                        </div>
+                    </div>
+
+                    <!-- Pavadinimas -->
+                    <div class="admin-form-group">
+                        <label for="adminNodeName" class="admin-form-label">Mazgo Pavadinimas (Name) <span style="color:#ef4444;">*</span></label>
+                        <input type="text" id="adminNodeName" class="admin-form-input" required placeholder="pvz. LT-LM Tilžė B9DD">
+                    </div>
+
+                    <!-- Valdymo slaptažodis -->
+                    <div class="admin-form-group">
+                        <label for="adminNodePassword" class="admin-form-label">Valdymo Slaptažodis (ESP32 Botui)</label>
+                        <input type="text" id="adminNodePassword" class="admin-form-input" placeholder="Slaptažodis kartotuvo telemetrijai siųsti (jei tuščias, bus '')">
+                        <div class="admin-form-hint">Naudojamas ESP32 botui jungiantis prie kartotuvo per LoRa.</div>
+                    </div>
+
+                    <!-- Priskirtas Botas + Lock -->
+                    <div class="admin-form-group">
+                        <label for="adminNodeBotId" class="admin-form-label">Priskirtas Botas (ESP32 Gateway)</label>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <select id="adminNodeBotId" class="admin-form-input" style="flex: 1;">
+                                <option value="KLP">KLP (Numatytasis)</option>
+                            </select>
+                            <label class="admin-checkbox-label" title="Neleisti automatiniam algoritmui perimti ar pakeisti šio mazgo boto priskyrimo">
+                                <input type="checkbox" id="adminNodeBotLocked">
+                                <span>Prirakinti</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Maršrutizavimas (Path / Route) -->
+                    <div class="admin-form-group">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                            <label class="admin-form-label" style="margin-bottom: 0;">Maršrutizavimas (Path / Route)</label>
+                            <label class="admin-checkbox-label" style="font-size: 0.72rem;">
+                                <input type="checkbox" id="adminNodeEnablePath" onchange="toggleAdminNodePathMode(this.checked)">
+                                <span id="adminNodeEnablePathLabel" style="color: #2ed573; font-weight: 600;">ĮJUNGTA (Source Route)</span>
+                            </label>
+                        </div>
+                        <div id="adminNodePathInputContainer">
+                            <input type="text" id="adminNodeLastPath" class="admin-form-input" placeholder="pvz. B9DD4607, DIRECT arba tuščia (automatinis mokymasis)">
+                        </div>
+                        <div id="adminNodePathDisabledNotice" style="display: none; padding: 8px 10px; background: rgba(167, 139, 250, 0.1); border: 1px dashed #a78bfa; border-radius: var(--radius-sm); font-size: 0.72rem; color: #d8b4fe;">
+                            ℹ️ Mazgas nustatytas į <strong>FLOOD</strong> režimą. Source routing išjungtas.
+                        </div>
+                    </div>
+
+                    <!-- GPS Koordinatės -->
+                    <div class="admin-form-row">
+                        <div class="admin-form-group" style="flex: 1;">
+                            <label for="adminNodeLat" class="admin-form-label">GPS Platuma (Lat)</label>
+                            <input type="number" step="0.0000001" id="adminNodeLat" class="admin-form-input" placeholder="55.7052">
+                        </div>
+                        <div class="admin-form-group" style="flex: 1;">
+                            <label for="adminNodeLon" class="admin-form-label">GPS Ilguma (Lon)</label>
+                            <input type="number" step="0.0000001" id="adminNodeLon" class="admin-form-input" placeholder="21.1458">
+                        </div>
+                    </div>
+
+                    <!-- Vėliavėlės (Flags) -->
+                    <div class="admin-flags-grid">
+                        <label class="admin-checkbox-card">
+                            <input type="checkbox" id="adminNodeUpdate">
+                            <div>
+                                <div class="admin-checkbox-title">📡 Periodinė telemetrija</div>
+                                <div class="admin-checkbox-sub">Automatiškai apklausti per eilę</div>
+                            </div>
+                        </label>
+
+                        <label class="admin-checkbox-card">
+                            <input type="checkbox" id="adminNodeIsRepeater">
+                            <div>
+                                <div class="admin-checkbox-title">📻 Kartotuvas (Repeater)</div>
+                                <div class="admin-checkbox-sub">Žymėti kaip infrastruktūros kartotuvą</div>
+                            </div>
+                        </label>
+
+                        <label class="admin-checkbox-card danger">
+                            <input type="checkbox" id="adminNodeIsDisabled">
+                            <div>
+                                <div class="admin-checkbox-title" style="color: #ef4444;">🚫 Išjungtas (Disabled)</div>
+                                <div class="admin-checkbox-sub">Slėpti žemėlapyje ir neapklausti</div>
+                            </div>
+                        </label>
+                    </div>
+
+                    <!-- Klaidų ir eilės valdymas -->
+                    <div class="admin-fail-card" id="adminNodeFailSection">
+                        <div style="flex: 1; min-width: 140px;">
+                            <div style="font-size: 0.82rem; font-weight: 600;" id="adminNodeFailLabel">
+                                Nesėkmingi bandymai: <span id="adminNodeFailVal" style="color:#2ed573;">0</span>
+                            </div>
+                            <div style="font-size: 0.70rem; color: var(--text-dim);">Eilės ir ryšio klaidų skaitiklis</div>
+                        </div>
+                        <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                            <button type="button" class="admin-btn-secondary admin-btn-sm" onclick="resetActiveAdminNodeQueue()" title="Nukreipti šį mazgą į eilės pradžią">⚡ Į eilės pradžią</button>
+                            <button type="button" class="admin-btn-secondary admin-btn-sm" id="btnAdminResetFail" onclick="resetActiveAdminNodeFail()" title="Išvalyti klaidų skaičių">🔄 Nulinti klaidas</button>
+                        </div>
+                    </div>
+
+                    <div id="adminNodeModalAlert" style="display: none; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 0.75rem; margin-top: 10px;"></div>
+                </div>
+
+                <div class="admin-node-modal-footer">
+                    <a id="adminNodeFullAdminLink" href="admin/?tab=nodes" target="_blank" class="admin-full-link" title="Atidaryti pilną valdymo pultą naujame lange">Admin pultas ↗</a>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <button type="button" class="admin-btn-secondary" onclick="closeAdminNodeEditModal()">Atšaukti</button>
+                        <button type="submit" class="admin-btn-primary" id="adminNodeSaveBtn">💾 Išsaugoti</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Toast pranešimas -->
+    <div id="mapToastMsg" class="map-toast-msg"></div>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
@@ -2313,6 +2804,11 @@
         function openMobileSheet(node) {
             if (!node) return;
             selectedMobileNode = node;
+
+            const adminEditBtn = document.getElementById('sheetAdminEditBtn');
+            if (adminEditBtn) {
+                adminEditBtn.style.display = isAdmin ? 'inline-flex' : 'none';
+            }
 
             const nodeId = node.node_id || (node.public_key ? node.public_key.substring(0, 4) : 'node');
             const name = node.name || node.node_id || 'Kartotuvas';
@@ -3080,7 +3576,10 @@
                                     <span class="node-badge-id" style="margin-right: 6px; flex-shrink:0;">${nodeId.toUpperCase()}</span>
                                     <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${name}</span>
                                 </div>
-                                <button class="card-info-btn" onclick="event.stopPropagation(); openMobileSheet(findNodeByIdentifier('${node.public_key || node.node_id || nodeId}'));" title="Telemetrijos grafikas / Statistika">📈</button>
+                                <div style="display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0;">
+                                    <button class="card-info-btn" onclick="event.stopPropagation(); openMobileSheet(findNodeByIdentifier('${node.public_key || node.node_id || nodeId}'));" title="Telemetrijos grafikas / Statistika">📈</button>
+                                    ${isAdmin ? `<button class="card-info-btn card-admin-btn" onclick="event.stopPropagation(); openAdminNodeEditModal('${node.public_key || node.node_id || nodeId}');" title="Valdyti mazgo nustatymus (Admin)">⚙️</button>` : ''}
+                                </div>
                             </div>
                             <div class="popup-id">${node.is_repeater ? 'KARTOTUVAS' : 'MAZGAS'} • <span style="color:#c084fc; font-weight:600;" title="${botTitle}">🤖 ${botId}${botName ? ` (${botName})` : ''}</span></div>
                             
@@ -3138,6 +3637,25 @@
                     marker.on('popupopen', () => {
                         const el = marker.getElement();
                         if (el) el.classList.add('popup-open');
+
+                        // Užtikriname, kad jei vartotojas prisijungęs kaip admin, atsirastų ⚙️ mygtukas
+                        if (isAdmin) {
+                            const popupEl = marker.getPopup() ? marker.getPopup().getElement() : null;
+                            if (popupEl) {
+                                const btnContainer = popupEl.querySelector('.popup-header > div:last-child');
+                                if (btnContainer && !btnContainer.querySelector('.card-admin-btn')) {
+                                    const adminBtn = document.createElement('button');
+                                    adminBtn.className = 'card-info-btn card-admin-btn';
+                                    adminBtn.title = 'Valdyti mazgo nustatymus (Admin)';
+                                    adminBtn.innerHTML = '⚙️';
+                                    adminBtn.onclick = (e) => {
+                                        e.stopPropagation();
+                                        openAdminNodeEditModal(node.public_key || node.node_id || nodeId);
+                                    };
+                                    btnContainer.appendChild(adminBtn);
+                                }
+                            }
+                        }
 
                         // Šoninėje panelėje aktyvuojame atitinkamą kortelę
                         document.querySelectorAll('.node-item-card').forEach(c => c.classList.remove('active'));
@@ -3204,7 +3722,10 @@
                             <span class="node-badge-id">${nodeId.toUpperCase()}</span>
                             <span class="node-name" title="${name}">${name}</span>
                         </div>
-                        <span class="node-bot-badge" title="${botTitle}">🤖 ${botId}</span>
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            ${isAdmin ? `<button class="card-info-btn card-admin-btn" style="width:22px; height:22px; font-size:0.75rem; margin:0;" onclick="event.stopPropagation(); openAdminNodeEditModal('${node.public_key || node.node_id || nodeId}');" title="Valdyti mazgo nustatymus (Admin)">⚙️</button>` : ''}
+                            <span class="node-bot-badge" title="${botTitle}">🤖 ${botId}</span>
+                        </div>
                     </div>
 
                     <div class="node-metrics-row">
@@ -3377,6 +3898,416 @@
             if (map) map.invalidateSize();
         });
 
+        // =========================================================================
+        // ADMIN SESIJOS TIKRINIMAS IR MAZGO NUSTATYMŲ VALDYMAS IŠ ŽEMĖLAPIO
+        // =========================================================================
+        let isAdmin = false;
+        let adminApiBaseUrl = 'admin/api.php';
+        let cachedBots = null;
+        let activeAdminNode = null;
+
+        // Tikrina ar vartotojas prisijungęs prie admin pulto
+        async function checkAdminAuth() {
+            const possibleEndpoints = [
+                'admin/api.php',
+                '/api/public/admin/api.php',
+                '/admin/api.php'
+            ];
+            for (const ep of possibleEndpoints) {
+                try {
+                    const res = await fetch(`${ep}?action=check_auth`, { credentials: 'same-origin', cache: 'no-store' });
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data && data.success) {
+                            adminApiBaseUrl = ep;
+                            if (data.authenticated) {
+                                isAdmin = true;
+                                window.isAdminAuthenticated = true;
+                                onAdminAuthConfirmed();
+                                return true;
+                            }
+                            return false;
+                        }
+                    }
+                } catch (e) {
+                    // tęsiame kitą
+                }
+            }
+            return false;
+        }
+
+        // Kai admin autentifikacija patvirtinta
+        async function onAdminAuthConfirmed() {
+            loadAdminBots();
+            if (Array.isArray(repeaters) && repeaters.length > 0) {
+                renderNodes(repeaters, false);
+            }
+            const sheetAdminBtn = document.getElementById('sheetAdminEditBtn');
+            if (sheetAdminBtn) sheetAdminBtn.style.display = 'inline-flex';
+        }
+
+        // Užkrauna botų sąrašą iš admin API
+        async function loadAdminBots() {
+            if (cachedBots) return cachedBots;
+            try {
+                const res = await fetch(`${adminApiBaseUrl}?action=bots`, { credentials: 'same-origin' });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data && data.success && Array.isArray(data.bots)) {
+                        cachedBots = data.bots;
+                        populateAdminBotSelect(data.bots);
+                        return cachedBots;
+                    }
+                }
+            } catch (e) {
+                console.error('Nepavyko gauti botų sąrašo:', e);
+            }
+            return null;
+        }
+
+        function populateAdminBotSelect(bots, selectedBotId = 'KLP') {
+            const sel = document.getElementById('adminNodeBotId');
+            if (!sel) return;
+            const curVal = selectedBotId || sel.value || 'KLP';
+            sel.innerHTML = '';
+            if (Array.isArray(bots)) {
+                bots.forEach(b => {
+                    const opt = document.createElement('option');
+                    opt.value = b.bot_id;
+                    opt.textContent = `${b.bot_id} (${b.name || 'Botas'})`;
+                    sel.appendChild(opt);
+                });
+            }
+            if (sel.options.length === 0) {
+                const opt = document.createElement('option');
+                opt.value = curVal;
+                opt.textContent = curVal;
+                sel.appendChild(opt);
+            }
+            sel.value = curVal.toUpperCase();
+        }
+
+        function showMapToast(msg, type = 'info') {
+            const toast = document.getElementById('mapToastMsg');
+            if (!toast) return;
+            toast.innerText = msg;
+            toast.style.display = 'flex';
+            if (type === 'error') {
+                toast.style.borderColor = '#ef4444';
+                toast.style.color = '#fca5a5';
+            } else if (type === 'success') {
+                toast.style.borderColor = '#2ed573';
+                toast.style.color = '#2ed573';
+            } else {
+                toast.style.borderColor = '#a78bfa';
+                toast.style.color = '#ffffff';
+            }
+            clearTimeout(window._mapToastTimeout);
+            window._mapToastTimeout = setTimeout(() => {
+                toast.style.display = 'none';
+            }, 3000);
+        }
+
+        function copyAdminNodeKey() {
+            const key = document.getElementById('adminNodePublicKey')?.value || '';
+            if (!key) return;
+            navigator.clipboard.writeText(key).then(() => {
+                showMapToast('Viešas raktas nukopijuotas! 📋', 'success');
+            }).catch(() => {
+                showMapToast('Nepavyko nukopijuoti', 'error');
+            });
+        }
+
+        function toggleAdminNodePathMode(enabled, presetVal = null) {
+            const label = document.getElementById('adminNodeEnablePathLabel');
+            const inputCont = document.getElementById('adminNodePathInputContainer');
+            const notice = document.getElementById('adminNodePathDisabledNotice');
+            const input = document.getElementById('adminNodeLastPath');
+            if (enabled) {
+                if (label) { label.innerText = 'ĮJUNGTA (Source Route)'; label.style.color = '#2ed573'; }
+                if (inputCont) inputCont.style.display = 'block';
+                if (notice) notice.style.display = 'none';
+                if (presetVal !== null && input) input.value = presetVal;
+                else if (input && input.value.trim().toUpperCase() === 'FLOOD') input.value = '';
+            } else {
+                if (label) { label.innerText = 'IŠJUNGTA (Tik FLOOD)'; label.style.color = '#f87171'; }
+                if (inputCont) inputCont.style.display = 'none';
+                if (notice) notice.style.display = 'block';
+                if (input) input.value = 'FLOOD';
+            }
+        }
+
+        async function openAdminNodeEditModal(nodeOrIdent) {
+            if (!isAdmin) {
+                alert('Šiam veiksmui atlikti turite būti prisijungę prie administratoriaus pulto.');
+                return;
+            }
+
+            const node = (typeof nodeOrIdent === 'object' && nodeOrIdent !== null) 
+                ? nodeOrIdent 
+                : findNodeByIdentifier(nodeOrIdent);
+
+            if (!node) {
+                showMapToast('Mazgas nerastas!', 'error');
+                return;
+            }
+
+            activeAdminNode = node;
+            const pubKey = String(node.public_key || '').trim();
+            const nodeId = String(node.node_id || (pubKey ? pubKey.substring(0, 4) : '')).toUpperCase();
+            const name = node.name || node.node_name || nodeId || 'Mazgas';
+
+            const modalOverlay = document.getElementById('adminNodeModalOverlay');
+            const titleEl = document.getElementById('adminNodeModalTitle');
+            const badgeEl = document.getElementById('adminNodeModalBadge');
+            const keyDisp = document.getElementById('adminNodeKeyDisplay');
+            const keyHidden = document.getElementById('adminNodePublicKey');
+            const nameInp = document.getElementById('adminNodeName');
+            const passInp = document.getElementById('adminNodePassword');
+            const latInp = document.getElementById('adminNodeLat');
+            const lonInp = document.getElementById('adminNodeLon');
+            const updateChk = document.getElementById('adminNodeUpdate');
+            const repeaterChk = document.getElementById('adminNodeIsRepeater');
+            const disabledChk = document.getElementById('adminNodeIsDisabled');
+            const botLockedChk = document.getElementById('adminNodeBotLocked');
+            const failVal = document.getElementById('adminNodeFailVal');
+            const alertBox = document.getElementById('adminNodeModalAlert');
+            const fullAdminLink = document.getElementById('adminNodeFullAdminLink');
+
+            if (alertBox) alertBox.style.display = 'none';
+            if (badgeEl) badgeEl.innerText = nodeId ? `ID: ${nodeId}` : '⚙️ ADMIN';
+            if (titleEl) titleEl.innerText = `Mazgo Nustatymai: ${name}`;
+            if (keyDisp) keyDisp.value = pubKey;
+            if (keyHidden) keyHidden.value = pubKey;
+            if (nameInp) nameInp.value = name;
+            if (passInp) passInp.value = node.password !== null && node.password !== undefined ? node.password : '';
+            if (latInp) latInp.value = node.latitude || '';
+            if (lonInp) lonInp.value = node.longitude || '';
+            if (updateChk) updateChk.checked = (node.update == 1 || node.update === true);
+            if (repeaterChk) repeaterChk.checked = (node.is_repeater == 1 || node.is_repeater === true);
+            if (disabledChk) disabledChk.checked = (node.is_disabled == 1 || node.is_disabled === true || node.is_disabled === '1');
+            if (botLockedChk) botLockedChk.checked = (node.is_bot_locked == 1 || node.is_bot_locked === true || node.is_bot_locked === '1');
+
+            const failCount = parseInt(node.telemetry_fail_count || 0, 10);
+            if (failVal) {
+                failVal.innerText = failCount;
+                failVal.style.color = failCount > 0 ? '#ff6b81' : '#2ed573';
+            }
+
+            const rawPath = String(node.last_path || '').trim();
+            const isFlood = (rawPath.toUpperCase() === 'FLOOD');
+            const pathChk = document.getElementById('adminNodeEnablePath');
+            if (pathChk) {
+                pathChk.checked = !isFlood;
+                toggleAdminNodePathMode(!isFlood, isFlood ? '' : rawPath);
+            }
+
+            if (fullAdminLink) {
+                const adminDir = adminApiBaseUrl.replace(/api\.php.*$/, '');
+                fullAdminLink.href = `${adminDir}?tab=nodes&edit_node=${encodeURIComponent(pubKey || nodeId)}`;
+            }
+
+            if (cachedBots) {
+                populateAdminBotSelect(cachedBots, node.bot_id || 'KLP');
+            } else {
+                loadAdminBots().then(bots => {
+                    if (bots) populateAdminBotSelect(bots, node.bot_id || 'KLP');
+                });
+            }
+
+            if (modalOverlay) modalOverlay.style.display = 'flex';
+
+            // Užklausiame pilnų duomenų tiesiai iš DB (kad gautume password, tikslų fail count, ir pan.)
+            try {
+                const searchKey = pubKey || nodeId;
+                const dbRes = await fetch(`${adminApiBaseUrl}?action=nodes&search=${encodeURIComponent(searchKey)}&limit=1`, { credentials: 'same-origin' });
+                if (dbRes.ok) {
+                    const dbData = await dbRes.json();
+                    if (dbData.success && Array.isArray(dbData.nodes) && dbData.nodes.length > 0) {
+                        const fresh = dbData.nodes[0];
+                        if (passInp && fresh.password !== null && fresh.password !== undefined) passInp.value = fresh.password;
+                        if (updateChk) updateChk.checked = (fresh.update == 1 || fresh.update === true || fresh.update === '1');
+                        if (repeaterChk) repeaterChk.checked = (fresh.is_repeater == 1 || fresh.is_repeater === true || fresh.is_repeater === '1');
+                        if (disabledChk) disabledChk.checked = (fresh.is_disabled == 1 || fresh.is_disabled === true || fresh.is_disabled === '1');
+                        if (botLockedChk) botLockedChk.checked = (fresh.is_bot_locked == 1 || fresh.is_bot_locked === true || fresh.is_bot_locked === '1');
+                        if (latInp && fresh.latitude) latInp.value = fresh.latitude;
+                        if (lonInp && fresh.longitude) lonInp.value = fresh.longitude;
+                        if (nameInp && fresh.node_name) nameInp.value = fresh.node_name;
+                        
+                        const freshFail = parseInt(fresh.telemetry_fail_count || 0, 10);
+                        if (failVal) {
+                            failVal.innerText = freshFail;
+                            failVal.style.color = freshFail > 0 ? '#ff6b81' : '#2ed573';
+                        }
+                        const freshPath = String(fresh.last_path || '').trim();
+                        const freshFlood = (freshPath.toUpperCase() === 'FLOOD');
+                        if (pathChk) {
+                            pathChk.checked = !freshFlood;
+                            toggleAdminNodePathMode(!freshFlood, freshFlood ? '' : freshPath);
+                        }
+                        const botSel = document.getElementById('adminNodeBotId');
+                        if (botSel && fresh.bot_id) botSel.value = fresh.bot_id.toUpperCase();
+
+                        Object.assign(node, fresh);
+                    }
+                }
+            } catch (e) {
+                console.warn('Nepavyko gauti papildomų mazgo duomenų iš DB:', e);
+            }
+        }
+
+        function closeAdminNodeEditModal() {
+            const modalOverlay = document.getElementById('adminNodeModalOverlay');
+            if (modalOverlay) modalOverlay.style.display = 'none';
+            activeAdminNode = null;
+        }
+
+        async function resetActiveAdminNodeQueue() {
+            if (!activeAdminNode) return;
+            const pubKey = activeAdminNode.public_key || activeAdminNode.node_id;
+            try {
+                const res = await fetch(`${adminApiBaseUrl}?action=reset_requested_date`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ public_key: pubKey })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showMapToast('Mazgas nukreiptas į eilės pradžią! ⚡', 'success');
+                } else {
+                    alert('Klaida: ' + (data.error || 'Nepavyko'));
+                }
+            } catch (e) {
+                alert('Serverio ryšio klaida');
+            }
+        }
+
+        async function resetActiveAdminNodeFail() {
+            if (!activeAdminNode) return;
+            const pubKey = activeAdminNode.public_key || activeAdminNode.node_id;
+            try {
+                const res = await fetch(`${adminApiBaseUrl}?action=reset_node_fail_count`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ public_key: pubKey })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    const failVal = document.getElementById('adminNodeFailVal');
+                    if (failVal) {
+                        failVal.innerText = '0';
+                        failVal.style.color = '#2ed573';
+                    }
+                    if (activeAdminNode) activeAdminNode.telemetry_fail_count = 0;
+                    showMapToast('Klaidų skaitliukas atstatytas į 0! 🔄', 'success');
+                } else {
+                    alert('Klaida: ' + (data.error || 'Nepavyko'));
+                }
+            } catch (e) {
+                alert('Serverio ryšio klaida');
+            }
+        }
+
+        async function handleAdminNodeSave(e) {
+            e.preventDefault();
+            if (!activeAdminNode) return;
+
+            const saveBtn = document.getElementById('adminNodeSaveBtn');
+            const alertBox = document.getElementById('adminNodeModalAlert');
+            if (saveBtn) { saveBtn.disabled = true; saveBtn.innerText = '⏳ Saugoma...'; }
+            if (alertBox) alertBox.style.display = 'none';
+
+            const pubKey = document.getElementById('adminNodePublicKey')?.value || activeAdminNode.public_key || activeAdminNode.node_id;
+            const isPathEnabled = document.getElementById('adminNodeEnablePath')?.checked ?? true;
+            let finalPath = (document.getElementById('adminNodeLastPath')?.value || '').trim();
+            if (!isPathEnabled) {
+                finalPath = 'FLOOD';
+            }
+
+            const payload = {
+                public_key: pubKey,
+                node_name: document.getElementById('adminNodeName')?.value || '',
+                password: document.getElementById('adminNodePassword')?.value ?? '',
+                bot_id: document.getElementById('adminNodeBotId')?.value || 'KLP',
+                is_bot_locked: document.getElementById('adminNodeBotLocked')?.checked ? 1 : 0,
+                last_path: finalPath,
+                update: document.getElementById('adminNodeUpdate')?.checked ? 1 : 0,
+                is_disabled: document.getElementById('adminNodeIsDisabled')?.checked ? 1 : 0,
+                is_repeater: document.getElementById('adminNodeIsRepeater')?.checked ? 1 : 0,
+                latitude: document.getElementById('adminNodeLat')?.value || null,
+                longitude: document.getElementById('adminNodeLon')?.value || null
+            };
+
+            try {
+                const res = await fetch(`${adminApiBaseUrl}?action=update_node`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (data.success) {
+                    showMapToast('Mazgo nustatymai išsaugoti sėkmingai! 💾', 'success');
+
+                    const targetNodes = [activeAdminNode];
+                    const matched = findNodeByIdentifier(pubKey);
+                    if (matched && matched !== activeAdminNode) targetNodes.push(matched);
+
+                    targetNodes.forEach(node => {
+                        node.node_name = payload.node_name;
+                        node.name = payload.node_name;
+                        node.password = payload.password;
+                        node.bot_id = payload.bot_id;
+                        node.is_bot_locked = payload.is_bot_locked;
+                        node.last_path = payload.last_path;
+                        node.update = payload.update;
+                        node.is_disabled = payload.is_disabled;
+                        node.is_repeater = payload.is_repeater;
+                        if (payload.latitude !== null && payload.latitude !== '') {
+                            node.latitude = parseFloat(payload.latitude);
+                        }
+                        if (payload.longitude !== null && payload.longitude !== '') {
+                            node.longitude = parseFloat(payload.longitude);
+                        }
+                    });
+
+                    closeAdminNodeEditModal();
+
+                    if (Array.isArray(repeaters)) {
+                        renderNodes(repeaters, false);
+                    }
+
+                    if (selectedMobileNode && (selectedMobileNode.public_key === pubKey || selectedMobileNode.node_id === activeAdminNode.node_id)) {
+                        openMobileSheet(activeAdminNode);
+                    }
+                } else {
+                    if (alertBox) {
+                        alertBox.style.display = 'block';
+                        alertBox.style.background = 'rgba(239, 68, 68, 0.15)';
+                        alertBox.style.border = '1px solid #ef4444';
+                        alertBox.style.color = '#fca5a5';
+                        alertBox.innerText = 'Klaida: ' + (data.error || 'Nepavyko išsaugoti mazgo');
+                    } else {
+                        alert('Klaida: ' + (data.error || 'Nepavyko išsaugoti mazgo'));
+                    }
+                }
+            } catch (err) {
+                if (alertBox) {
+                    alertBox.style.display = 'block';
+                    alertBox.style.background = 'rgba(239, 68, 68, 0.15)';
+                    alertBox.style.border = '1px solid #ef4444';
+                    alertBox.style.color = '#fca5a5';
+                    alertBox.innerText = 'Serverio ryšio klaida';
+                } else {
+                    alert('Serverio ryšio klaida');
+                }
+            } finally {
+                if (saveBtn) { saveBtn.disabled = false; saveBtn.innerText = '💾 Išsaugoti'; }
+            }
+        }
+
         // Prijungiame globalias funkcijas prie window ir suderiname su ankstyvaisiais stubs
         window.fetchNodesData = window._fetchNodesData = fetchNodesData;
         window.onTelemetryToggleChange = window._onTelemetryToggleChange = onTelemetryToggleChange;
@@ -3400,9 +4331,20 @@
         window.matchesNodeIdentifier = matchesNodeIdentifier;
         window.findNodeByIdentifier = findNodeByIdentifier;
 
-        // Paleidžiame žemėlapį užsikrovus DOM
+        // Admin funkcijos
+        window.openAdminNodeEditModal = openAdminNodeEditModal;
+        window.closeAdminNodeEditModal = closeAdminNodeEditModal;
+        window.checkAdminAuth = checkAdminAuth;
+        window.copyAdminNodeKey = copyAdminNodeKey;
+        window.toggleAdminNodePathMode = toggleAdminNodePathMode;
+        window.resetActiveAdminNodeQueue = resetActiveAdminNodeQueue;
+        window.resetActiveAdminNodeFail = resetActiveAdminNodeFail;
+        window.handleAdminNodeSave = handleAdminNodeSave;
+
+        // Paleidžiame žemėlapį ir admin patikrą užsikrovus DOM
         document.addEventListener('DOMContentLoaded', () => {
             initMap();
+            checkAdminAuth();
 
             const refreshBtn = document.getElementById('refreshBtn');
             if (refreshBtn) refreshBtn.onclick = () => fetchNodesData(true);
