@@ -1314,7 +1314,7 @@ $isLoggedIn = isAdminLoggedIn();
                                         Įjungti taškų filtravimą tik Lietuvoje
                                     </div>
                                     <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
-                                        Kai aktyvuota, <code>/api/nodes</code> endpointas taiko geografinį filtrą ir atmeta taškus, kurie yra už nustatytų Lietuvos koordinačių rėmų.
+                                        Kai aktyvuota, <code>/api/nodes</code>, <code>/api/repyters</code> ir <code>/api/repeater</code> (telemetrijos atnaujinimo eilės parinkimas ESP32) taiko geografinį filtrą ir atmeta taškus, kurie yra už nustatytų Lietuvos koordinačių rėmų.
                                     </div>
                                 </div>
                             </label>

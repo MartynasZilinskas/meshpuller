@@ -80,7 +80,7 @@ class RawPacketRepository implements
         $this->schemaManager = $schemaManager ?? new SchemaManager($activePdo, $tableName);
         $this->settingsRepo = $settingsRepo ?? new SettingsRepository($activePdo);
         $this->geoService = $geoService ?? new GeolocationService($this->settingsRepo, $activePdo);
-        $this->pollingQueueService = $pollingQueueService ?? new PollingQueueService($activePdo, $this->settingsRepo);
+        $this->pollingQueueService = $pollingQueueService ?? new PollingQueueService($activePdo, $this->settingsRepo, $this->geoService);
         $this->botRepo = $botRepo ?? new BotRepository($activePdo);
 
         $this->nodeRepo = $nodeRepo ?? new NodeRepository(

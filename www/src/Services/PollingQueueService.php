@@ -5,8 +5,10 @@ namespace MeshCore\Services;
 use DateTime;
 use DateTimeInterface;
 use DateTimeZone;
+use MeshCore\Contracts\GeolocationServiceInterface;
 use MeshCore\Contracts\PollingQueueServiceInterface;
 use MeshCore\Contracts\SettingsRepositoryInterface;
+use MeshCore\Services\GeolocationService;
 use PDO;
 
 /**
@@ -18,16 +20,34 @@ class PollingQueueService implements PollingQueueServiceInterface
 {
     private PDO $pdo;
     private ?SettingsRepositoryInterface $settingsRepo;
+    private ?GeolocationServiceInterface $geoService;
 
-    public function __construct(PDO $pdo, ?SettingsRepositoryInterface $settingsRepo = null)
-    {
+    public function __construct(
+        PDO $pdo,
+        ?SettingsRepositoryInterface $settingsRepo = null,
+        ?GeolocationServiceInterface $geoService = null
+    ) {
         $this->pdo          = $pdo;
         $this->settingsRepo = $settingsRepo;
+        $this->geoService   = $geoService;
     }
 
     public function setSettingsRepository(SettingsRepositoryInterface $settingsRepo): void
     {
         $this->settingsRepo = $settingsRepo;
+    }
+
+    public function setGeolocationService(GeolocationServiceInterface $geoService): void
+    {
+        $this->geoService = $geoService;
+    }
+
+    public function getGeolocationService(): ?GeolocationServiceInterface
+    {
+        if ($this->geoService === null && $this->settingsRepo !== null) {
+            $this->geoService = new GeolocationService($this->settingsRepo, $this->pdo);
+        }
+        return $this->geoService;
     }
 
     private function getSetting(string $key, $default = null)
@@ -36,6 +56,52 @@ class PollingQueueService implements PollingQueueServiceInterface
             return $this->settingsRepo->getSetting($key, $default);
         }
         return $default;
+    }
+
+    /**
+     * Grąžina SQL sąlygą Lietuvos geolokacijos filtravimui pagal sistemos nustatymus.
+     * Jei filtras išjungtas, grąžina null.
+     */
+    private function getLithuaniaCondition(string $columnPrefix = '', string $driver = 'mysql'): ?string
+    {
+        $enabled = (bool)$this->getSetting('filter_lithuania_enabled', false);
+        if (!$enabled) {
+            return null;
+        }
+
+        $includeNoCoords = (bool)$this->getSetting('filter_lithuania_include_no_coords', false);
+        $latMin = (float)$this->getSetting('lithuania_lat_min', 53.85);
+        $latMax = (float)$this->getSetting('lithuania_lat_max', 56.45);
+        $lonMin = (float)$this->getSetting('lithuania_lon_min', 20.90);
+        $lonMax = (float)$this->getSetting('lithuania_lon_max', 26.85);
+
+        if ($latMin > $latMax) {
+            [$latMin, $latMax] = [$latMax, $latMin];
+        }
+        if ($lonMin > $lonMax) {
+            [$lonMin, $lonMax] = [$lonMax, $lonMin];
+        }
+
+        if ($driver === 'pgsql') {
+            $prefix = $columnPrefix ? rtrim($columnPrefix, '.') . '.' : '';
+            $latCol = "{$prefix}latitude";
+            $lonCol = "{$prefix}longitude";
+            $absFunc = 'abs';
+        } else {
+            $prefix = $columnPrefix ? '`' . trim($columnPrefix, '` .') . '`.' : '';
+            $latCol = "{$prefix}`latitude`";
+            $lonCol = "{$prefix}`longitude`";
+            $absFunc = 'ABS';
+        }
+
+        $inBounds = "({$latCol} >= {$latMin} AND {$latCol} <= {$latMax} AND {$lonCol} >= {$lonMin} AND {$lonCol} <= {$lonMax})";
+        $noCoords = "({$latCol} IS NULL OR {$lonCol} IS NULL OR ({$absFunc}({$latCol}) < 0.001 AND {$absFunc}({$lonCol}) < 0.001))";
+
+        if ($includeNoCoords) {
+            return "({$noCoords} OR {$inBounds})";
+        } else {
+            return "(NOT {$noCoords} AND {$inBounds})";
+        }
     }
 
     /**
@@ -119,7 +185,11 @@ class PollingQueueService implements PollingQueueServiceInterface
                 $intervalFilterMysql = "";
                 if ($minIntervalMins > 0) {
                     $intervalFilterPgsql = " AND (telemetry_updated_at IS NULL OR telemetry_updated_at <= (CURRENT_TIMESTAMP - INTERVAL '{$minIntervalMins} minutes'))";
-                    $intervalFilterMysql = " AND (`telemetry_updated_at` IS NULL OR `telemetry_updated_at` <= DATE_SUB(NOW(), INTERVAL {$minIntervalMins} MINUTE))";
+                    if ($driver === 'sqlite') {
+                        $intervalFilterMysql = " AND (`telemetry_updated_at` IS NULL OR `telemetry_updated_at` <= datetime('now', '-{$minIntervalMins} minutes'))";
+                    } else {
+                        $intervalFilterMysql = " AND (`telemetry_updated_at` IS NULL OR `telemetry_updated_at` <= DATE_SUB(NOW(), INTERVAL {$minIntervalMins} MINUTE))";
+                    }
                 }
 
                 $botFilterPgsql = "";
@@ -132,15 +202,21 @@ class PollingQueueService implements PollingQueueServiceInterface
                     $params[':bot_id'] = $cleanBotId;
                 }
 
+                $geoCondPgsql = $this->getLithuaniaCondition('nodes.', 'pgsql');
+                $geoFilterPgsql = $geoCondPgsql ? " AND {$geoCondPgsql}" : "";
+
+                $geoCondMysql = $this->getLithuaniaCondition('nodes.', 'mysql');
+                $geoFilterMysql = $geoCondMysql ? " AND {$geoCondMysql}" : "";
+
                 if ($driver === 'pgsql') {
-                    $sql = "SELECT public_key, node_id, node_name, is_repeater, password, \"update\", bot_id, last_path 
+                    $sql = "SELECT public_key, node_id, node_name, is_repeater, password, \"update\", bot_id, last_path, latitude, longitude 
                             FROM nodes 
-                            WHERE \"update\" = true AND (is_disabled = false OR is_disabled IS NULL) {$failFilterPgsql} {$intervalFilterPgsql} {$botFilterPgsql}
+                            WHERE \"update\" = true AND (is_disabled = false OR is_disabled IS NULL) {$failFilterPgsql} {$intervalFilterPgsql} {$botFilterPgsql} {$geoFilterPgsql}
                             ORDER BY last_seen_at DESC";
                 } else {
-                    $sql = "SELECT public_key, node_id, node_name, is_repeater, `password`, `update`, `bot_id`, `last_path` 
+                    $sql = "SELECT public_key, node_id, node_name, is_repeater, `password`, `update`, `bot_id`, `last_path`, `latitude`, `longitude` 
                             FROM `nodes` 
-                            WHERE `update` = 1 AND (`is_disabled` = 0 OR `is_disabled` IS NULL) {$failFilterMysql} {$intervalFilterMysql} {$botFilterMysql}
+                            WHERE `update` = 1 AND (`is_disabled` = 0 OR `is_disabled` IS NULL) {$failFilterMysql} {$intervalFilterMysql} {$botFilterMysql} {$geoFilterMysql}
                             ORDER BY last_seen_at DESC";
                 }
 
@@ -244,6 +320,13 @@ class PollingQueueService implements PollingQueueServiceInterface
             }
         }
 
+        if (!empty($repeaters) && (bool)$this->getSetting('filter_lithuania_enabled', false)) {
+            $geoSvc = $this->getGeolocationService();
+            if ($geoSvc) {
+                $repeaters = $geoSvc->filterNodesByGeolocationSettings($repeaters);
+            }
+        }
+
         return $repeaters;
     }
 
@@ -328,19 +411,33 @@ class PollingQueueService implements PollingQueueServiceInterface
                 OR requested_date <= (CURRENT_TIMESTAMP - INTERVAL '{$minIntervalMins} minutes')
             )";
 
-            $timingFilterMysql = " AND (
-                `requested_date` IS NULL 
-                OR `requested_date` <= DATE_SUB(NOW(), INTERVAL {$minIntervalMins} MINUTE)
-            )";
+            if ($driver === 'sqlite') {
+                $timingFilterMysql = " AND (
+                    `requested_date` IS NULL 
+                    OR `requested_date` <= datetime('now', '-{$minIntervalMins} minutes')
+                )";
+            } else {
+                $timingFilterMysql = " AND (
+                    `requested_date` IS NULL 
+                    OR `requested_date` <= DATE_SUB(NOW(), INTERVAL {$minIntervalMins} MINUTE)
+                )";
+            }
         } else {
             $timingFilterPgsql = " AND (
                 requested_date IS NULL 
                 OR requested_date <= (CURRENT_TIMESTAMP - INTERVAL '180 seconds')
             )";
-            $timingFilterMysql = " AND (
-                `requested_date` IS NULL 
-                OR `requested_date` <= DATE_SUB(NOW(), INTERVAL 180 SECOND)
-            )";
+            if ($driver === 'sqlite') {
+                $timingFilterMysql = " AND (
+                    `requested_date` IS NULL 
+                    OR `requested_date` <= datetime('now', '-180 seconds')
+                )";
+            } else {
+                $timingFilterMysql = " AND (
+                    `requested_date` IS NULL 
+                    OR `requested_date` <= DATE_SUB(NOW(), INTERVAL 180 SECOND)
+                )";
+            }
         }
 
         $botFilterPgsql = "";
@@ -352,6 +449,13 @@ class PollingQueueService implements PollingQueueServiceInterface
             $botFilterMysql = " AND (`nodes`.`bot_id` = :bot_id)";
             $params[':bot_id'] = $cleanBotId;
         }
+
+        $geoCondPgsql = $this->getLithuaniaCondition('nodes.', 'pgsql');
+        $geoFilterPgsql = $geoCondPgsql ? " AND {$geoCondPgsql}" : "";
+
+        $geoCondMysql = $this->getLithuaniaCondition('nodes.', 'mysql');
+        $geoFilterMysql = $geoCondMysql ? " AND {$geoCondMysql}" : "";
+
         $sourceRoutingEnabled = (bool)$this->getSetting('enable_source_routing', true);
 
         if ($driver === 'pgsql') {
@@ -359,7 +463,7 @@ class PollingQueueService implements PollingQueueServiceInterface
             WITH next_rep AS (
                 SELECT id, public_key, node_id, node_name, password, requested_date, telemetry_updated_at, last_failed_request_at, bot_id, last_path
                 FROM nodes
-                WHERE (is_repeater = true) AND ("update" = true) AND (is_disabled = false OR is_disabled IS NULL) {$failFilterPgsql} {$timingFilterPgsql} {$botFilterPgsql}
+                WHERE (is_repeater = true) AND ("update" = true) AND (is_disabled = false OR is_disabled IS NULL) {$failFilterPgsql} {$timingFilterPgsql} {$botFilterPgsql} {$geoFilterPgsql}
                 ORDER BY 
                     CASE WHEN requested_date IS NULL THEN 0 ELSE 1 END ASC,
                     requested_date ASC,
@@ -431,6 +535,7 @@ SQL;
         // MySQL / SQLite
         $this->pdo->beginTransaction();
         try {
+            $forUpdate = ($driver === 'sqlite') ? '' : 'FOR UPDATE';
             $selectSql = <<<SQL
             SELECT id, public_key, node_id, node_name, `password`, `requested_date`, `telemetry_updated_at`, `last_failed_request_at`, `telemetry_fail_count`, `bot_id`, `last_path`
             FROM `nodes`
@@ -440,12 +545,13 @@ SQL;
               {$failFilterMysql}
               {$timingFilterMysql}
               {$botFilterMysql}
+              {$geoFilterMysql}
             ORDER BY 
                 CASE WHEN `requested_date` IS NULL THEN 0 ELSE 1 END ASC,
                 `requested_date` ASC,
                 `id` ASC
             LIMIT 1
-            FOR UPDATE
+            {$forUpdate}
 SQL;
             $stmt = $this->pdo->prepare($selectSql);
             $stmt->execute($params);
@@ -532,6 +638,7 @@ SQL;
 
         $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
         $updateCol = ($driver === 'pgsql') ? '"update"' : '`update`';
+        $updateSelectCol = ($driver === 'pgsql') ? 'n."update"' : 'n.`update`';
         $repCol = ($driver === 'pgsql') ? 'is_repeater' : '`is_repeater`';
 
         $where = [];
@@ -558,6 +665,10 @@ SQL;
             $params[':search3'] = $s;
         }
 
+        if ($geoCond = $this->getLithuaniaCondition('n.', $driver)) {
+            $where[] = $geoCond;
+        }
+
         $whereSql = !empty($where) ? "WHERE " . implode(" AND ", $where) : "";
 
         $sql = <<<SQL
@@ -568,7 +679,7 @@ SQL;
             n.public_key,
             n.bot_id,
             n.is_repeater,
-            n.update,
+            {$updateSelectCol} AS `update`,
             n.is_disabled,
             n.latitude,
             n.longitude,
