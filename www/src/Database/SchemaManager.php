@@ -549,6 +549,64 @@ SQL;
             }
         } catch (\Throwable $e) {}
 
+        // 6. api_logs lentelė (API užklausų žurnalas ir klientų/botų fiksavimas)
+        try {
+            if ($driver === 'pgsql') {
+                $apiLogsSql = <<<SQL
+                CREATE TABLE IF NOT EXISTS api_logs (
+                    id BIGSERIAL PRIMARY KEY,
+                    ip_address VARCHAR(64) NOT NULL DEFAULT '',
+                    method VARCHAR(12) NOT NULL DEFAULT 'GET',
+                    endpoint VARCHAR(64) NOT NULL DEFAULT '',
+                    request_uri TEXT NOT NULL,
+                    bot_id VARCHAR(32) NULL,
+                    user_agent TEXT NULL,
+                    client_type VARCHAR(32) NOT NULL DEFAULT 'Unknown',
+                    status_code SMALLINT NOT NULL DEFAULT 200,
+                    duration_ms INT NULL,
+                    response_size INT NULL,
+                    request_body TEXT NULL,
+                    response_body TEXT NULL,
+                    headers_json TEXT NULL,
+                    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_api_logs_created_at ON api_logs (created_at);
+                CREATE INDEX IF NOT EXISTS idx_api_logs_ip ON api_logs (ip_address);
+                CREATE INDEX IF NOT EXISTS idx_api_logs_endpoint ON api_logs (endpoint);
+                CREATE INDEX IF NOT EXISTS idx_api_logs_client_type ON api_logs (client_type);
+                CREATE INDEX IF NOT EXISTS idx_api_logs_bot_id ON api_logs (bot_id);
+                CREATE INDEX IF NOT EXISTS idx_api_logs_status ON api_logs (status_code);
+SQL;
+            } else {
+                $apiLogsSql = <<<SQL
+                CREATE TABLE IF NOT EXISTS `api_logs` (
+                    `id`            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    `ip_address`    VARCHAR(64) NOT NULL DEFAULT '',
+                    `method`        VARCHAR(12) NOT NULL DEFAULT 'GET',
+                    `endpoint`      VARCHAR(64) NOT NULL DEFAULT '',
+                    `request_uri`   VARCHAR(1024) NOT NULL DEFAULT '',
+                    `bot_id`        VARCHAR(32) NULL DEFAULT NULL,
+                    `user_agent`    TEXT NULL DEFAULT NULL,
+                    `client_type`   VARCHAR(32) NOT NULL DEFAULT 'Unknown',
+                    `status_code`   SMALLINT NOT NULL DEFAULT 200,
+                    `duration_ms`   INT NULL DEFAULT NULL,
+                    `response_size` INT NULL DEFAULT NULL,
+                    `request_body`  LONGTEXT NULL DEFAULT NULL,
+                    `response_body` LONGTEXT NULL DEFAULT NULL,
+                    `headers_json`  TEXT NULL DEFAULT NULL,
+                    `created_at`    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    INDEX `idx_api_logs_created_at` (`created_at`),
+                    INDEX `idx_api_logs_ip` (`ip_address`),
+                    INDEX `idx_api_logs_endpoint` (`endpoint`),
+                    INDEX `idx_api_logs_client_type` (`client_type`),
+                    INDEX `idx_api_logs_bot_id` (`bot_id`),
+                    INDEX `idx_api_logs_status` (`status_code`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+SQL;
+            }
+            $this->pdo->exec($apiLogsSql);
+        } catch (\Throwable $e) {}
+
         if ($postMigrationCleanup !== null && is_callable($postMigrationCleanup)) {
             call_user_func($postMigrationCleanup);
         }

@@ -14,6 +14,7 @@ use MeshCore\Contracts\SettingsRepositoryInterface;
 use MeshCore\Contracts\TelemetryRepositoryInterface;
 use MeshCore\Database\DatabaseManager;
 use MeshCore\Database\SchemaManager;
+use MeshCore\Repositories\ApiLogRepository;
 use MeshCore\Repositories\BotRepository;
 use MeshCore\Repositories\NodeRepository;
 use MeshCore\Repositories\RawPacketStorage;
@@ -59,6 +60,7 @@ class RawPacketRepository implements
     private TelemetryRepository $telemetryRepo;
     private RawPacketStorage $rawPacketStorage;
     private BotRepository $botRepo;
+    private ApiLogRepository $apiLogRepo;
 
     public function __construct(
         ?array $config = null,
@@ -71,7 +73,8 @@ class RawPacketRepository implements
         ?NodeRepository $nodeRepo = null,
         ?TelemetryRepository $telemetryRepo = null,
         ?RawPacketStorage $rawPacketStorage = null,
-        ?BotRepository $botRepo = null
+        ?BotRepository $botRepo = null,
+        ?ApiLogRepository $apiLogRepo = null
     ) {
         $this->dbManager = $dbManager ?? new DatabaseManager($config, $pdo);
         $activePdo = $this->dbManager->getPdo();
@@ -82,6 +85,7 @@ class RawPacketRepository implements
         $this->geoService = $geoService ?? new GeolocationService($this->settingsRepo, $activePdo);
         $this->pollingQueueService = $pollingQueueService ?? new PollingQueueService($activePdo, $this->settingsRepo, $this->geoService);
         $this->botRepo = $botRepo ?? new BotRepository($activePdo);
+        $this->apiLogRepo = $apiLogRepo ?? new ApiLogRepository($activePdo);
 
         $this->nodeRepo = $nodeRepo ?? new NodeRepository(
             $activePdo,
@@ -521,5 +525,44 @@ class RawPacketRepository implements
     public function findClosestBot(float $latitude, float $longitude, bool $onlyEnabled = false): ?array
     {
         return $this->botRepo->findClosestBot($latitude, $longitude, $onlyEnabled);
+    }
+
+    // =========================================================================
+    // 🌐 API LOG REPOSITORY
+    // =========================================================================
+
+    public function getApiLogRepository(): ApiLogRepository
+    {
+        return $this->apiLogRepo;
+    }
+
+    public function logApiRequest(array $data): void
+    {
+        $this->apiLogRepo->logRequest($data);
+    }
+
+    public function getFilteredApiLogs(
+        array $filters = [],
+        int $limit = 50,
+        int $offset = 0,
+        ?string $sortBy = 'id',
+        ?string $sortDir = 'DESC'
+    ): array {
+        return $this->apiLogRepo->getFilteredLogs($filters, $limit, $offset, $sortBy, $sortDir);
+    }
+
+    public function getApiLogDetail(int $id): ?array
+    {
+        return $this->apiLogRepo->getLogDetail($id);
+    }
+
+    public function getApiLogStats(): array
+    {
+        return $this->apiLogRepo->getLogStats();
+    }
+
+    public function clearApiLogs(?string $mode = 'all'): int
+    {
+        return $this->apiLogRepo->clearLogs($mode);
     }
 }

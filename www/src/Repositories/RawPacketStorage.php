@@ -332,21 +332,29 @@ SQL;
 
             if (!empty($decoded['advert']) && is_array($decoded['advert']) && !empty($decoded['advert']['public_key'])) {
                 if ($this->nodeRepo !== null) {
-                    $this->nodeRepo->upsertNodeFromAdvert($decoded['advert'], $record);
+                    $recordWithMeta = is_array($record) ? $record : [];
+                    if (!empty($decoded['path'])) {
+                        $recordWithMeta['path'] = $decoded['path'];
+                    }
+                    $this->nodeRepo->upsertNodeFromAdvert($decoded['advert'], $recordWithMeta);
                 }
             }
 
+            $savedTelemetryId = null;
             if ($this->telemetryRepo !== null) {
-                $this->telemetryRepo->extractAndSaveTelemetry($id, $decoded, $record);
+                $savedTelemetryId = $this->telemetryRepo->extractAndSaveTelemetry($id, $decoded, $record);
             }
 
-            if (!empty($record['direction']) && strtoupper((string)$record['direction']) === 'RX') {
+            if ($savedTelemetryId === null && !empty($record['direction']) && strtoupper((string)$record['direction']) === 'RX') {
                 $senderKey = !empty($record['sender_public_key']) ? (string)$record['sender_public_key'] : null;
                 if ($senderKey && $this->nodeRepo !== null) {
                     $bId = !empty($record['bot_id']) ? (string)$record['bot_id'] : 'KLP';
                     $r = isset($record['rssi']) ? (float)$record['rssi'] : null;
                     $s = isset($record['snr']) ? (float)$record['snr'] : null;
-                    $this->nodeRepo->touchNodeSeen($senderKey, $bId, null, null, $r, $s);
+
+                    $returnPath = $this->nodeRepo->extractReturnPathString($decoded['path'] ?? null, $r, $s);
+
+                    $this->nodeRepo->touchNodeSeen($senderKey, $bId, null, null, $r, $s, false, null, $returnPath);
                 }
             }
 

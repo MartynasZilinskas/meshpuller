@@ -77,31 +77,42 @@ try {
         } catch (\Throwable $e) {}
     }
 
-    // Užpildome 'nodes.telemetry_updated_at' esamiems mazgams iš 'telemetry' lentelės, jei data tuščia
+    // Užpildome 'nodes.telemetry_updated_at', 'battery_v' ir 'temperature_c' esamiems mazgams iš 'telemetry' lentelės, jei trūksta duomenų
     try {
         if ($driver === 'pgsql') {
-            $pdo->exec("UPDATE nodes n SET telemetry_updated_at = sub.max_rec
+            $pdo->exec("UPDATE nodes n SET 
+                        telemetry_updated_at = COALESCE(n.telemetry_updated_at, sub.max_rec),
+                        battery_v = COALESCE(n.battery_v, sub.max_batt),
+                        temperature_c = COALESCE(n.temperature_c, sub.max_temp)
                         FROM (
-                            SELECT public_key, node_id, MAX(recorded_at) as max_rec
+                            SELECT public_key, node_id, 
+                                   MAX(recorded_at) as max_rec,
+                                   MAX(battery_v) as max_batt,
+                                   MAX(temperature_c) as max_temp
                             FROM telemetry
                             WHERE battery_v IS NOT NULL OR temperature_c IS NOT NULL
                             GROUP BY public_key, node_id
                         ) sub
-                        WHERE (n.public_key IS NOT NULL AND n.public_key = sub.public_key)
-                           OR (n.node_id IS NOT NULL AND n.node_id = sub.node_id)
-                          AND n.telemetry_updated_at IS NULL");
+                        WHERE ((n.public_key IS NOT NULL AND n.public_key = sub.public_key)
+                           OR (n.node_id IS NOT NULL AND n.node_id = sub.node_id))
+                          AND (n.telemetry_updated_at IS NULL OR n.battery_v IS NULL OR n.temperature_c IS NULL)");
         } else {
             $pdo->exec("UPDATE `nodes` n
                         JOIN (
-                            SELECT public_key, node_id, MAX(recorded_at) as max_rec
+                            SELECT public_key, node_id, 
+                                   MAX(recorded_at) as max_rec,
+                                   MAX(battery_v) as max_batt,
+                                   MAX(temperature_c) as max_temp
                             FROM telemetry
                             WHERE battery_v IS NOT NULL OR temperature_c IS NOT NULL
                             GROUP BY public_key, node_id
-                        ) sub ON (n.public_key IS NOT NULL AND n.public_key = sub.public_key) OR (n.node_id IS NOT NULL AND n.node_id = sub.node_id)
-                        SET n.telemetry_updated_at = sub.max_rec
-                        WHERE n.telemetry_updated_at IS NULL");
+                        ) sub ON ((n.public_key IS NOT NULL AND n.public_key = sub.public_key) OR (n.node_id IS NOT NULL AND n.node_id = sub.node_id))
+                        SET n.telemetry_updated_at = COALESCE(n.telemetry_updated_at, sub.max_rec),
+                            n.battery_v = COALESCE(n.battery_v, sub.max_batt),
+                            n.temperature_c = COALESCE(n.temperature_c, sub.max_temp)
+                        WHERE n.telemetry_updated_at IS NULL OR n.battery_v IS NULL OR n.temperature_c IS NULL");
         }
-        output("Sinchronizuota 'telemetry_updated_at' data esamiems mazgams iš 'telemetry' lentelės", "info");
+        output("Sinchronizuoti 'telemetry_updated_at', 'battery_v' ir 'temperature_c' duomenys mazgams iš 'telemetry' lentelės", "info");
     } catch (\Throwable $e) {}
 
     // 2. Patikriname visų keturių lentelių stulpelius

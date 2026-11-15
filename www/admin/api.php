@@ -914,6 +914,103 @@ if ($action === 'reset_all_fail_counts') {
     exit;
 }
 
+// -----------------------------------------------------------------------------
+// 🌐 API UŽKLAUSŲ ŽURNALO SĄRAŠAS (su paieška ir filtrais)
+// -----------------------------------------------------------------------------
+if ($action === 'api_logs') {
+    $limit  = isset($_GET['limit']) ? min(200, max(1, (int)$_GET['limit'])) : 50;
+    $offset = isset($_GET['offset']) ? max(0, (int)$_GET['offset']) : 0;
+
+    $filters = [
+        'search'      => $_GET['search'] ?? '',
+        'ip'          => $_GET['ip'] ?? '',
+        'endpoint'    => $_GET['endpoint'] ?? 'all',
+        'method'      => $_GET['method'] ?? 'all',
+        'client_type' => $_GET['client_type'] ?? 'all',
+        'bot_id'      => $_GET['bot_id'] ?? 'all',
+        'status'      => $_GET['status'] ?? 'all',
+    ];
+
+    $sortBy  = isset($_GET['sort_by']) && trim($_GET['sort_by']) !== '' ? trim($_GET['sort_by']) : 'id';
+    $sortDir = isset($_GET['sort_dir']) && trim($_GET['sort_dir']) !== '' ? trim($_GET['sort_dir']) : 'DESC';
+
+    try {
+        $result = $repository->getFilteredApiLogs($filters, $limit, $offset, $sortBy, $sortDir);
+        $stats  = $repository->getApiLogStats();
+
+        echo json_encode([
+            'success'        => true,
+            'stats'          => $stats,
+            'total_filtered' => $result['total_filtered'],
+            'limit'          => $limit,
+            'offset'         => $offset,
+            'items'          => $result['items'],
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    } catch (\Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// -----------------------------------------------------------------------------
+// 🌐 VIENO API LOGO DETALI INFORMACIJA (Pilnas JSON atsakymas, request body, headers)
+// -----------------------------------------------------------------------------
+if ($action === 'api_log_detail') {
+    $id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+    if ($id <= 0) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Nenurodytas API logo ID']);
+        exit;
+    }
+
+    try {
+        $item = $repository->getApiLogDetail($id);
+        if (!$item) {
+            http_response_code(404);
+            echo json_encode(['success' => false, 'error' => "API logas #{$id} nerastas"]);
+            exit;
+        }
+
+        echo json_encode([
+            'success' => true,
+            'item'    => $item,
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    } catch (\Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// -----------------------------------------------------------------------------
+// 🧹 IŠVALYTI API LOGUS
+// -----------------------------------------------------------------------------
+if ($action === 'clear_api_logs') {
+    if ($method !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['success' => false, 'error' => 'Metodas nepalaikomas']);
+        exit;
+    }
+
+    $rawInput = file_get_contents('php://input');
+    $data = json_decode($rawInput, true) ?: $_POST;
+    $mode = isset($data['mode']) ? trim((string)$data['mode']) : 'all';
+
+    try {
+        $deleted = $repository->clearApiLogs($mode);
+        echo json_encode([
+            'success' => true,
+            'deleted' => $deleted,
+            'message' => "Išvalyta {$deleted} API žurnalo įrašų."
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    } catch (\Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
 // Jei veiksmas neatpažintas
 http_response_code(400);
 echo json_encode(['success' => false, 'error' => "Neatpažintas veiksmas: '{$action}'"]);

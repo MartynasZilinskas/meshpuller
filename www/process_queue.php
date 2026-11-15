@@ -40,7 +40,6 @@ use MeshCore\RawPacketRepository;
 
 $decoder = new MeshCoreDecoder();
 $repository = new RawPacketRepository();
-$repository->createTableIfNotExists();
 
 // Parametrų nuskaitymas (CLI arba HTTP)
 if ($isCli) {

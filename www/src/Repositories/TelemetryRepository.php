@@ -156,19 +156,23 @@ class TelemetryRepository implements TelemetryRepositoryInterface
 
         $hasTelemetry = true;
 
-        $incomingHops = $decoded['path']['hops'] ?? [];
-        $pathHopCount = isset($decoded['path']['hop_count']) ? (int)$decoded['path']['hop_count'] : null;
         $returnPath = null;
-        if ($pathHopCount === 0) {
-            if ($rssi !== null && $rssi >= -95.0) {
-                $returnPath = 'DIRECT';
-            }
-        } elseif (!empty($incomingHops) && is_array($incomingHops)) {
-            $computedPath = implode('', array_reverse($incomingHops));
-            if ($pathHopCount === 1 && $rssi !== null && $rssi < -100.0) {
-                $returnPath = null;
-            } else {
-                $returnPath = $computedPath;
+        if ($this->nodeRepo !== null && !empty($decoded['path']) && is_array($decoded['path'])) {
+            $returnPath = $this->nodeRepo->extractReturnPathString($decoded['path'], $rssi, $snr);
+        } else {
+            $incomingHops = $decoded['path']['hops'] ?? [];
+            $pathHopCount = isset($decoded['path']['hop_count']) ? (int)$decoded['path']['hop_count'] : null;
+            if ($pathHopCount === 0) {
+                if (($rssi === null || $rssi >= -98.0) && ($snr === null || $snr >= -5.0)) {
+                    $returnPath = 'DIRECT';
+                }
+            } elseif (!empty($incomingHops) && is_array($incomingHops)) {
+                $computedPath = strtoupper(implode('', array_reverse($incomingHops)));
+                if ($pathHopCount === 1 && $rssi !== null && $rssi < -105.0) {
+                    $returnPath = null;
+                } elseif (strlen($computedPath) >= 4 && strlen($computedPath) % 4 === 0) {
+                    $returnPath = $computedPath;
+                }
             }
         }
 
@@ -360,7 +364,12 @@ SQL;
      */
     public function backfillTelemetryFromRawPackets(MeshCoreDecoder $decoder): int
     {
-        $stmt = $this->pdo->query("SELECT * FROM {$this->rawPacketsTable} ORDER BY id ASC");
+        $sql = "SELECT * FROM {$this->rawPacketsTable}
+                WHERE id > (SELECT COALESCE(MAX(raw_packet_id), 0) FROM telemetry)
+                  AND (direction = 'RX' OR direction IS NULL)
+                ORDER BY id ASC
+                LIMIT 3000";
+        $stmt = $this->pdo->query($sql);
         $count = 0;
 
         while ($row = $stmt->fetch()) {
@@ -408,39 +417,12 @@ SQL;
             n.is_disabled,
             n.latitude,
             n.longitude,
-            n.battery_v AS advert_battery_v,
-            n.temperature_c AS node_temperature_c,
+            n.battery_v,
+            n.temperature_c,
             n.first_seen_at,
             n.last_seen_at,
             n.telemetry_updated_at,
             n.telemetry_fail_count,
-            (
-                SELECT t.battery_v 
-                FROM telemetry t 
-                WHERE (t.node_id = n.node_id OR (n.public_key IS NOT NULL AND t.public_key = n.public_key)) 
-                  AND t.type IN ('TELEMETRY', 'STATUS')
-                  AND t.battery_v IS NOT NULL 
-                  AND t.battery_v >= 0.0 AND t.battery_v <= 15.0
-                ORDER BY t.recorded_at DESC, t.id DESC 
-                LIMIT 1
-            ) AS last_battery_v,
-            (
-                SELECT t.temperature_c 
-                FROM telemetry t 
-                WHERE (t.node_id = n.node_id OR (n.public_key IS NOT NULL AND t.public_key = n.public_key)) 
-                  AND t.type IN ('TELEMETRY', 'STATUS')
-                  AND t.temperature_c IS NOT NULL 
-                ORDER BY t.recorded_at DESC, t.id DESC 
-                LIMIT 1
-            ) AS last_temperature_c,
-            (
-                SELECT t.recorded_at 
-                FROM telemetry t 
-                WHERE (t.node_id = n.node_id OR (n.public_key IS NOT NULL AND t.public_key = n.public_key)) 
-                  AND t.type IN ('TELEMETRY', 'STATUS')
-                ORDER BY t.recorded_at DESC, t.id DESC 
-                LIMIT 1
-            ) AS last_telemetry_at,
             b.name AS bot_name,
             b.enabled AS bot_enabled,
             b.public_key AS bot_public_key,
@@ -467,9 +449,9 @@ SQL;
         foreach ($rows as $row) {
             $lat = ($row['latitude'] !== null) ? (float)$row['latitude'] : null;
             $lon = ($row['longitude'] !== null) ? (float)$row['longitude'] : null;
-            $batteryV = ($row['last_battery_v'] !== null) ? (float)$row['last_battery_v'] : null;
-            $tempC = ($row['last_temperature_c'] !== null) ? (float)$row['last_temperature_c'] : null;
-            $telemUpdatedAt = $row['last_telemetry_at'] ?? $row['telemetry_updated_at'];
+            $batteryV = ($row['battery_v'] !== null) ? (float)$row['battery_v'] : null;
+            $tempC = ($row['temperature_c'] !== null) ? (float)$row['temperature_c'] : null;
+            $telemUpdatedAt = $row['telemetry_updated_at'] ?? null;
 
             $nodeId = !empty($row['node_id']) 
                 ? (string)$row['node_id'] 

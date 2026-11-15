@@ -237,13 +237,25 @@ class PollingQueueService implements PollingQueueServiceInterface
                             ? trim((string)$row['password']) 
                             : '';
 
-                        $rawPath = trim((string)($row['last_path'] ?? ''));
-                        if (!$sourceRoutingEnabled || strtoupper($rawPath) === 'FLOOD') {
+                        $rawPath = strtoupper(trim((string)($row['last_path'] ?? '')));
+                        $isValidHexPath = ($rawPath !== '' && $rawPath !== 'FLOOD' && $rawPath !== 'DIRECT'
+                            && strlen($rawPath) >= 4 && (strlen($rawPath) % 4 === 0)
+                            && ctype_xdigit($rawPath));
+
+                        if (!$sourceRoutingEnabled || $rawPath === 'FLOOD') {
                             $lastPath = 'FLOOD';
                             $isDirect = false;
-                        } else {
+                        } elseif ($rawPath === 'DIRECT') {
+                            $lastPath = 'DIRECT';
+                            $isDirect = true;
+                        } elseif ($isValidHexPath) {
                             $lastPath = $rawPath;
-                            $isDirect = ($lastPath === 'DIRECT');
+                            $isDirect = false;
+                        } else {
+                            // Kai maršrutas DB yra NULL, grąžiname '', kad boto firmware (v9.4)
+                            // nustatytų forceFlood = false ir galėtų išmokti DIRECT kelią jau iš Login atsakymo!
+                            $lastPath = '';
+                            $isDirect = false;
                         }
 
                         $repeaters[] = [
@@ -332,6 +344,7 @@ class PollingQueueService implements PollingQueueServiceInterface
 
     /**
      * Sinchronizuoja ir padidina nesėkmingų bandymų gauti telemetriją skaičių (telemetry_fail_count).
+     * Jei išsaugotas maršrutas (last_path) neatsakė per nustatytą laiką, numeta jį į NULL (fallback į FLOOD).
      */
     public function syncFailedTelemetryAttempts(int $timeoutSeconds = 180): int
     {
@@ -347,7 +360,8 @@ class PollingQueueService implements PollingQueueServiceInterface
                 $sql = "UPDATE nodes
                 SET 
                     telemetry_fail_count = telemetry_fail_count + 1,
-                    last_failed_request_at = requested_date
+                    last_failed_request_at = requested_date,
+                    last_path = CASE WHEN UPPER(COALESCE(last_path, '')) = 'FLOOD' THEN 'FLOOD' ELSE NULL END
                 WHERE requested_date IS NOT NULL
                   AND requested_date <= (CURRENT_TIMESTAMP - INTERVAL '{$timeout} seconds')
                   AND (telemetry_updated_at IS NULL OR telemetry_updated_at < requested_date)
@@ -355,10 +369,24 @@ class PollingQueueService implements PollingQueueServiceInterface
                 return (int)$this->pdo->exec($sql);
             }
 
+            if ($driver === 'sqlite') {
+                $sql = "UPDATE `nodes`
+                SET 
+                    `telemetry_fail_count` = `telemetry_fail_count` + 1,
+                    `last_failed_request_at` = `requested_date`,
+                    `last_path` = CASE WHEN UPPER(COALESCE(`last_path`, '')) = 'FLOOD' THEN 'FLOOD' ELSE NULL END
+                WHERE `requested_date` IS NOT NULL
+                  AND `requested_date` <= datetime('now', '-{$timeout} seconds')
+                  AND (`telemetry_updated_at` IS NULL OR `telemetry_updated_at` < `requested_date`)
+                  AND (`last_failed_request_at` IS NULL OR `last_failed_request_at` < `requested_date`)";
+                return (int)$this->pdo->exec($sql);
+            }
+
             $sql = "UPDATE `nodes`
             SET 
                 `telemetry_fail_count` = `telemetry_fail_count` + 1,
-                `last_failed_request_at` = `requested_date`
+                `last_failed_request_at` = `requested_date`,
+                `last_path` = IF(UPPER(COALESCE(`last_path`, '')) = 'FLOOD', 'FLOOD', NULL)
             WHERE `requested_date` IS NOT NULL
               AND `requested_date` <= DATE_SUB(NOW(), INTERVAL {$timeout} SECOND)
               AND (`telemetry_updated_at` IS NULL OR `telemetry_updated_at` < `requested_date`)
@@ -371,6 +399,8 @@ class PollingQueueService implements PollingQueueServiceInterface
 
     /**
      * Grąžina sekantį 1 stebimą kartotuvą, kurį botas turi užklausti.
+     * Pirmiausia grąžina šiam botui priskirtus kartotuvus, o jei kitas botas nepasiekia
+     * neužrakinto kartotuvo (>= 2 nesėkmės arba kitas botas išjungtas) – leidžia perimti užklausą (failover).
      */
     public function getNextRepeaterToRequest(?string $botId = null): ?array
     {
@@ -445,9 +475,30 @@ class PollingQueueService implements PollingQueueServiceInterface
         $params = [];
         if (!empty($botId)) {
             $cleanBotId = strtoupper(substr(trim((string)$botId), 0, 16));
-            $botFilterPgsql = " AND (nodes.bot_id = :bot_id)";
-            $botFilterMysql = " AND (`nodes`.`bot_id` = :bot_id)";
+            $botFilterPgsql = " AND (
+                UPPER(nodes.bot_id) = :bot_id
+                OR (
+                    (nodes.is_bot_locked = false OR nodes.is_bot_locked IS NULL)
+                    AND EXISTS (
+                        SELECT 1 FROM bots b 
+                        WHERE UPPER(b.bot_id) = UPPER(nodes.bot_id) 
+                          AND (b.enabled = false)
+                    )
+                )
+            )";
+            $botFilterMysql = " AND (
+                UPPER(`nodes`.`bot_id`) = :bot_id
+                OR (
+                    (`nodes`.`is_bot_locked` = 0 OR `nodes`.`is_bot_locked` IS NULL)
+                    AND EXISTS (
+                        SELECT 1 FROM `bots` b 
+                        WHERE UPPER(b.`bot_id`) = UPPER(`nodes`.`bot_id`) 
+                          AND (b.`enabled` = 0 OR b.`enabled` = false)
+                    )
+                )
+            )";
             $params[':bot_id'] = $cleanBotId;
+            $params[':bot_id_order'] = $cleanBotId;
         }
 
         $geoCondPgsql = $this->getLithuaniaCondition('nodes.', 'pgsql');
@@ -459,12 +510,16 @@ class PollingQueueService implements PollingQueueServiceInterface
         $sourceRoutingEnabled = (bool)$this->getSetting('enable_source_routing', true);
 
         if ($driver === 'pgsql') {
+            if (!empty($botId)) {
+                $params[':bot_id_path'] = $cleanBotId;
+            }
             $sql = <<<SQL
             WITH next_rep AS (
                 SELECT id, public_key, node_id, node_name, password, requested_date, telemetry_updated_at, last_failed_request_at, bot_id, last_path
                 FROM nodes
                 WHERE (is_repeater = true) AND ("update" = true) AND (is_disabled = false OR is_disabled IS NULL) {$failFilterPgsql} {$timingFilterPgsql} {$botFilterPgsql} {$geoFilterPgsql}
                 ORDER BY 
+                    CASE WHEN UPPER(nodes.bot_id) = :bot_id_order THEN 0 ELSE 1 END ASC,
                     CASE WHEN requested_date IS NULL THEN 0 ELSE 1 END ASC,
                     requested_date ASC,
                     id ASC
@@ -487,6 +542,15 @@ class PollingQueueService implements PollingQueueServiceInterface
                     THEN next_rep.requested_date 
                     ELSE nodes.last_failed_request_at 
                 END,
+                last_path = CASE
+                    WHEN UPPER(COALESCE(nodes.last_path, '')) = 'FLOOD' THEN 'FLOOD'
+                    WHEN UPPER(COALESCE(next_rep.bot_id, '')) != :bot_id_path THEN NULL
+                    WHEN next_rep.requested_date IS NOT NULL 
+                         AND (next_rep.telemetry_updated_at IS NULL OR next_rep.telemetry_updated_at < next_rep.requested_date)
+                         AND (next_rep.last_failed_request_at IS NULL OR next_rep.last_failed_request_at < next_rep.requested_date)
+                    THEN NULL
+                    ELSE nodes.last_path
+                END,
                 requested_date = CURRENT_TIMESTAMP
             FROM next_rep
             WHERE nodes.id = next_rep.id
@@ -504,13 +568,23 @@ SQL;
                     $password = ($row['password'] !== null) 
                         ? trim((string)$row['password']) 
                         : '';
-                    $rawPath = trim((string)($row['last_path'] ?? ''));
-                    if (!$sourceRoutingEnabled || strtoupper($rawPath) === 'FLOOD') {
+                    $rawPath = strtoupper(trim((string)($row['last_path'] ?? '')));
+                    $isValidHexPath = ($rawPath !== '' && $rawPath !== 'FLOOD' && $rawPath !== 'DIRECT'
+                        && strlen($rawPath) >= 4 && (strlen($rawPath) % 4 === 0)
+                        && ctype_xdigit($rawPath));
+
+                    if (!$sourceRoutingEnabled || $rawPath === 'FLOOD') {
                         $lastPath = 'FLOOD';
                         $isDirect = false;
-                    } else {
+                    } elseif ($rawPath === 'DIRECT') {
+                        $lastPath = 'DIRECT';
+                        $isDirect = true;
+                    } elseif ($isValidHexPath) {
                         $lastPath = $rawPath;
-                        $isDirect = ($lastPath === 'DIRECT');
+                        $isDirect = false;
+                    } else {
+                        $lastPath = '';
+                        $isDirect = false;
                     }
 
                     return [
@@ -547,6 +621,7 @@ SQL;
               {$botFilterMysql}
               {$geoFilterMysql}
             ORDER BY 
+                CASE WHEN UPPER(`nodes`.`bot_id`) = :bot_id_order THEN 0 ELSE 1 END ASC,
                 CASE WHEN `requested_date` IS NULL THEN 0 ELSE 1 END ASC,
                 `requested_date` ASC,
                 `id` ASC
@@ -560,6 +635,8 @@ SQL;
             if ($row) {
                 $failCount = (int)($row['telemetry_fail_count'] ?? 0);
                 $lastFailedAt = $row['last_failed_request_at'] ?? null;
+                $currentPath = $row['last_path'] ?? null;
+                $justFailed = false;
 
                 if (!empty($row['requested_date'])) {
                     $rDate = $row['requested_date'];
@@ -567,6 +644,16 @@ SQL;
                     if (($tDate === null || $tDate < $rDate) && ($lastFailedAt === null || $lastFailedAt < $rDate)) {
                         $failCount++;
                         $lastFailedAt = $rDate;
+                        $justFailed = true;
+                    }
+                }
+
+                // Jei ankstesnė užklausa nepavyko arba kartotuvą perima kitas botas (failover) –
+                // numetame maršrutą į NULL (fallback į FLOOD), nebent priverstinai nustatyta 'FLOOD'
+                $rowBotId = strtoupper(trim((string)($row['bot_id'] ?? '')));
+                if (strtoupper(trim((string)$currentPath)) !== 'FLOOD') {
+                    if ($justFailed || ($rowBotId !== '' && $rowBotId !== $cleanBotId)) {
+                        $currentPath = null;
                     }
                 }
 
@@ -574,13 +661,15 @@ SQL;
                 $updateSql = "UPDATE `nodes` 
                               SET `requested_date` = :now, 
                                   `telemetry_fail_count` = :fail_count, 
-                                  `last_failed_request_at` = :last_failed 
+                                  `last_failed_request_at` = :last_failed,
+                                  `last_path` = :last_path
                               WHERE `id` = :id";
                 $uStmt = $this->pdo->prepare($updateSql);
                 $uStmt->execute([
                     ':now'        => $now,
                     ':fail_count' => $failCount,
                     ':last_failed'=> $lastFailedAt,
+                    ':last_path'  => $currentPath,
                     ':id'         => $row['id']
                 ]);
                 $this->pdo->commit();
@@ -592,13 +681,23 @@ SQL;
                 $password = ($row['password'] !== null) 
                     ? trim((string)$row['password']) 
                     : '';
-                $rawPath = trim((string)($row['last_path'] ?? ''));
-                if (!$sourceRoutingEnabled || strtoupper($rawPath) === 'FLOOD') {
+                $rawPath = strtoupper(trim((string)($currentPath ?? '')));
+                $isValidHexPath = ($rawPath !== '' && $rawPath !== 'FLOOD' && $rawPath !== 'DIRECT'
+                    && strlen($rawPath) >= 4 && (strlen($rawPath) % 4 === 0)
+                    && ctype_xdigit($rawPath));
+
+                if (!$sourceRoutingEnabled || $rawPath === 'FLOOD') {
                     $lastPath = 'FLOOD';
                     $isDirect = false;
-                } else {
+                } elseif ($rawPath === 'DIRECT') {
+                    $lastPath = 'DIRECT';
+                    $isDirect = true;
+                } elseif ($isValidHexPath) {
                     $lastPath = $rawPath;
-                    $isDirect = ($lastPath === 'DIRECT');
+                    $isDirect = false;
+                } else {
+                    $lastPath = '';
+                    $isDirect = false;
                 }
 
                 return [

@@ -39,8 +39,6 @@ $repository = null;
 
 try {
     $repository = new RawPacketRepository();
-    // Užtikriname, kad lentelė ir indeksai egzistuoja
-    $repository->createTableIfNotExists();
     $dbConnected = true;
 } catch (\Throwable $e) {
     $dbError = $e->getMessage();
@@ -134,6 +132,122 @@ $isDirectNodeRootRequest = (
     preg_match('#^/(api/)?node/?$#i', $path) ||
     ((isset($_GET['endpoint']) && in_array(strtolower($_GET['endpoint']), ['node', 'node_detail'])) && empty($nodeDetailPublicKey))
 );
+
+// =========================================================================
+// 🌐 API UŽKLAUSŲ ŽURNALAVIMAS (API LOGS)
+// Fiksuojame kiekvieną kreipimąsi į API, kliento IP, User-Agent, path ir grąžintą atsakymą
+// =========================================================================
+$apiRequestStartTime = microtime(true);
+$apiRawInputForLog = ($method === 'POST') ? (string)file_get_contents('php://input') : '';
+ob_start();
+
+if ($dbConnected && $repository !== null) {
+    $apiLogEndpointName = '/api/status';
+    if ($isSingleRepeaterEndpoint) {
+        $apiLogEndpointName = '/api/repeater';
+    } elseif ($isRepytersEndpoint) {
+        $apiLogEndpointName = '/api/repyters';
+    } elseif ($isNodeListEndpoint) {
+        $apiLogEndpointName = '/api/node/list';
+    } elseif ($isNodeDetailEndpoint) {
+        $apiLogEndpointName = '/api/node/{key}';
+    } elseif ($isNodesEndpoint) {
+        $apiLogEndpointName = '/api/nodes';
+    } elseif ($isTelemetryEndpoint) {
+        $apiLogEndpointName = '/api/telemetry';
+    } elseif ($isBotsEndpoint) {
+        $apiLogEndpointName = '/api/bots';
+    } elseif ($isDirectNodeRootRequest) {
+        $apiLogEndpointName = '/api/node';
+    } elseif ($method === 'POST') {
+        $apiLogEndpointName = '/api/raw';
+    }
+
+    register_shutdown_function(function () use (
+        $repository,
+        $apiRequestStartTime,
+        $method,
+        $apiLogEndpointName,
+        $apiRawInputForLog
+    ) {
+        try {
+            $responseContent = ob_get_contents();
+            if ($responseContent === false) {
+                $responseContent = '';
+            }
+            $responseSize = strlen($responseContent);
+            $durationMs = (int)round((microtime(true) - $apiRequestStartTime) * 1000);
+            $statusCode = (int)(http_response_code() ?: 200);
+
+            // Kliento IP adreso nustatymas (palaikomas Cloudflare ir reverse proxy)
+            $clientIp = '';
+            if (!empty($_SERVER['HTTP_CF_CONNECTING_IP'])) {
+                $clientIp = trim((string)$_SERVER['HTTP_CF_CONNECTING_IP']);
+            } elseif (!empty($_SERVER['HTTP_X_REAL_IP'])) {
+                $clientIp = trim((string)$_SERVER['HTTP_X_REAL_IP']);
+            } elseif (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+                $parts = explode(',', (string)$_SERVER['HTTP_X_FORWARDED_FOR']);
+                $clientIp = trim($parts[0]);
+            } elseif (!empty($_SERVER['REMOTE_ADDR'])) {
+                $clientIp = trim((string)$_SERVER['REMOTE_ADDR']);
+            }
+
+            // Bot ID nustatymas iš GET, Header arba POST body
+            $detectedBotId = $_GET['bot_id'] ?? ($_GET['bot'] ?? ($_SERVER['HTTP_X_BOT_ID'] ?? null));
+            if (empty($detectedBotId) && $apiRawInputForLog !== '') {
+                $decodedInput = json_decode($apiRawInputForLog, true);
+                if (is_array($decodedInput) && !empty($decodedInput['bot_id'])) {
+                    $detectedBotId = (string)$decodedInput['bot_id'];
+                }
+            }
+
+            // Svarbiausios užklausos ir atsakymo antraštės
+            $capturedHeaders = [];
+            $headerKeys = [
+                'HTTP_USER_AGENT'        => 'User-Agent',
+                'HTTP_X_BOT_ID'          => 'X-Bot-ID',
+                'HTTP_REFERER'           => 'Referer',
+                'HTTP_ORIGIN'            => 'Origin',
+                'HTTP_ACCEPT'            => 'Accept',
+                'HTTP_ACCEPT_LANGUAGE'   => 'Accept-Language',
+                'CONTENT_TYPE'           => 'Content-Type',
+                'HTTP_CF_CONNECTING_IP'  => 'CF-Connecting-IP',
+                'HTTP_CF_IPCOUNTRY'      => 'CF-IPCountry',
+                'HTTP_X_FORWARDED_FOR'   => 'X-Forwarded-For',
+                'REMOTE_ADDR'            => 'Remote-Addr',
+            ];
+            foreach ($headerKeys as $serverKey => $label) {
+                if (!empty($_SERVER[$serverKey])) {
+                    $capturedHeaders[$label] = (string)$_SERVER[$serverKey];
+                }
+            }
+            if (function_exists('headers_list')) {
+                foreach (headers_list() as $hLine) {
+                    if (stripos($hLine, 'X-Cache:') === 0) {
+                        $capturedHeaders['Response-X-Cache'] = trim(substr($hLine, 8));
+                    }
+                }
+            }
+
+            $repository->logApiRequest([
+                'ip_address'    => $clientIp,
+                'method'        => $method,
+                'endpoint'      => $apiLogEndpointName,
+                'request_uri'   => $_SERVER['REQUEST_URI'] ?? '/',
+                'bot_id'        => $detectedBotId,
+                'user_agent'    => $_SERVER['HTTP_USER_AGENT'] ?? '',
+                'status_code'   => $statusCode,
+                'duration_ms'   => $durationMs,
+                'response_size' => $responseSize,
+                'request_body'  => $apiRawInputForLog,
+                'response_body' => $responseContent,
+                'headers_json'  => json_encode($capturedHeaders, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            ]);
+        } catch (\Throwable $e) {
+            // Niekada netrikdome atsakymo grąžinimo
+        }
+    });
+}
 
 if ($isDirectNodeRootRequest && !$isNodeListEndpoint && !$isNodeDetailEndpoint) {
     http_response_code(404);
@@ -424,11 +538,10 @@ if ($isNodesEndpoint) {
         'telemetry_chart_days'   => $repository ? (int)$repository->getSetting('telemetry_chart_days', 7) : 7,
         'max_telemetry_age_days' => $repository ? (int)$repository->getSetting('max_telemetry_age_days', 0) : 0,
         'count'                  => count($repeaters),
-        'repeaters'              => $repeaters,
         'nodes'                  => $repeaters,
         'bots'                   => $allBots,
         'timestamp'              => date('Y-m-d H:i:s'),
-    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    ], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -1017,18 +1130,39 @@ if ($forceSync) {
     if ($dbConnected && $repository && $recordId) {
         try {
             if (!empty($decoded['advert']) && is_array($decoded['advert']) && !empty($decoded['advert']['public_key'])) {
-                $repository->upsertNodeFromAdvert($decoded['advert'], $payloadData);
+                $meta = is_array($payloadData) ? $payloadData : [];
+                if (!empty($decoded['path'])) {
+                    $meta['path'] = $decoded['path'];
+                }
+                $repository->upsertNodeFromAdvert($decoded['advert'], $meta);
             }
 
-            $repository->extractAndSaveTelemetry($recordId, $decoded, $payloadData);
+            $savedTelemId = $repository->extractAndSaveTelemetry($recordId, $decoded, $payloadData);
 
-            if (is_array($payloadData) && !empty($payloadData['direction']) && strtoupper((string)$payloadData['direction']) === 'RX') {
+            if ($savedTelemId === null && is_array($payloadData) && !empty($payloadData['direction']) && strtoupper((string)$payloadData['direction']) === 'RX') {
                 $senderKey = !empty($payloadData['sender_public_key']) ? (string)$payloadData['sender_public_key'] : null;
                 if ($senderKey) {
                     $bId = !empty($payloadData['bot_id']) ? (string)$payloadData['bot_id'] : 'KLP';
                     $r = isset($payloadData['rssi']) ? (float)$payloadData['rssi'] : null;
                     $s = isset($payloadData['snr']) ? (float)$payloadData['snr'] : null;
-                    $repository->touchNodeSeen($senderKey, $bId, null, null, $r, $s);
+
+                    $returnPath = null;
+                    $pathHopCount = isset($decoded['path']['hop_count']) ? (int)$decoded['path']['hop_count'] : null;
+                    $incomingHops = $decoded['path']['hops'] ?? [];
+                    if ($pathHopCount === 0) {
+                        if (($r === null || $r >= -98.0) && ($s === null || $s >= -5.0)) {
+                            $returnPath = 'DIRECT';
+                        }
+                    } elseif ($pathHopCount > 0 && !empty($incomingHops) && is_array($incomingHops)) {
+                        if (!($pathHopCount === 1 && $r !== null && $r < -105.0)) {
+                            $cand = strtoupper(implode('', array_reverse($incomingHops)));
+                            if (strlen($cand) >= 4 && strlen($cand) % 4 === 0) {
+                                $returnPath = $cand;
+                            }
+                        }
+                    }
+
+                    $repository->touchNodeSeen($senderKey, $bId, null, null, $r, $s, false, null, $returnPath);
                 }
             }
 

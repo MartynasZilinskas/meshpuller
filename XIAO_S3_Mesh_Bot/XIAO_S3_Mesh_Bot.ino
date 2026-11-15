@@ -677,10 +677,11 @@ void initMonitoredNodeKeys() {
       printHexBuffer(monitoredNodes[i].sharedSecret, 8);
       Serial.println("...");
 
-      // Nustatome pradinį maršrutą (jei pateiktas iš serverio arba išmoktas):
+      // Kiekvieno ciklo pradžioje nustatome maršrutą pagal serverio pateiktą 'path':
       String p = monitoredRepeaters[i].path;
       p.trim();
       monitoredNodes[i].forceFlood = false;
+      monitoredNodes[i].routeConfirmed = false;
       if (p.equalsIgnoreCase("FLOOD")) {
         monitoredNodes[i].forceFlood = true;
         monitoredNodes[i].hasRoute = false;
@@ -698,14 +699,16 @@ void initMonitoredNodeKeys() {
         size_t pBytes = 0;
         if (hexStringToBytes(p.c_str(), monitoredNodes[i].routePath, sizeof(monitoredNodes[i].routePath), pBytes)) {
           monitoredNodes[i].hasRoute = true;
-          monitoredNodes[i].routeHashSize = 2; // numatytas 16-bitų (2B) hash
-          monitoredNodes[i].routeHopCount = (uint8_t)(pBytes / 2);
+          uint8_t defHashSize = (PATH_HASH_BITS == 24) ? 3 : ((PATH_HASH_BITS == 16) ? 2 : 1);
+          if (pBytes % defHashSize != 0) defHashSize = 1;
+          monitoredNodes[i].routeHashSize = defHashSize;
+          monitoredNodes[i].routeHopCount = (uint8_t)(pBytes / defHashSize);
           monitoredNodes[i].routePathLen = pBytes;
           monitoredNodes[i].routeLearnedAt = millis();
           Serial.printf("    - Maršrutas: TIKSLINIS DIRECT (%u šuol., kelias: [%s])\n",
                         monitoredNodes[i].routeHopCount, p.c_str());
         }
-      } else if (!monitoredNodes[i].hasRoute) {
+      } else {
         monitoredNodes[i].hasRoute = false;
         monitoredNodes[i].routeHopCount = 0;
         monitoredNodes[i].routePathLen = 0;

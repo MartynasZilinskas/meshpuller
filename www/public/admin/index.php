@@ -849,6 +849,9 @@ $isLoggedIn = isAdminLoggedIn();
                 <button class="tab-btn" id="tabBtn-raw" onclick="switchTab('raw')">
                     <span>📦 RAW Paketai & Debugger</span>
                 </button>
+                <button class="tab-btn" id="tabBtn-apilogs" onclick="switchTab('apilogs')">
+                    <span>🌐 API Užklausos</span>
+                </button>
                 <button class="tab-btn" id="tabBtn-tools" onclick="switchTab('tools')">
                     <span>⚡ Eilė & Įrankiai</span>
                 </button>
@@ -1093,6 +1096,153 @@ $isLoggedIn = isAdminLoggedIn();
                         <div style="display: flex; gap: 6px;">
                             <button class="btn btn-secondary btn-sm" id="btnPrevRaw" onclick="changeRawPage(-1)">← Ankstesnis</button>
                             <button class="btn btn-secondary btn-sm" id="btnNextRaw" onclick="changeRawPage(1)">Kitas →</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SKIRTUKAS: API UŽKLAUSŲ ŽURNALAS (API LOGS) -->
+            <div class="tab-content" id="tab-apilogs">
+                <!-- Statistikos suvestinė (paspaudus greitai nufiltruoja) -->
+                <div class="stats-banner" style="margin-bottom: 14px;">
+                    <div class="stat-box" style="cursor: pointer;" onclick="quickFilterApiLogs('all')" title="Rodyti visas API užklausas">
+                        <div class="val" id="apiLogStatTotal">-</div>
+                        <div class="lbl">Viso Užklausų</div>
+                    </div>
+                    <div class="stat-box cyan" style="cursor: pointer;" onclick="toggleTopIpsPanel()" title="Peržiūrėti aktyviausius IP adresus">
+                        <div class="val" id="apiLogStatUniqueIps">-</div>
+                        <div class="lbl">🌐 Unikalūs IP (Top)</div>
+                    </div>
+                    <div class="stat-box green" style="cursor: pointer;" onclick="quickFilterApiLogs('ESP32')" title="Filtruoti tik ESP32 botų užklausas">
+                        <div class="val" id="apiLogStatEsp32">-</div>
+                        <div class="lbl">🤖 ESP32 Botai</div>
+                    </div>
+                    <div class="stat-box blue" style="cursor: pointer;" onclick="quickFilterApiLogs('Browser')" title="Filtruoti tik naršyklių užklausas">
+                        <div class="val" id="apiLogStatBrowser">-</div>
+                        <div class="lbl">🖥️ Naršyklės</div>
+                    </div>
+                    <div class="stat-box orange" style="cursor: pointer;" onclick="quickFilterApiLogs('suspicious')" title="Filtruoti botus, skriptus, crawlerius ir klientus be User-Agent">
+                        <div class="val" id="apiLogStatBotsScripts">-</div>
+                        <div class="lbl">🕵️ Svetimi Botai / Skriptai</div>
+                    </div>
+                    <div class="stat-box red" style="cursor: pointer;" onclick="quickFilterApiLogs('errors')" title="Filtruoti tik klaidas (HTTP 4xx / 5xx)">
+                        <div class="val" id="apiLogStatErrors">-</div>
+                        <div class="lbl">⚠️ Klaidos (4xx/5xx)</div>
+                    </div>
+                </div>
+
+                <!-- Aktyviausi IP adresai (Top IP greita juosta) -->
+                <div id="apiLogsTopIpsPanel" class="filter-card" style="display: block; margin-bottom: 14px; padding: 12px 16px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
+                        <span style="font-size: 0.8rem; font-weight: 700; color: var(--text-secondary);">
+                            🔥 Aktyviausi IP adresai (paspauskite ant IP, kad nufiltruotumėte visas jo užklausas):
+                        </span>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="toggleTopIpsPanel()" style="font-size: 0.7rem; padding: 2px 8px;">Slėpti / Rodyti</button>
+                    </div>
+                    <div id="apiLogsTopIpsList" style="display: flex; gap: 8px; flex-wrap: wrap;">
+                        <span style="font-size: 0.78rem; color: var(--text-dim);">Kraunama...</span>
+                    </div>
+                </div>
+
+                <!-- Paieškos ir filtravimo juosta -->
+                <div class="filter-card">
+                    <div class="filter-group">
+                        <div class="input-clearable-wrapper" style="width: 240px;">
+                            <input type="text" id="apiLogsSearchInput" class="form-control" placeholder="Ieškoti IP, path, User-Agent, JSON..." oninput="updateAdminClearBtn('apiLogsSearchInput'); onApiLogsSearchInput();" onkeydown="if(event.key==='Enter') onApiLogsFilterChange()">
+                            <button type="button" class="input-clear-btn" id="apiLogsSearchInputClearBtn" onclick="clearApiLogsSearch()" title="Išvalyti paiešką">✕</button>
+                        </div>
+
+                        <div class="input-clearable-wrapper" style="width: 155px;">
+                            <input type="text" id="apiLogsIpInput" class="form-control" placeholder="IP filtras..." oninput="updateAdminClearBtn('apiLogsIpInput'); onApiLogsSearchInput();" onkeydown="if(event.key==='Enter') onApiLogsFilterChange()">
+                            <button type="button" class="input-clear-btn" id="apiLogsIpInputClearBtn" onclick="clearApiLogsIpFilter()" title="Išvalyti IP filtrą">✕</button>
+                        </div>
+
+                        <select id="apiLogsEndpointFilter" class="form-control" style="width: 165px;" onchange="onApiLogsFilterChange()">
+                            <option value="all">Visi path (Endpointai)</option>
+                            <option value="/api/repeater">/api/repeater</option>
+                            <option value="/api/raw">/api/raw</option>
+                            <option value="/api/nodes">/api/nodes</option>
+                            <option value="/api/node/list">/api/node/list</option>
+                            <option value="/api/node/{key}">/api/node/{key}</option>
+                            <option value="/api/repyters">/api/repyters</option>
+                            <option value="/api/telemetry">/api/telemetry</option>
+                            <option value="/api/bots">/api/bots</option>
+                            <option value="/api/status">/api/status</option>
+                        </select>
+
+                        <select id="apiLogsClientTypeFilter" class="form-control" style="width: 195px;" onchange="onApiLogsFilterChange()">
+                            <option value="all">Visi klientai</option>
+                            <option value="non_esp32">🔍 Visi išskyrus ESP32</option>
+                            <option value="suspicious">🕵️ Įtartini (Botai / Skriptai)</option>
+                            <option value="ESP32">🤖 ESP32 Botas</option>
+                            <option value="Browser">🖥️ Naršyklė (Browser)</option>
+                            <option value="Crawler/Bot">🕷️ Crawler / Botas</option>
+                            <option value="CLI/Script">💻 CLI / Skriptas (curl/python)</option>
+                            <option value="Empty-UA">❓ Tuščias User-Agent</option>
+                            <option value="Unknown">❓ Nežinomas klientas</option>
+                        </select>
+
+                        <select id="apiLogsBotFilter" class="form-control" style="width: 140px;" onchange="onApiLogsFilterChange()">
+                            <option value="all">Visi Bot ID</option>
+                            <option value="__NONE__">Be Bot ID</option>
+                            <option value="KLP">KLP</option>
+                            <option value="KUN">KUN</option>
+                        </select>
+
+                        <select id="apiLogsMethodFilter" class="form-control" style="width: 115px;" onchange="onApiLogsFilterChange()">
+                            <option value="all">GET & POST</option>
+                            <option value="GET">Tik GET</option>
+                            <option value="POST">Tik POST</option>
+                        </select>
+
+                        <select id="apiLogsStatusFilter" class="form-control" style="width: 130px;" onchange="onApiLogsFilterChange()">
+                            <option value="all">Visi statusai</option>
+                            <option value="2xx">✅ 200 OK (2xx)</option>
+                            <option value="err">⚠️ Klaidos (4xx/5xx)</option>
+                            <option value="4xx">🚫 4xx (400/404)</option>
+                            <option value="5xx">💥 5xx (500)</option>
+                        </select>
+                    </div>
+
+                    <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="resetApiLogsFilters()" title="Atstatyti visus filtrus">
+                            <span>🔄 Visi</span>
+                        </button>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="clearApiLogs('older_24h')" title="Ištrinti senesnius nei 24 val. įrašus">
+                            <span>🧹 Valyti &gt;24h</span>
+                        </button>
+                        <button type="button" class="btn btn-danger btn-sm" onclick="clearApiLogs('all')" title="Išvalyti visą API užklausų žurnalą">
+                            <span>🗑️ Išvalyti viską</span>
+                        </button>
+                        <span id="apiLogsCountBadge" class="badge badge-gray">0 užklausų</span>
+                    </div>
+                </div>
+
+                <!-- API Užklausų lentelė -->
+                <div class="table-wrapper">
+                    <table class="admin-table" id="apiLogsTable">
+                        <thead>
+                            <tr>
+                                <th class="sortable" onclick="handleSortTable('apilogs', 'id')" data-sort="id">ID <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('apilogs', 'created_at')" data-sort="created_at">Laikas (LT) <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('apilogs', 'ip_address')" data-sort="ip_address">IP Adresas <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('apilogs', 'client_type')" data-sort="client_type">Klientas / User-Agent <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('apilogs', 'endpoint')" data-sort="endpoint">Metodas & Path (URL) <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('apilogs', 'status_code')" data-sort="status_code">Statusas / Trukmė <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('apilogs', 'response_size')" data-sort="response_size">Grąžintas Atsakymas (Preview) <span class="sort-icon"></span></th>
+                                <th style="text-align: right;">Veiksmai</th>
+                            </tr>
+                        </thead>
+                        <tbody id="apiLogsTableBody">
+                            <tr><td colspan="8" style="text-align: center; padding: 24px;">Kraunamos API užklausos...</td></tr>
+                        </tbody>
+                    </table>
+
+                    <div class="pagination-row">
+                        <span id="apiLogsPageInfo">Puslapis 1</span>
+                        <div style="display: flex; gap: 6px;">
+                            <button class="btn btn-secondary btn-sm" id="btnPrevApiLogs" onclick="changeApiLogsPage(-1)">← Ankstesnis</button>
+                            <button class="btn btn-secondary btn-sm" id="btnNextApiLogs" onclick="changeApiLogsPage(1)">Kitas →</button>
                         </div>
                     </div>
                 </div>
@@ -1778,6 +1928,58 @@ $isLoggedIn = isAdminLoggedIn();
             </div>
         </div>
 
+        <!-- MODALAS: API UŽKLAUSOS IR ATSAKYMO DETALI PERŽIŪRA -->
+        <div class="modal-overlay" id="apiLogModal">
+            <div class="modal-card modal-lg">
+                <div class="modal-header">
+                    <h3 id="apiLogModalTitle">API Užklausa #0</h3>
+                    <button class="modal-close" onclick="closeModal('apiLogModal')">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div id="apiLogMetaRow" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;"></div>
+
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 10px 12px; margin-bottom: 10px; font-size: 0.8rem;">
+                        <div style="margin-bottom: 4px;">
+                            <strong style="color: var(--text-muted);">Pilnas URL (Path):</strong>
+                            <code id="apiLogFullUri" style="color: var(--accent-cyan); font-family: var(--font-mono); word-break: break-all;"></code>
+                        </div>
+                        <div>
+                            <strong style="color: var(--text-muted);">Kliento User-Agent:</strong>
+                            <span id="apiLogUserAgent" style="color: #ffffff; font-family: var(--font-mono); font-size: 0.76rem; word-break: break-all;"></span>
+                        </div>
+                    </div>
+
+                    <div id="apiLogRequestSection" style="display: none; margin-bottom: 10px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                            <span style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">📥 Gauta Užklausa (POST Request Body):</span>
+                            <button class="copy-btn" onclick="copyText(document.getElementById('apiLogRequestBody').innerText)">📋 Kopijuoti Request</button>
+                        </div>
+                        <pre id="apiLogRequestBody" class="json-viewer" style="max-height: 160px;"></pre>
+                    </div>
+
+                    <div style="margin-bottom: 10px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                            <span style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">📤 Grąžintas API Atsakymas (Response Body):</span>
+                            <button class="copy-btn" onclick="copyText(document.getElementById('apiLogResponseBody').innerText)">📋 Kopijuoti Atsakymą</button>
+                        </div>
+                        <pre id="apiLogResponseBody" class="json-viewer" style="max-height: 300px;"></pre>
+                    </div>
+
+                    <div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                            <span style="font-size: 0.78rem; font-weight: 600; color: var(--text-muted);">🔍 Kliento HTTP Antraštės (Headers):</span>
+                            <button class="copy-btn" onclick="copyText(document.getElementById('apiLogHeadersJson').innerText)">📋 Kopijuoti Antraštes</button>
+                        </div>
+                        <pre id="apiLogHeadersJson" class="json-viewer" style="max-height: 140px;"></pre>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" id="btnFilterByModalIp" onclick="">🎯 Filtruoti šį IP</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('apiLogModal')">Uždaryti</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Pranešimų kortelė (Toast) -->
         <div class="toast-msg" id="toastMsg"></div>
     <?php endif; ?>
@@ -1803,6 +2005,9 @@ $isLoggedIn = isAdminLoggedIn();
         let queuePage = 0;
         const queueLimit = 50;
 
+        let apiLogsPage = 0;
+        const apiLogsLimit = 50;
+
         // Rūšiavimo būsenos valdymas (atsimenama kiekvienai lentelei individualiai per localStorage)
         function getSortState(tableKey, defaultCol, defaultDir) {
             try {
@@ -1827,6 +2032,7 @@ $isLoggedIn = isAdminLoggedIn();
         let telSort = getSortState('telemetry', 'recorded_at', 'desc');
         let rawSort = getSortState('raw', 'id', 'desc');
         let queueSort = getSortState('queue', 'index', 'asc');
+        let apiLogsSort = getSortState('apilogs', 'id', 'desc');
 
         function updateTableSortHeaders(tableKey) {
             let currentSort;
@@ -1835,6 +2041,7 @@ $isLoggedIn = isAdminLoggedIn();
             else if (tableKey === 'telemetry') { currentSort = telSort; tableId = 'telemetryTable'; }
             else if (tableKey === 'raw') { currentSort = rawSort; tableId = 'rawTable'; }
             else if (tableKey === 'queue') { currentSort = queueSort; tableId = 'queueTable'; }
+            else if (tableKey === 'apilogs') { currentSort = apiLogsSort; tableId = 'apiLogsTable'; }
             else return;
 
             const table = document.getElementById(tableId);
@@ -1861,13 +2068,14 @@ $isLoggedIn = isAdminLoggedIn();
             else if (tableKey === 'telemetry') currentSort = telSort;
             else if (tableKey === 'raw') currentSort = rawSort;
             else if (tableKey === 'queue') currentSort = queueSort;
+            else if (tableKey === 'apilogs') currentSort = apiLogsSort;
             else return;
 
             let newDir = 'asc';
             if (currentSort.col === col) {
                 newDir = (currentSort.dir === 'asc') ? 'desc' : 'asc';
             } else {
-                const descFirst = ['id', 'recorded_at', 'created_at', 'last_seen_at', 'requested_date', 'telemetry', 'battery_v', 'temperature_c', 'rssi', 'uptime', 'length'];
+                const descFirst = ['id', 'recorded_at', 'created_at', 'last_seen_at', 'requested_date', 'telemetry', 'battery_v', 'temperature_c', 'rssi', 'uptime', 'length', 'duration_ms', 'response_size', 'status_code'];
                 newDir = descFirst.includes(col) ? 'desc' : 'asc';
             }
 
@@ -1887,6 +2095,9 @@ $isLoggedIn = isAdminLoggedIn();
             } else if (tableKey === 'queue') {
                 queuePage = 0;
                 renderNodeQueueTable();
+            } else if (tableKey === 'apilogs') {
+                apiLogsPage = 0;
+                loadApiLogs(0);
             }
         }
 
@@ -1978,6 +2189,17 @@ $isLoggedIn = isAdminLoggedIn();
                 const status = overrides.status !== undefined ? overrides.status : (document.getElementById('botsStatusFilter')?.value || '');
                 if (search) params.set('search', search);
                 if (status) params.set('status', status);
+            } else if (tab === 'apilogs') {
+                const search = overrides.search !== undefined ? overrides.search : (document.getElementById('apiLogsSearchInput')?.value || '').trim();
+                const ip = overrides.ip !== undefined ? overrides.ip : (document.getElementById('apiLogsIpInput')?.value || '').trim();
+                const ep = overrides.endpoint !== undefined ? overrides.endpoint : (document.getElementById('apiLogsEndpointFilter')?.value || 'all');
+                const ct = overrides.client_type !== undefined ? overrides.client_type : (document.getElementById('apiLogsClientTypeFilter')?.value || 'all');
+                const page = overrides.page !== undefined ? overrides.page : apiLogsPage;
+                if (search) params.set('search', search);
+                if (ip) params.set('ip', ip);
+                if (ep && ep !== 'all') params.set('endpoint', ep);
+                if (ct && ct !== 'all') params.set('client_type', ct);
+                if (page > 0) params.set('page', page + 1);
             } else if (tab === 'tools') {
                 // Eilė ir įrankiai papildomų parametrų neturi
             }
@@ -2014,6 +2236,7 @@ $isLoggedIn = isAdminLoggedIn();
                 bots: '🤖 Botai',
                 telemetry: '📊 Telemetrija',
                 raw: '📦 RAW Paketai',
+                apilogs: '🌐 API Užklausos',
                 tools: '⚡ Eilė ir Įrankiai',
                 settings: '⚙️ Nustatymai'
             };
@@ -2033,7 +2256,7 @@ $isLoggedIn = isAdminLoggedIn();
             try {
                 const params = new URLSearchParams(window.location.search);
                 let tab = params.get('tab') || 'nodes';
-                if (!['nodes', 'bots', 'telemetry', 'raw', 'tools', 'settings'].includes(tab)) {
+                if (!['nodes', 'bots', 'telemetry', 'raw', 'apilogs', 'tools', 'settings'].includes(tab)) {
                     tab = 'nodes';
                 }
 
@@ -2136,6 +2359,19 @@ $isLoggedIn = isAdminLoggedIn();
                     loadRawPackets(rawPage);
                 } else if (tab === 'bots') {
                     loadBots();
+                } else if (tab === 'apilogs') {
+                    const search = params.get('search') || '';
+                    const ip = params.get('ip') || '';
+                    const ep = params.get('endpoint') || 'all';
+                    const ct = params.get('client_type') || 'all';
+                    const pageParam = parseInt(params.get('page'), 10);
+                    apiLogsPage = (!isNaN(pageParam) && pageParam > 0) ? (pageParam - 1) : 0;
+
+                    if (document.getElementById('apiLogsSearchInput')) document.getElementById('apiLogsSearchInput').value = search;
+                    if (document.getElementById('apiLogsIpInput')) document.getElementById('apiLogsIpInput').value = ip;
+                    if (document.getElementById('apiLogsEndpointFilter')) document.getElementById('apiLogsEndpointFilter').value = ep;
+                    if (document.getElementById('apiLogsClientTypeFilter')) document.getElementById('apiLogsClientTypeFilter').value = ct;
+                    loadApiLogs(apiLogsPage);
                 } else if (tab === 'tools') {
                     loadNodeQueue();
                 } else if (tab === 'settings') {
@@ -2162,7 +2398,7 @@ $isLoggedIn = isAdminLoggedIn();
         }
 
         function updateAllAdminClearBtns() {
-            ['nodesSearch', 'botsSearch', 'telemetryNodeInput', 'rawSearchInput', 'queueSearchInput'].forEach(updateAdminClearBtn);
+            ['nodesSearch', 'botsSearch', 'telemetryNodeInput', 'rawSearchInput', 'queueSearchInput', 'apiLogsSearchInput', 'apiLogsIpInput'].forEach(updateAdminClearBtn);
         }
 
         function clearNodesSearch() {
@@ -2203,13 +2439,14 @@ $isLoggedIn = isAdminLoggedIn();
 
         // Skirtukų perjungimas
         function switchTab(tabName, pushState = true) {
-            if (!['nodes', 'bots', 'telemetry', 'raw', 'tools', 'settings'].includes(tabName)) {
+            if (!['nodes', 'bots', 'telemetry', 'raw', 'apilogs', 'tools', 'settings'].includes(tabName)) {
                 tabName = 'nodes';
             }
 
             if (activePacketModalId) closeModal('packetModal', false);
             if (activeEditNodeKey) closeModal('editNodeModal', false);
             if (activeEditBotId) closeModal('editBotModal', false);
+            closeModal('apiLogModal', false);
 
             currentTab = tabName;
             document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -2231,6 +2468,7 @@ $isLoggedIn = isAdminLoggedIn();
             else if (tabName === 'bots') loadBots();
             else if (tabName === 'telemetry') loadTelemetry(telPage);
             else if (tabName === 'raw') loadRawPackets(rawPage);
+            else if (tabName === 'apilogs') loadApiLogs(apiLogsPage);
             else if (tabName === 'tools') loadNodeQueue();
             else if (tabName === 'settings') loadSettings();
         }
@@ -2305,6 +2543,7 @@ $isLoggedIn = isAdminLoggedIn();
             else if (currentTab === 'bots') loadBots();
             else if (currentTab === 'telemetry') loadTelemetry(telPage);
             else if (currentTab === 'raw') loadRawPackets(rawPage);
+            else if (currentTab === 'apilogs') loadApiLogs(apiLogsPage);
             showToast('Duomenys atnaujinti!');
         }
 
@@ -2724,6 +2963,20 @@ $isLoggedIn = isAdminLoggedIn();
                     queueBotFilter.appendChild(opt);
                 });
                 if (currentVal) queueBotFilter.value = currentVal;
+            }
+
+            // 4. API logų filtro dropdown (apiLogsBotFilter)
+            const apiLogsBotFilter = document.getElementById('apiLogsBotFilter');
+            if (apiLogsBotFilter) {
+                const currentVal = apiLogsBotFilter.value;
+                apiLogsBotFilter.innerHTML = '<option value="all">Visi Bot ID</option><option value="__NONE__">Be Bot ID</option>';
+                allBotsData.forEach(b => {
+                    const opt = document.createElement('option');
+                    opt.value = b.bot_id;
+                    opt.textContent = `Botas: ${b.bot_id}`;
+                    apiLogsBotFilter.appendChild(opt);
+                });
+                if (currentVal) apiLogsBotFilter.value = currentVal;
             }
         }
 
@@ -4386,19 +4639,385 @@ $isLoggedIn = isAdminLoggedIn();
             document.getElementById('settingLtLonMax').value = '26.8500';
         }
 
+        // =========================================================================
+        // 🌐 API UŽKLAUSŲ ŽURNALAS (API LOGS)
+        // =========================================================================
+        const debouncedLoadApiLogs = debounce(() => {
+            apiLogsPage = 0;
+            updateHistory({ tab: 'apilogs', page: 0 }, 'replace');
+            loadApiLogs(0);
+        }, 300);
+
+        function onApiLogsSearchInput() {
+            updateAdminClearBtn('apiLogsSearchInput');
+            updateAdminClearBtn('apiLogsIpInput');
+            debouncedLoadApiLogs();
+        }
+
+        function onApiLogsFilterChange() {
+            apiLogsPage = 0;
+            updateHistory({ tab: 'apilogs', page: 0 }, 'push');
+            loadApiLogs(0);
+        }
+
+        function clearApiLogsSearch() {
+            const el = document.getElementById('apiLogsSearchInput');
+            if (el) el.value = '';
+            updateAdminClearBtn('apiLogsSearchInput');
+            onApiLogsFilterChange();
+        }
+
+        function clearApiLogsIpFilter() {
+            const el = document.getElementById('apiLogsIpInput');
+            if (el) el.value = '';
+            updateAdminClearBtn('apiLogsIpInput');
+            onApiLogsFilterChange();
+        }
+
+        function filterApiLogsByIp(ip) {
+            const el = document.getElementById('apiLogsIpInput');
+            if (el) el.value = ip || '';
+            updateAdminClearBtn('apiLogsIpInput');
+            closeModal('apiLogModal', false);
+            apiLogsPage = 0;
+            updateHistory({ tab: 'apilogs', ip: ip || '', page: 0 }, 'push');
+            loadApiLogs(0);
+        }
+
+        function quickFilterApiLogs(type) {
+            const ctSelect = document.getElementById('apiLogsClientTypeFilter');
+            const stSelect = document.getElementById('apiLogsStatusFilter');
+            if (type === 'all') {
+                resetApiLogsFilters();
+                return;
+            } else if (type === 'errors') {
+                if (ctSelect) ctSelect.value = 'all';
+                if (stSelect) stSelect.value = 'err';
+            } else {
+                if (ctSelect) ctSelect.value = type;
+                if (stSelect) stSelect.value = 'all';
+            }
+            onApiLogsFilterChange();
+        }
+
+        function resetApiLogsFilters() {
+            if (document.getElementById('apiLogsSearchInput')) document.getElementById('apiLogsSearchInput').value = '';
+            if (document.getElementById('apiLogsIpInput')) document.getElementById('apiLogsIpInput').value = '';
+            if (document.getElementById('apiLogsEndpointFilter')) document.getElementById('apiLogsEndpointFilter').value = 'all';
+            if (document.getElementById('apiLogsClientTypeFilter')) document.getElementById('apiLogsClientTypeFilter').value = 'all';
+            if (document.getElementById('apiLogsBotFilter')) document.getElementById('apiLogsBotFilter').value = 'all';
+            if (document.getElementById('apiLogsMethodFilter')) document.getElementById('apiLogsMethodFilter').value = 'all';
+            if (document.getElementById('apiLogsStatusFilter')) document.getElementById('apiLogsStatusFilter').value = 'all';
+            updateAllAdminClearBtns();
+            onApiLogsFilterChange();
+        }
+
+        function toggleTopIpsPanel() {
+            const list = document.getElementById('apiLogsTopIpsList');
+            if (!list) return;
+            list.style.display = (list.style.display === 'none') ? 'flex' : 'none';
+        }
+
+        function changeApiLogsPage(delta) {
+            const next = apiLogsPage + delta;
+            if (next < 0) return;
+            loadApiLogs(next);
+            updateHistory({ tab: 'apilogs', page: next }, 'push');
+        }
+
+        function getClientTypeBadge(clientType, botId) {
+            let badge = '';
+            if (clientType === 'ESP32') {
+                badge = `<span class="badge badge-green" title="ESP32 / Arduino įrenginys">🤖 ESP32</span>`;
+            } else if (clientType === 'Browser') {
+                badge = `<span class="badge badge-blue" title="Vartotojo naršyklė">🖥️ Naršyklė</span>`;
+            } else if (clientType === 'Crawler/Bot') {
+                badge = `<span class="badge badge-red" title="Svetimas paieškos ar skenavimo botas">🕷️ Crawler/Bot</span>`;
+            } else if (clientType === 'CLI/Script') {
+                badge = `<span class="badge badge-amber" title="Skriptas arba CLI įrankis (curl, python, kt.)">💻 Skriptas/CLI</span>`;
+            } else if (clientType === 'Empty-UA') {
+                badge = `<span class="badge badge-amber" title="Klientas neatsiuntė jokio User-Agent">❓ Tuščias UA</span>`;
+            } else {
+                badge = `<span class="badge badge-gray">${escapeHtml(clientType || 'Unknown')}</span>`;
+            }
+
+            if (botId) {
+                badge += ` <span class="badge badge-purple" title="Bot ID: ${escapeHtml(botId)}">📡 ${escapeHtml(botId)}</span>`;
+            }
+            return badge;
+        }
+
+        function formatBytes(bytes) {
+            const b = parseInt(bytes, 10);
+            if (isNaN(b) || b <= 0) return '0 B';
+            if (b < 1024) return b + ' B';
+            return (b / 1024).toFixed(1) + ' KB';
+        }
+
+        async function loadApiLogs(page = 0) {
+            apiLogsPage = page;
+            updateTableSortHeaders('apilogs');
+
+            const search = document.getElementById('apiLogsSearchInput')?.value || '';
+            const ip = document.getElementById('apiLogsIpInput')?.value || '';
+            const endpoint = document.getElementById('apiLogsEndpointFilter')?.value || 'all';
+            const clientType = document.getElementById('apiLogsClientTypeFilter')?.value || 'all';
+            const botId = document.getElementById('apiLogsBotFilter')?.value || 'all';
+            const method = document.getElementById('apiLogsMethodFilter')?.value || 'all';
+            const status = document.getElementById('apiLogsStatusFilter')?.value || 'all';
+            const offset = page * apiLogsLimit;
+
+            const url = `api.php?action=api_logs&search=${encodeURIComponent(search)}&ip=${encodeURIComponent(ip)}&endpoint=${encodeURIComponent(endpoint)}&client_type=${encodeURIComponent(clientType)}&bot_id=${encodeURIComponent(botId)}&method=${encodeURIComponent(method)}&status=${encodeURIComponent(status)}&limit=${apiLogsLimit}&offset=${offset}&sort_by=${encodeURIComponent(apiLogsSort.col)}&sort_dir=${apiLogsSort.dir}`;
+
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+                if (!data.success) {
+                    throw new Error(data.error || 'Nepavyko užkrauti API užklausų');
+                }
+
+                // Atnaujiname statistiką
+                const st = data.stats || {};
+                if (document.getElementById('apiLogStatTotal')) document.getElementById('apiLogStatTotal').innerText = st.total ?? 0;
+                if (document.getElementById('apiLogStatUniqueIps')) document.getElementById('apiLogStatUniqueIps').innerText = st.unique_ips ?? 0;
+                if (document.getElementById('apiLogStatEsp32')) document.getElementById('apiLogStatEsp32').innerText = st.esp32_count ?? 0;
+                if (document.getElementById('apiLogStatBrowser')) document.getElementById('apiLogStatBrowser').innerText = st.browser_count ?? 0;
+                if (document.getElementById('apiLogStatBotsScripts')) document.getElementById('apiLogStatBotsScripts').innerText = st.bot_script_count ?? 0;
+                if (document.getElementById('apiLogStatErrors')) document.getElementById('apiLogStatErrors').innerText = st.error_count ?? 0;
+
+                // Atnaujiname Top IP juostą
+                const topIpsList = document.getElementById('apiLogsTopIpsList');
+                if (topIpsList) {
+                    const topIps = st.top_ips || [];
+                    if (topIps.length === 0) {
+                        topIpsList.innerHTML = `<span style="font-size: 0.78rem; color: var(--text-dim);">Nėra užregistruotų IP adresų.</span>`;
+                    } else {
+                        const activeIpFilter = (document.getElementById('apiLogsIpInput')?.value || '').trim();
+                        topIpsList.innerHTML = topIps.map(item => {
+                            const ipAddr = item.ip_address || 'Nežinomas';
+                            const isSelected = activeIpFilter && activeIpFilter === ipAddr;
+                            const ct = item.main_client_type || 'Unknown';
+                            let icon = '🌐';
+                            if (ct === 'ESP32') icon = '🤖';
+                            else if (ct === 'Browser') icon = '🖥️';
+                            else if (ct === 'Crawler/Bot') icon = '🕷️';
+                            else if (ct === 'CLI/Script') icon = '💻';
+
+                            return `
+                                <button type="button"
+                                    onclick="filterApiLogsByIp('${escapeHtml(isSelected ? '' : ipAddr)}')"
+                                    class="btn btn-sm ${isSelected ? '' : 'btn-secondary'}"
+                                    style="font-family: var(--font-mono); font-size: 0.74rem; padding: 3px 9px;"
+                                    title="Paskutinis UA: ${escapeHtml(item.sample_ua || 'nėra')} | Matytas: ${formatVilniusDate(item.last_seen_at)}">
+                                    <span>${icon} ${escapeHtml(ipAddr)}</span>
+                                    <span class="badge ${ct === 'ESP32' ? 'badge-green' : (ct === 'Browser' ? 'badge-blue' : 'badge-amber')}" style="font-size: 0.66rem; padding: 1px 5px; margin-left: 4px;">${item.req_count}</span>
+                                    ${item.last_bot_id ? `<span class="badge badge-purple" style="font-size: 0.64rem; padding: 1px 4px;">${escapeHtml(item.last_bot_id)}</span>` : ''}
+                                </button>
+                            `;
+                        }).join('');
+                    }
+                }
+
+                const total = data.total_filtered || 0;
+                const badge = document.getElementById('apiLogsCountBadge');
+                if (badge) badge.innerText = `${total} užklausų`;
+
+                const totalPages = Math.max(1, Math.ceil(total / apiLogsLimit));
+                const pageInfo = document.getElementById('apiLogsPageInfo');
+                if (pageInfo) pageInfo.innerText = `Puslapis ${page + 1} iš ${totalPages} (Rasta: ${total})`;
+
+                const btnPrev = document.getElementById('btnPrevApiLogs');
+                const btnNext = document.getElementById('btnNextApiLogs');
+                if (btnPrev) btnPrev.disabled = (page <= 0);
+                if (btnNext) btnNext.disabled = ((page + 1) >= totalPages);
+
+                renderApiLogsTable(data.items || []);
+            } catch (err) {
+                console.error('Klaida kraunant API logus:', err);
+                const tbody = document.getElementById('apiLogsTableBody');
+                if (tbody) {
+                    tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 24px; color: var(--accent-red);">Klaida: ${escapeHtml(err.message)}</td></tr>`;
+                }
+            }
+        }
+
+        function renderApiLogsTable(items) {
+            const tbody = document.getElementById('apiLogsTableBody');
+            if (!tbody) return;
+
+            if (!items || items.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 28px; color: var(--text-muted);">Pagal pasirinktus filtrus API užklausų nerasta.</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = items.map(row => {
+                const statusCode = parseInt(row.status_code || 200, 10);
+                let statusBadgeClass = 'badge-green';
+                if (statusCode >= 500) statusBadgeClass = 'badge-red';
+                else if (statusCode >= 400) statusBadgeClass = 'badge-amber';
+
+                const methodBadgeClass = row.method === 'POST' ? 'badge-purple' : 'badge-cyan';
+                const uaText = row.user_agent ? escapeHtml(row.user_agent) : '<span style="color: var(--text-dim); font-style: italic;">(nėra User-Agent)</span>';
+                const uaShort = row.user_agent && row.user_agent.length > 70
+                    ? escapeHtml(row.user_agent.substring(0, 70)) + '…'
+                    : uaText;
+
+                const respPreview = row.response_preview ? escapeHtml(row.response_preview) : '';
+                const respShort = respPreview.length > 95 ? respPreview.substring(0, 95) + '…' : respPreview;
+
+                const reqPreview = row.request_preview ? escapeHtml(row.request_preview) : '';
+                const reqShort = reqPreview.length > 75 ? reqPreview.substring(0, 75) + '…' : reqPreview;
+
+                const isSuspicious = ['Crawler/Bot', 'CLI/Script', 'Empty-UA'].includes(row.client_type);
+
+                return `
+                    <tr style="${statusCode >= 400 ? 'background: rgba(220, 53, 69, 0.06);' : (isSuspicious ? 'background: rgba(255, 193, 7, 0.04);' : '')}">
+                        <td style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted);">#${row.id}</td>
+                        <td style="font-family: var(--font-mono); font-size: 0.74rem; white-space: nowrap;">
+                            ${formatVilniusDate(row.created_at)}
+                        </td>
+                        <td>
+                            <span
+                                onclick="filterApiLogsByIp('${escapeHtml(row.ip_address || '')}')"
+                                style="font-family: var(--font-mono); font-size: 0.8rem; font-weight: 700; color: var(--accent-cyan); cursor: pointer; text-decoration: underline dotted;"
+                                title="Paspauskite, kad nufiltruotumėte visas užklausas iš šio IP (${escapeHtml(row.ip_address || '')})">
+                                ${escapeHtml(row.ip_address || '-')}
+                            </span>
+                        </td>
+                        <td style="max-width: 280px;">
+                            <div style="display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-bottom: 3px;">
+                                ${getClientTypeBadge(row.client_type, row.bot_id)}
+                            </div>
+                            <div style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-secondary); word-break: break-all;" title="${escapeHtml(row.user_agent || '')}">
+                                ${uaShort}
+                            </div>
+                        </td>
+                        <td style="max-width: 250px;">
+                            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 2px;">
+                                <span class="badge ${methodBadgeClass}" style="font-size: 0.68rem;">${escapeHtml(row.method || 'GET')}</span>
+                                <strong style="font-family: var(--font-mono); font-size: 0.78rem; color: #ffffff;">${escapeHtml(row.endpoint || '')}</strong>
+                            </div>
+                            <div style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-muted); word-break: break-all;" title="${escapeHtml(row.request_uri || '')}">
+                                ${escapeHtml(row.request_uri || '')}
+                            </div>
+                        </td>
+                        <td style="white-space: nowrap;">
+                            <span class="badge ${statusBadgeClass}">${statusCode}</span>
+                            <span style="font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-muted); margin-left: 4px;">
+                                ${row.duration_ms !== null && row.duration_ms !== undefined ? row.duration_ms + ' ms' : ''}
+                            </span>
+                            <div style="font-family: var(--font-mono); font-size: 0.68rem; color: var(--text-dim); margin-top: 2px;">
+                                📦 ${formatBytes(row.response_size)}
+                            </div>
+                        </td>
+                        <td style="max-width: 310px;">
+                            ${reqShort ? `<div style="font-family: var(--font-mono); font-size: 0.68rem; color: #c084fc; margin-bottom: 2px;" title="POST Body">📥 ${reqShort}</div>` : ''}
+                            <div style="font-family: var(--font-mono); font-size: 0.71rem; color: var(--text-secondary); word-break: break-all; cursor: pointer;" onclick="inspectApiLog(${row.id})" title="Paspauskite, kad peržiūrėtumėte pilną JSON atsakymą">
+                                📤 ${respShort || '<span style="color:var(--text-dim);">(tuščia)</span>'}
+                            </div>
+                        </td>
+                        <td style="text-align: right; white-space: nowrap;">
+                            <button class="btn btn-secondary btn-sm" onclick="inspectApiLog(${row.id})">🔍 Detaliau</button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function formatJsonPretty(rawStr) {
+            if (!rawStr) return '(tuščia)';
+            try {
+                const parsed = typeof rawStr === 'object' ? rawStr : JSON.parse(rawStr);
+                return JSON.stringify(parsed, null, 2);
+            } catch (e) {
+                return String(rawStr);
+            }
+        }
+
+        async function inspectApiLog(id) {
+            try {
+                const res = await fetch(`api.php?action=api_log_detail&id=${id}`);
+                const data = await res.json();
+                if (!data.success || !data.item) {
+                    throw new Error(data.error || 'Įrašas nerastas');
+                }
+
+                const item = data.item;
+                document.getElementById('apiLogModalTitle').innerText = `🌐 API Užklausa #${item.id} (${item.method} ${item.endpoint})`;
+
+                const statusCode = parseInt(item.status_code || 200, 10);
+                const statusBadgeClass = statusCode >= 500 ? 'badge-red' : (statusCode >= 400 ? 'badge-amber' : 'badge-green');
+
+                document.getElementById('apiLogMetaRow').innerHTML = `
+                    <span class="badge badge-cyan" style="font-family: var(--font-mono);">🌍 IP: ${escapeHtml(item.ip_address || '-')}</span>
+                    ${getClientTypeBadge(item.client_type, item.bot_id)}
+                    <span class="badge ${statusBadgeClass}">HTTP ${statusCode}</span>
+                    <span class="badge badge-gray">⏱️ ${item.duration_ms ?? 0} ms</span>
+                    <span class="badge badge-gray">📦 ${formatBytes(item.response_size)}</span>
+                    <span class="badge badge-gray">🕒 ${formatVilniusDate(item.created_at)}</span>
+                `;
+
+                document.getElementById('apiLogFullUri').innerText = `${item.method} ${item.request_uri || item.endpoint}`;
+                document.getElementById('apiLogUserAgent').innerText = item.user_agent || '(tuščias User-Agent)';
+
+                const reqSec = document.getElementById('apiLogRequestSection');
+                if (item.request_body && item.request_body.trim() !== '') {
+                    reqSec.style.display = 'block';
+                    document.getElementById('apiLogRequestBody').innerText = formatJsonPretty(item.request_body);
+                } else {
+                    reqSec.style.display = 'none';
+                }
+
+                document.getElementById('apiLogResponseBody').innerText = formatJsonPretty(item.response_body);
+                document.getElementById('apiLogHeadersJson').innerText = formatJsonPretty(item.headers_json);
+
+                const btnIp = document.getElementById('btnFilterByModalIp');
+                if (btnIp) {
+                    btnIp.onclick = () => filterApiLogsByIp(item.ip_address || '');
+                }
+
+                openModal('apiLogModal');
+            } catch (err) {
+                alert('Nepavyko užkrauti API užklausos detalių: ' + err.message);
+            }
+        }
+
+        async function clearApiLogs(mode = 'all') {
+            const msg = mode === 'older_24h'
+                ? 'Ar tikrai norite ištrinti visus API žurnalo įrašus, senesnius nei 24 valandos?'
+                : 'Ar tikrai norite išvalyti VISĄ API užklausų žurnalą?';
+            if (!confirm(msg)) return;
+
+            try {
+                const res = await fetch('api.php?action=clear_api_logs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode })
+                });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || 'Nepavyko išvalyti API logų');
+                showToast(data.message || 'API žurnalas išvalytas!', 'success');
+                loadApiLogs(0);
+            } catch (err) {
+                alert('Klaida valant API žurnalą: ' + err.message);
+            }
+        }
+
         // Uždarymas paspaudus už modal ribų arba paspaudus Escape
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
                 const openPacketModal = document.getElementById('packetModal')?.classList.contains('active');
                 const openEditModal = document.getElementById('editNodeModal')?.classList.contains('active');
                 const openBotModal = document.getElementById('editBotModal')?.classList.contains('active');
+                const openApiLogModal = document.getElementById('apiLogModal')?.classList.contains('active');
                 if (openPacketModal) closeModal('packetModal', true);
                 else if (openEditModal) closeModal('editNodeModal', true);
                 else if (openBotModal) closeModal('editBotModal', true);
+                else if (openApiLogModal) closeModal('apiLogModal', true);
             }
         });
 
-        ['packetModal', 'editNodeModal', 'editBotModal'].forEach(id => {
+        ['packetModal', 'editNodeModal', 'editBotModal', 'apiLogModal'].forEach(id => {
             const el = document.getElementById(id);
             if (el) {
                 el.addEventListener('click', (e) => {
@@ -4420,7 +5039,7 @@ $isLoggedIn = isAdminLoggedIn();
         // Paleidimas užsikrovus / atnaujinus puslapį (Refresh)
         document.addEventListener('DOMContentLoaded', () => {
             <?php if ($isLoggedIn): ?>
-                ['nodes', 'telemetry', 'raw', 'queue'].forEach(t => updateTableSortHeaders(t));
+                ['nodes', 'telemetry', 'raw', 'queue', 'apilogs'].forEach(t => updateTableSortHeaders(t));
                 loadStats();
                 loadBots();
                 applyUrlState(true);
