@@ -125,18 +125,19 @@ class NodeRepository implements NodeRepositoryInterface
         $flagsJson = !empty($flags) ? json_encode($flags, JSON_UNESCAPED_UNICODE) : null;
         $rawAdvertJson = json_encode($advert, JSON_UNESCAPED_UNICODE);
 
+        $defaultPassword = $isRepeater ? 'hello' : null;
         $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
 
         if ($driver === 'pgsql') {
             $sql = <<<SQL
             INSERT INTO nodes (
-                public_key, node_name, node_id, advert_format, advert_timestamp, signature,
+                public_key, node_name, node_id, password, advert_format, advert_timestamp, signature,
                 flags_raw, node_type, node_type_str, is_repeater, is_chat, is_room,
                 has_location, latitude, longitude, battery_mv, battery_v,
                 last_rssi, last_snr, flags_json, raw_advert_json, bot_id, last_path, first_seen_at, last_seen_at,
                 requested_date, telemetry_updated_at, "update"
             ) VALUES (
-                :public_key, :node_name, :node_id, :advert_format, :advert_timestamp, :signature,
+                :public_key, :node_name, :node_id, :default_password, :advert_format, :advert_timestamp, :signature,
                 :flags_raw, :node_type, :node_type_str, :is_repeater, :is_chat, :is_room,
                 :has_location, :latitude, :longitude, :battery_mv, :battery_v,
                 :last_rssi, :last_snr, :flags_json::jsonb, :raw_advert_json::jsonb, :bot_id, :last_path, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
@@ -145,6 +146,7 @@ class NodeRepository implements NodeRepositoryInterface
             ON CONFLICT (public_key) DO UPDATE SET
                 node_name = COALESCE(EXCLUDED.node_name, nodes.node_name),
                 node_id = COALESCE(EXCLUDED.node_id, nodes.node_id),
+                password = COALESCE(NULLIF(nodes.password, ''), EXCLUDED.password),
                 advert_format = COALESCE(EXCLUDED.advert_format, nodes.advert_format),
                 advert_timestamp = COALESCE(EXCLUDED.advert_timestamp, nodes.advert_timestamp),
                 signature = COALESCE(EXCLUDED.signature, nodes.signature),
@@ -177,13 +179,13 @@ SQL;
         } else {
             $sql = <<<SQL
             INSERT INTO `nodes` (
-                `public_key`, `node_name`, `node_id`, `advert_format`, `advert_timestamp`, `signature`,
+                `public_key`, `node_name`, `node_id`, `password`, `advert_format`, `advert_timestamp`, `signature`,
                 `flags_raw`, `node_type`, `node_type_str`, `is_repeater`, `is_chat`, `is_room`,
                 `has_location`, `latitude`, `longitude`, `battery_mv`, `battery_v`,
                 `last_rssi`, `last_snr`, `flags_json`, `raw_advert_json`, `bot_id`, `last_path`, `first_seen_at`, `last_seen_at`,
                 `requested_date`, `telemetry_updated_at`, `update`
             ) VALUES (
-                :public_key, :node_name, :node_id, :advert_format, :advert_timestamp, :signature,
+                :public_key, :node_name, :node_id, :default_password, :advert_format, :advert_timestamp, :signature,
                 :flags_raw, :node_type, :node_type_str, :is_repeater, :is_chat, :is_room,
                 :has_location, :latitude, :longitude, :battery_mv, :battery_v,
                 :last_rssi, :last_snr, :flags_json, :raw_advert_json, :bot_id, :last_path, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
@@ -192,6 +194,7 @@ SQL;
             ON DUPLICATE KEY UPDATE
                 `node_name` = COALESCE(VALUES(`node_name`), `node_name`),
                 `node_id` = COALESCE(VALUES(`node_id`), `node_id`),
+                `password` = COALESCE(NULLIF(`password`, ''), VALUES(`password`)),
                 `advert_format` = COALESCE(VALUES(`advert_format`), `advert_format`),
                 `advert_timestamp` = COALESCE(VALUES(`advert_timestamp`), `advert_timestamp`),
                 `signature` = COALESCE(VALUES(`signature`), `signature`),
@@ -227,6 +230,7 @@ SQL;
         $stmt->bindValue(':public_key', $pubKey);
         $stmt->bindValue(':node_name', $nodeName);
         $stmt->bindValue(':node_id', $nodeId);
+        $stmt->bindValue(':default_password', $defaultPassword);
         $stmt->bindValue(':advert_format', $format);
         $stmt->bindValue(':advert_timestamp', $timestamp);
         $stmt->bindValue(':signature', $signature);
@@ -520,7 +524,8 @@ SQL;
         if (array_key_exists('password', $fields)) {
             $colPass = ($driver === 'pgsql') ? 'password' : '`password`';
             $sets[] = "{$colPass} = :password";
-            $params[':password'] = $fields['password'] !== null ? trim((string)$fields['password']) : null;
+            $trimmedPass = $fields['password'] !== null ? trim((string)$fields['password']) : '';
+            $params[':password'] = ($trimmedPass !== '') ? $trimmedPass : 'hello';
         }
 
         if (array_key_exists('update', $fields)) {

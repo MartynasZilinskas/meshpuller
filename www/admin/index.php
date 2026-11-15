@@ -1718,8 +1718,8 @@ $isLoggedIn = isAdminLoggedIn();
 
                         <div class="form-group">
                             <label for="editNodePassword">Valdymo Slaptažodis (ESP32 Botui)</label>
-                            <input type="text" id="editNodePassword" class="form-control" placeholder="Slaptažodis kartotuvo telemetrijai siųsti (jei tuščias, bus &quot;&quot;)">
-                            <div style="font-size: 0.70rem; color: var(--text-dim); margin-top: 4px;">Šis slaptažodis perduodamas į /api/repyters JSON failą botui.</div>
+                            <input type="text" id="editNodePassword" class="form-control" placeholder="Slaptažodis kartotuvo telemetrijai siųsti (jei tuščias, bus &quot;hello&quot;)">
+                            <div style="font-size: 0.70rem; color: var(--text-dim); margin-top: 4px;">Šis slaptažodis perduodamas į /api/repeater JSON (pagal nutylėjimą: <code>hello</code>).</div>
                         </div>
 
                         <div class="form-group">
@@ -2759,7 +2759,8 @@ $isLoggedIn = isAdminLoggedIn();
             document.getElementById('editNodePublicKey').value = node.public_key;
             document.getElementById('editNodeKeyDisplay').value = node.public_key;
             document.getElementById('editNodeName').value = node.node_name || '';
-            document.getElementById('editNodePassword').value = node.password !== null && node.password !== undefined ? node.password : '';
+            const defaultPwd = (node.is_repeater == 1 || node.is_repeater === true) ? 'hello' : '';
+            document.getElementById('editNodePassword').value = (node.password !== null && node.password !== undefined && String(node.password).trim() !== '') ? node.password : defaultPwd;
             
             const rawPath = (node.last_path || '').trim();
             const isFlood = (rawPath.toUpperCase() === 'FLOOD');
@@ -4082,12 +4083,15 @@ $isLoggedIn = isAdminLoggedIn();
                                 <div style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-dim);" title="Viešasis raktas: ${escapeHtml(item.public_key || '')}">
                                     🔑 ${keyShort}
                                 </div>
-                                <div style="margin-top: 3px;">
+                                <div style="margin-top: 3px; display: flex; gap: 5px; flex-wrap: wrap;">
                                     ${item.last_path === 'DIRECT' 
                                         ? '<span class="badge badge-green" style="font-size: 0.68rem;" title="Tiesioginis 0 šuolių ryšys">🎯 DIRECT (0 šuol.)</span>' 
                                         : (item.last_path 
                                             ? `<span class="badge badge-cyan" style="font-size: 0.68rem;" title="Išmoktas grįžtamasis kelias">🗺️ Kelias: [${escapeHtml(item.last_path)}]</span>` 
                                             : '<span class="badge badge-gray" style="font-size: 0.68rem;" title="Kelias nežinomas, užklausos bus siunčiamos per FLOOD">🌐 FLOOD (tinklas)</span>')}
+                                    ${item.skip_login
+                                        ? '<span class="badge badge-green" style="font-size: 0.68rem;" title="Kartotuvas jau turi šio boto sesiją (ACL) – Login paketas praleidžiamas (skip_login=true)">🔑 Sesija aktyvi (Skip Login)</span>'
+                                        : '<span class="badge badge-amber" style="font-size: 0.68rem;" title="Bus siunčiamas pilnas ANON_REQ Login su slaptažodžiu (skip_login=false)">🔐 Pilnas Login</span>'}
                                 </div>
                             </div>
                         </td>

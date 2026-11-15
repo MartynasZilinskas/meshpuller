@@ -209,12 +209,12 @@ class PollingQueueService implements PollingQueueServiceInterface
                 $geoFilterMysql = $geoCondMysql ? " AND {$geoCondMysql}" : "";
 
                 if ($driver === 'pgsql') {
-                    $sql = "SELECT public_key, node_id, node_name, is_repeater, password, \"update\", bot_id, last_path, latitude, longitude 
+                    $sql = "SELECT public_key, node_id, node_name, is_repeater, password, \"update\", bot_id, last_path, telemetry_fail_count, latitude, longitude 
                             FROM nodes 
                             WHERE \"update\" = true AND (is_disabled = false OR is_disabled IS NULL) {$failFilterPgsql} {$intervalFilterPgsql} {$botFilterPgsql} {$geoFilterPgsql}
                             ORDER BY last_seen_at DESC";
                 } else {
-                    $sql = "SELECT public_key, node_id, node_name, is_repeater, `password`, `update`, `bot_id`, `last_path`, `latitude`, `longitude` 
+                    $sql = "SELECT public_key, node_id, node_name, is_repeater, `password`, `update`, `bot_id`, `last_path`, `telemetry_fail_count`, `latitude`, `longitude` 
                             FROM `nodes` 
                             WHERE `update` = 1 AND (`is_disabled` = 0 OR `is_disabled` IS NULL) {$failFilterMysql} {$intervalFilterMysql} {$botFilterMysql} {$geoFilterMysql}
                             ORDER BY last_seen_at DESC";
@@ -233,9 +233,9 @@ class PollingQueueService implements PollingQueueServiceInterface
                             ? strtolower(trim($row['node_id'])) 
                             : substr($pubId, 0, 4);
 
-                        $password = ($row['password'] !== null) 
+                        $password = ($row['password'] !== null && trim((string)$row['password']) !== '') 
                             ? trim((string)$row['password']) 
-                            : '';
+                            : 'hello';
 
                         $rawPath = strtoupper(trim((string)($row['last_path'] ?? '')));
                         $isValidHexPath = ($rawPath !== '' && $rawPath !== 'FLOOD' && $rawPath !== 'DIRECT'
@@ -258,15 +258,21 @@ class PollingQueueService implements PollingQueueServiceInterface
                             $isDirect = false;
                         }
 
+                        $rowBot = !empty($botId) ? $cleanBotId : strtoupper(trim((string)($row['bot_id'] ?? 'KLP')));
+                        $rowFails = (int)($row['telemetry_fail_count'] ?? 0);
+                        $skipLogin = $this->hasActiveBotSession($pubId, $shortName, $rowBot, $rowFails);
+
                         $repeaters[] = [
-                            'name'      => $shortName,
-                            'public_id' => $pubId,
-                            'password'  => $password,
-                            'path'      => $lastPath,
-                            'isDirect'  => $isDirect,
-                            'status'    => false,
-                            'telemetry' => true,
-                            'bot_id'    => $row['bot_id'] ?? null,
+                            'name'       => $shortName,
+                            'public_id'  => $pubId,
+                            'password'   => $password,
+                            'path'       => $lastPath,
+                            'isDirect'   => $isDirect,
+                            'login'      => !$skipLogin,
+                            'skip_login' => $skipLogin,
+                            'status'     => false,
+                            'telemetry'  => true,
+                            'bot_id'     => $row['bot_id'] ?? null,
                         ];
                     }
                 }
@@ -316,7 +322,7 @@ class PollingQueueService implements PollingQueueServiceInterface
                                     $repeaters[] = [
                                         'name'      => (string)($item['name'] ?? substr($pubId, 0, 4)),
                                         'public_id' => $pubId,
-                                        'password'  => (isset($item['password']) && $item['password'] !== null) ? (string)$item['password'] : '',
+                                        'password'  => (isset($item['password']) && trim((string)$item['password']) !== '') ? trim((string)$item['password']) : 'hello',
                                         'isDirect'  => isset($item['isDirect']) ? (bool)$item['isDirect'] : false,
                                         'status'    => isset($item['status']) ? (bool)$item['status'] : true,
                                         'telemetry' => isset($item['telemetry']) ? (bool)$item['telemetry'] : true,
@@ -340,6 +346,39 @@ class PollingQueueService implements PollingQueueServiceInterface
         }
 
         return $repeaters;
+    }
+
+    /**
+     * Patikrina, ar kartotuvas jau turi aktyvią sesiją (ACL įrašą) su šiuo konkrečiu botu.
+     * Sesija laikoma aktyvia, jei:
+     * 1) Paskutinė užklausa nebuvo nesėkminga ($failCount === 0), IR
+     * 2) Šis botas jau yra sėkmingai gavęs bent vieną TELEMETRY arba STATUS atsakymą iš šio kartotuvo.
+     * Jei sesija aktyvi, botas gali praleisti Login (ANON_REQ) žingsnį ir iškart siųsti GET_TELEMETRY_DATA / GET_STATUS.
+     */
+    private function hasActiveBotSession(string $publicKey, string $nodeId, string $botId, int $failCount): bool
+    {
+        if ($failCount > 0 || !$this->pdo || $botId === '') {
+            return false;
+        }
+
+        try {
+            $stmt = $this->pdo->prepare("
+                SELECT 1
+                FROM telemetry
+                WHERE (LOWER(public_key) = :pk OR LOWER(node_id) = :nid)
+                  AND UPPER(bot_id) = :bot_id
+                  AND type IN ('TELEMETRY', 'STATUS')
+                LIMIT 1
+            ");
+            $stmt->execute([
+                ':pk'     => strtolower(trim($publicKey)),
+                ':nid'    => strtolower(trim($nodeId)),
+                ':bot_id' => strtoupper(trim($botId)),
+            ]);
+            return (bool)$stmt->fetchColumn();
+        } catch (\Throwable $e) {
+            return false;
+        }
     }
 
     /**
@@ -565,9 +604,9 @@ SQL;
                     $shortName = !empty($row['node_id']) 
                         ? strtolower(trim($row['node_id'])) 
                         : substr($pubId, 0, 4);
-                    $password = ($row['password'] !== null) 
+                    $password = ($row['password'] !== null && trim((string)$row['password']) !== '') 
                         ? trim((string)$row['password']) 
-                        : '';
+                        : 'hello';
                     $rawPath = strtoupper(trim((string)($row['last_path'] ?? '')));
                     $isValidHexPath = ($rawPath !== '' && $rawPath !== 'FLOOD' && $rawPath !== 'DIRECT'
                         && strlen($rawPath) >= 4 && (strlen($rawPath) % 4 === 0)
@@ -587,17 +626,22 @@ SQL;
                         $isDirect = false;
                     }
 
+                    $rowFails = (int)($row['telemetry_fail_count'] ?? 0);
+                    $skipLogin = $this->hasActiveBotSession($pubId, $shortName, $cleanBotId, $rowFails);
+
                     return [
                         'name'                 => $shortName,
                         'public_id'            => $pubId,
                         'password'             => $password,
                         'path'                 => $lastPath,
                         'isDirect'             => $isDirect,
+                        'login'                => !$skipLogin,
+                        'skip_login'           => $skipLogin,
                         'status'               => false,
                         'telemetry'            => true,
                         'bot_id'               => $row['bot_id'] ?? null,
                         'requested_date'       => $row['requested_date'] ?? date('Y-m-d H:i:s'),
-                        'telemetry_fail_count' => (int)($row['telemetry_fail_count'] ?? 0),
+                        'telemetry_fail_count' => $rowFails,
                     ];
                 }
                 return null;
@@ -678,9 +722,9 @@ SQL;
                 $shortName = !empty($row['node_id']) 
                     ? strtolower(trim($row['node_id'])) 
                     : substr($pubId, 0, 4);
-                $password = ($row['password'] !== null) 
+                $password = ($row['password'] !== null && trim((string)$row['password']) !== '') 
                     ? trim((string)$row['password']) 
-                    : '';
+                    : 'hello';
                 $rawPath = strtoupper(trim((string)($currentPath ?? '')));
                 $isValidHexPath = ($rawPath !== '' && $rawPath !== 'FLOOD' && $rawPath !== 'DIRECT'
                     && strlen($rawPath) >= 4 && (strlen($rawPath) % 4 === 0)
@@ -700,12 +744,16 @@ SQL;
                     $isDirect = false;
                 }
 
+                $skipLogin = $this->hasActiveBotSession($pubId, $shortName, $cleanBotId, $failCount);
+
                 return [
                     'name'                 => $shortName,
                     'public_id'            => $pubId,
                     'password'             => $password,
                     'path'                 => $lastPath,
                     'isDirect'             => $isDirect,
+                    'login'                => !$skipLogin,
+                    'skip_login'           => $skipLogin,
                     'status'               => false,
                     'telemetry'            => true,
                     'bot_id'               => $row['bot_id'] ?? null,
@@ -939,6 +987,8 @@ SQL;
             $isEligibleForNext = (!$isBlocked && !$isInProgress && $hasWaitedInterval);
             $queuePos = $isEligibleForNext ? $queueIndex++ : null;
 
+            $skipLogin = $this->hasActiveBotSession((string)($row['public_key'] ?? ''), $nodeId, $bot, $failCount);
+
             $result[] = [
                 'queue_pos'                => $queuePos,
                 'id'                       => (int)$row['id'],
@@ -946,6 +996,7 @@ SQL;
                 'name'                     => $name,
                 'public_key'               => $row['public_key'],
                 'bot_id'                   => $bot,
+                'skip_login'               => $skipLogin,
                 'is_repeater'              => (bool)$row['is_repeater'],
                 'update'                   => (bool)$row['update'],
                 'is_disabled'              => (bool)($row['is_disabled'] ?? false),

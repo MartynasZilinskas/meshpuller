@@ -45,6 +45,7 @@ struct RepeaterTarget {
   String password;  // Prisijungimo slaptažodis (pvz. "hello")
   bool isDirect;    // true = tiesioginis (0 hops), false = per kitus kartotuvus
                     // (FLOOD)
+  bool skipLogin;   // true = sesija (ACL) kartotuve jau aktyvi, praleisti Login (ANON_REQ)
   bool reqStatus;   // true = siųsti būsenos užklausą (REQ_TYPE_GET_STATUS)
   bool reqTelemetry; // true = siųsti telemetrijos užklausą
                      // (REQ_TYPE_GET_TELEMETRY_DATA)
@@ -124,7 +125,7 @@ extern TelemetrySettings settings; // Nustatymų objektas
 // 8 arba 10! Jei jūsų kartotuvas sukonfigūruotas pagal nutylėjimą, naudokite
 // 869.618 MHz. Jei patys nustatėte kitokį dažnį repeaterio nustatymuose -
 // pakeiskite čia.
-#define LORA_FREQ                                                              \
+#define LORA_FREQ                                                              
   869.618 // MHz (Oficialus MeshCore ES dažnis; pakeiskite į 868.0 jei
           // kartotuvas pakeistas)
 #define LORA_BW 62.5 // kHz (MeshCore standartas 62.5 arba 250.0)

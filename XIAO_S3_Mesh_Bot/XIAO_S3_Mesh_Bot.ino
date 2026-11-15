@@ -129,6 +129,54 @@ MonitoredNode monitoredNodes[16];
 RepeaterTarget monitoredRepeaters[16];
 size_t monitoredRepeatersCount = 0;
 
+// 🔑 Aktyvių kartotuvų sesijų (ACL) atmintinė ESP32 RAM'e
+// Jei kartotuvas jau atsakė į Login ar Telemetriją, įsimename jo 2 baitų prefiksą (pubKey[0..1]),
+// kad nereikėtų kaskart siųsti Login (ANON_REQ) paketo su slaptažodžiu.
+static const size_t MAX_SESSION_CACHE = 64;
+static uint16_t activeSessionCache[MAX_SESSION_CACHE];
+static size_t activeSessionCount = 0;
+
+uint16_t getNodeSessionKey(const uint8_t* pubKey) {
+  return (uint16_t)((pubKey[0] << 8) | pubKey[1]);
+}
+
+bool hasLocalSession(const uint8_t* pubKey) {
+  uint16_t key = getNodeSessionKey(pubKey);
+  for (size_t i = 0; i < activeSessionCount; i++) {
+    if (activeSessionCache[i] == key) return true;
+  }
+  return false;
+}
+
+void markLocalSessionActive(const uint8_t* pubKey) {
+  uint16_t key = getNodeSessionKey(pubKey);
+  for (size_t i = 0; i < activeSessionCount; i++) {
+    if (activeSessionCache[i] == key) return;
+  }
+  if (activeSessionCount < MAX_SESSION_CACHE) {
+    activeSessionCache[activeSessionCount++] = key;
+  } else {
+    // Žiedinis perrašymas
+    for (size_t i = 1; i < MAX_SESSION_CACHE; i++) {
+      activeSessionCache[i - 1] = activeSessionCache[i];
+    }
+    activeSessionCache[MAX_SESSION_CACHE - 1] = key;
+  }
+}
+
+void clearLocalSession(const uint8_t* pubKey) {
+  uint16_t key = getNodeSessionKey(pubKey);
+  for (size_t i = 0; i < activeSessionCount; i++) {
+    if (activeSessionCache[i] == key) {
+      for (size_t j = i + 1; j < activeSessionCount; j++) {
+        activeSessionCache[j - 1] = activeSessionCache[j];
+      }
+      activeSessionCount--;
+      return;
+    }
+  }
+}
+
 // Konsoliduotas telemetrijos dokumentas (sujungia visų užklausų atsakymus į 1 ataskaitą)
 #if ARDUINOJSON_VERSION_MAJOR >= 7
 JsonDocument currentRepDoc;
@@ -388,24 +436,47 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
                 rep.name.c_str(), routeDesc.c_str(),
                 targetHash, replyTimeout / 1000.0f);
 
-  // Žingsnis 1: Užšifruotas prisijungimas (Login) į kartotuvą (net jei slaptažodis tuščias)
-  if (rep.password.length() > 0) {
-    Serial.printf("[Užklausa 1/3] Siunčiamas užšifruotas Login į '%s' su slaptažodžiu '%s' (Laukiama iki %.1f s)...\n",
-                  rep.name.c_str(), rep.password.c_str(), replyTimeout / 1000.0f);
-  } else {
-    Serial.printf("[Užklausa 1/3] Siunčiamas užšifruotas Login į '%s' be slaptažodžio (tuščias slaptažodis) (Laukiama iki %.1f s)...\n",
-                  rep.name.c_str(), replyTimeout / 1000.0f);
-  }
-  sendMeshCoreLogin(repIdx);
-  bool loginOk = waitForReply(replyTimeout, targetHash, WAIT_LOGIN);
-  if (!loginOk && monitoredNodes[repIdx].hasRoute) {
-    Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Login! Kelias izoliuojamas (karantinas 15 min.) ir kartojama per FLOOD...\n", rep.name.c_str());
-    quarantineFailedRoute(repIdx);
+  const uint8_t* targetPubKey = monitoredNodes[repIdx].pubKey;
+  bool sessionActive = rep.skipLogin || hasLocalSession(targetPubKey);
+  bool didLoginThisCycle = false;
+
+  // Pagalbinė lambda funkcija prisijungimui (naudojama arba iškart, arba kaip fallback)
+  auto performLoginStep = [&]() -> bool {
+    didLoginThisCycle = true;
+    bool curDirectZero = (monitoredNodes[repIdx].hasRoute && monitoredNodes[repIdx].routeHopCount == 0);
+    unsigned long loginTimeout = curDirectZero ? REPEATER_REPLY_TIMEOUT_MS : REPEATER_REMOTE_REPLY_TIMEOUT_MS;
+
+    if (rep.password.length() > 0) {
+      Serial.printf("[Užklausa 1/3] Siunčiamas užšifruotas Login į '%s' su slaptažodžiu '%s' (Laukiama iki %.1f s)...\n",
+                    rep.name.c_str(), rep.password.c_str(), loginTimeout / 1000.0f);
+    } else {
+      Serial.printf("[Užklausa 1/3] Siunčiamas užšifruotas Login į '%s' be slaptažodžio (tuščias slaptažodis) (Laukiama iki %.1f s)...\n",
+                    rep.name.c_str(), loginTimeout / 1000.0f);
+    }
     sendMeshCoreLogin(repIdx);
-    loginOk = waitForReply(REPEATER_REMOTE_REPLY_TIMEOUT_MS, targetHash, WAIT_LOGIN);
+    bool lOk = waitForReply(loginTimeout, targetHash, WAIT_LOGIN);
+    if (!lOk && monitoredNodes[repIdx].hasRoute) {
+      Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Login! Kelias izoliuojamas (karantinas 15 min.) ir kartojama per FLOOD...\n", rep.name.c_str());
+      quarantineFailedRoute(repIdx);
+      sendMeshCoreLogin(repIdx);
+      lOk = waitForReply(REPEATER_REMOTE_REPLY_TIMEOUT_MS, targetHash, WAIT_LOGIN);
+    }
+    if (lOk) {
+      markLocalSessionActive(targetPubKey);
+    }
+    // 3.0 s pauzė eteriui nurimti po login užklausos
+    yieldDelay(3000);
+    return lOk;
+  };
+
+  // Žingsnis 1: Jei sesija (ACL) dar neaktyvi – siunčiame Login (ANON_REQ).
+  // Jei sesija jau aktyvi – praleidžiame Login ir iškart taupome eterio laiką!
+  if (!sessionActive) {
+    performLoginStep();
+  } else {
+    Serial.printf("[Sesija] 🔑 Kartotuvas '%s' jau turi aktyvią sesiją (ACL) – Login (ANON_REQ) praleidžiamas!\n",
+                  rep.name.c_str());
   }
-  // 3.0 s pauzė eteriui nurimti po login užklausos
-  yieldDelay(3000);
 
   // Žingsnis 2: Būsenos ir statistikos užklausa (REQ_TYPE_GET_STATUS)
   if (rep.reqStatus) {
@@ -418,6 +489,18 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
       quarantineFailedRoute(repIdx);
       sendMeshCoreStatusRequest(repIdx);
       statusOk = waitForReply(REPEATER_REMOTE_REPLY_TIMEOUT_MS, targetHash, WAIT_STATUS);
+    }
+    // Fallback: jei buvome praleidę Login ir negavome atsakymo – galbūt kartotuve baigėsi sesija (pvz. persikrovė)
+    if (!statusOk && !didLoginThisCycle) {
+      Serial.printf("[Sesija Fallback] ⚠️ '%s' neatsakė į Status be Login. Išvaloma sesija, vykdomas pilnas Login ir kartojama...\n",
+                    rep.name.c_str());
+      clearLocalSession(targetPubKey);
+      performLoginStep();
+      sendMeshCoreStatusRequest(repIdx);
+      statusOk = waitForReply(REPEATER_REMOTE_REPLY_TIMEOUT_MS, targetHash, WAIT_STATUS);
+    }
+    if (statusOk) {
+      markLocalSessionActive(targetPubKey);
     }
   } else {
     Serial.printf("[Užklausa 2/3] Būsenos užklausa ('status') išjungta kartotuvui '%s'. Praleidžiama.\n", rep.name.c_str());
@@ -440,6 +523,18 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
       quarantineFailedRoute(repIdx);
       sendMeshCoreTelemetryRequest(repIdx);
       telemOk = waitForReply(REPEATER_REMOTE_REPLY_TIMEOUT_MS, targetHash, WAIT_TELEMETRY);
+    }
+    // Fallback: jei buvome praleidę Login ir negavome atsakymo – atliekame pilną Login su slaptažodžiu ir pakartojame
+    if (!telemOk && !didLoginThisCycle) {
+      Serial.printf("[Sesija Fallback] ⚠️ '%s' neatsakė į Telemetriją be Login. Išvaloma sesija, vykdomas pilnas Login ir kartojama...\n",
+                    rep.name.c_str());
+      clearLocalSession(targetPubKey);
+      performLoginStep();
+      sendMeshCoreTelemetryRequest(repIdx);
+      telemOk = waitForReply(REPEATER_REMOTE_REPLY_TIMEOUT_MS, targetHash, WAIT_TELEMETRY);
+    }
+    if (telemOk) {
+      markLocalSessionActive(targetPubKey);
     }
   } else {
     Serial.printf("[Užklausa 3/3] Telemetrijos užklausa ('telemetry') išjungta kartotuvui '%s'. Praleidžiama.\n", rep.name.c_str());
@@ -615,7 +710,12 @@ bool fetchRepeatersFromURL() {
     monitoredRepeaters[0].name         = obj["name"].as<String>();
     monitoredRepeaters[0].public_id    = obj["public_id"].as<String>();
     monitoredRepeaters[0].password     = obj["password"].as<String>();
+    monitoredRepeaters[0].password.trim();
+    if (monitoredRepeaters[0].password.length() == 0) {
+      monitoredRepeaters[0].password = "hello";
+    }
     monitoredRepeaters[0].isDirect     = obj["isDirect"] | false;
+    monitoredRepeaters[0].skipLogin    = obj.containsKey("skip_login") ? (bool)obj["skip_login"] : (obj.containsKey("login") ? !((bool)obj["login"]) : false);
     monitoredRepeaters[0].reqStatus    = obj.containsKey("status") ? (bool)obj["status"] : true;
     monitoredRepeaters[0].reqTelemetry = obj.containsKey("telemetry") ? (bool)obj["telemetry"] : true;
     monitoredRepeaters[0].path         = obj.containsKey("path") ? obj["path"].as<String>() : "";
@@ -628,7 +728,12 @@ bool fetchRepeatersFromURL() {
       monitoredRepeaters[idx].name         = obj["name"].as<String>();
       monitoredRepeaters[idx].public_id    = obj["public_id"].as<String>();
       monitoredRepeaters[idx].password     = obj["password"].as<String>();
+      monitoredRepeaters[idx].password.trim();
+      if (monitoredRepeaters[idx].password.length() == 0) {
+        monitoredRepeaters[idx].password = "hello";
+      }
       monitoredRepeaters[idx].isDirect     = obj["isDirect"] | false;
+      monitoredRepeaters[idx].skipLogin    = obj.containsKey("skip_login") ? (bool)obj["skip_login"] : (obj.containsKey("login") ? !((bool)obj["login"]) : false);
       monitoredRepeaters[idx].reqStatus    = obj.containsKey("status") ? (bool)obj["status"] : true;
       monitoredRepeaters[idx].reqTelemetry = obj.containsKey("telemetry") ? (bool)obj["telemetry"] : true;
       monitoredRepeaters[idx].path         = obj.containsKey("path") ? obj["path"].as<String>() : "";
@@ -646,9 +751,10 @@ bool fetchRepeatersFromURL() {
 
   Serial.printf("[FetchRepeaters] Sėkmingai įkelti %u kartotuvai:\n", (unsigned int)monitoredRepeatersCount);
   for (size_t i = 0; i < monitoredRepeatersCount; i++) {
-    Serial.printf("  [%u] %s (%s) | pw: '%s' | status: %s | telemetry: %s\n",
+    Serial.printf("  [%u] %s (%s) | login: %s | pw: '%s' | status: %s | telemetry: %s\n",
                   (unsigned int)(i + 1), monitoredRepeaters[i].name.c_str(),
                   monitoredRepeaters[i].isDirect ? "DIRECT" : "FLOOD",
+                  monitoredRepeaters[i].skipLogin ? "SKIP (Sesija aktyvi)" : "TAIP",
                   monitoredRepeaters[i].password.c_str(),
                   monitoredRepeaters[i].reqStatus ? "TAIP" : "NE",
                   monitoredRepeaters[i].reqTelemetry ? "TAIP" : "NE");
@@ -988,8 +1094,13 @@ void sendMeshCoreLogin(size_t repIdx) {
   memcpy(&plain[plainLen], &ts, 4);
   plainLen += 4;
 
-  size_t pwdLen = rep.password.length();
-  memcpy(&plain[plainLen], rep.password.c_str(), pwdLen + 1);
+  String loginPwd = rep.password;
+  loginPwd.trim();
+  if (loginPwd.length() == 0) {
+    loginPwd = "hello";
+  }
+  size_t pwdLen = loginPwd.length();
+  memcpy(&plain[plainLen], loginPwd.c_str(), pwdLen + 1);
   plainLen += (pwdLen + 1);
 
   int encLen = MeshCrypto::encryptThenMAC(secret, &payload[pLen], plain, plainLen);
