@@ -352,29 +352,71 @@ class PollingQueueService implements PollingQueueServiceInterface
      * Patikrina, ar kartotuvas jau turi aktyvią sesiją (ACL įrašą) su šiuo konkrečiu botu.
      * Sesija laikoma aktyvia, jei:
      * 1) Paskutinė užklausa nebuvo nesėkminga ($failCount === 0), IR
-     * 2) Šis botas jau yra sėkmingai gavęs bent vieną TELEMETRY arba STATUS atsakymą iš šio kartotuvo.
+     * 2) Šis botas jau yra sėkmingai gavęs TELEMETRY arba STATUS atsakymą iš šio kartotuvo per pastarąsias 7 dienas
+     *    (naudojamas tiesioginis indeksuotas palyginimas be LOWER()/UPPER() apvalkalų greitai paieškai).
      * Jei sesija aktyvi, botas gali praleisti Login (ANON_REQ) žingsnį ir iškart siųsti GET_TELEMETRY_DATA / GET_STATUS.
      */
-    private function hasActiveBotSession(string $publicKey, string $nodeId, string $botId, int $failCount): bool
-    {
+    private function hasActiveBotSession(
+        string $publicKey,
+        string $nodeId,
+        string $botId,
+        int $failCount,
+        ?string $lastFailedAt = null
+    ): bool {
         if ($failCount > 0 || !$this->pdo || $botId === '') {
             return false;
         }
 
         try {
-            $stmt = $this->pdo->prepare("
-                SELECT 1
-                FROM telemetry
-                WHERE (LOWER(public_key) = :pk OR LOWER(node_id) = :nid)
-                  AND UPPER(bot_id) = :bot_id
-                  AND type IN ('TELEMETRY', 'STATUS')
-                LIMIT 1
-            ");
-            $stmt->execute([
-                ':pk'     => strtolower(trim($publicKey)),
-                ':nid'    => strtolower(trim($nodeId)),
-                ':bot_id' => strtoupper(trim($botId)),
-            ]);
+            $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            $pk = strtolower(trim($publicKey));
+            $nid = strtolower(trim($nodeId));
+            $bId = strtoupper(trim($botId));
+
+            if ($driver === 'pgsql') {
+                $sql = "
+                    SELECT 1
+                    FROM telemetry
+                    WHERE (public_key = :pk OR node_id = :nid)
+                      AND UPPER(bot_id) = :bot_id
+                      AND type IN ('TELEMETRY', 'STATUS')
+                      AND recorded_at >= (CURRENT_TIMESTAMP - INTERVAL '7 days')
+                ";
+            } elseif ($driver === 'sqlite') {
+                $sql = "
+                    SELECT 1
+                    FROM telemetry
+                    WHERE (LOWER(public_key) = :pk OR LOWER(node_id) = :nid)
+                      AND UPPER(bot_id) = :bot_id
+                      AND type IN ('TELEMETRY', 'STATUS')
+                      AND recorded_at >= datetime('now', '-7 days')
+                ";
+            } else {
+                // MySQL utf8mb4_unicode_ci yra case-insensitive, todėl tiesioginis = naudoja B-Tree indeksus!
+                $sql = "
+                    SELECT 1
+                    FROM `telemetry`
+                    WHERE (`public_key` = :pk OR `node_id` = :nid)
+                      AND `bot_id` = :bot_id
+                      AND `type` IN ('TELEMETRY', 'STATUS')
+                      AND `recorded_at` >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                ";
+            }
+
+            $params = [
+                ':pk'     => $pk,
+                ':nid'    => $nid,
+                ':bot_id' => $bId,
+            ];
+
+            if ($lastFailedAt !== null && trim($lastFailedAt) !== '') {
+                $sql .= " AND recorded_at > :last_failed";
+                $params[':last_failed'] = trim($lastFailedAt);
+            }
+
+            $sql .= " LIMIT 1";
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute($params);
             return (bool)$stmt->fetchColumn();
         } catch (\Throwable $e) {
             return false;
@@ -744,7 +786,7 @@ SQL;
                     $isDirect = false;
                 }
 
-                $skipLogin = $this->hasActiveBotSession($pubId, $shortName, $cleanBotId, $failCount);
+                $skipLogin = $this->hasActiveBotSession($pubId, $shortName, $cleanBotId, $failCount, $lastFailedAt);
 
                 return [
                     'name'                 => $shortName,
@@ -863,7 +905,16 @@ SQL;
                   AND t.type IN ('TELEMETRY', 'STATUS')
                 ORDER BY t.recorded_at DESC, t.id DESC 
                 LIMIT 1
-            ) AS last_telemetry_at
+            ) AS last_telemetry_at,
+            (
+                SELECT 1
+                FROM telemetry t
+                WHERE (t.node_id = n.node_id OR (n.public_key IS NOT NULL AND t.public_key = n.public_key))
+                  AND t.bot_id = COALESCE(NULLIF(n.bot_id, ''), 'KLP')
+                  AND t.type IN ('TELEMETRY', 'STATUS')
+                  AND (n.last_failed_request_at IS NULL OR t.recorded_at > n.last_failed_request_at)
+                LIMIT 1
+            ) AS has_bot_session
         FROM nodes n
         {$whereSql}
         ORDER BY 
@@ -987,7 +1038,7 @@ SQL;
             $isEligibleForNext = (!$isBlocked && !$isInProgress && $hasWaitedInterval);
             $queuePos = $isEligibleForNext ? $queueIndex++ : null;
 
-            $skipLogin = $this->hasActiveBotSession((string)($row['public_key'] ?? ''), $nodeId, $bot, $failCount);
+            $skipLogin = ($failCount === 0 && !empty($row['has_bot_session']));
 
             $result[] = [
                 'queue_pos'                => $queuePos,

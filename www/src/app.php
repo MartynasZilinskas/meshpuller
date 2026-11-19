@@ -1112,77 +1112,27 @@ if ($dbConnected && $repository) {
 }
 
 // -----------------------------------------------------------------------------
-// ⚙️ 2. ASINCHRONINIS / SINCHRONINIS REŽIMAS
+// ⚙️ 2. REALAUS LAIKO APDOROJIMAS SU ATSARGINE EILE (FALLBACK QUEUE)
 // -----------------------------------------------------------------------------
-// Pagal nutylėjimą: ASINCHRONINIS (paketas patenka į eilę su processed = false,
-// o dekodavimas vyksta fone paleidus process_queue.php).
-// Jei testavimo tikslais pateiktas ?sync=1 arba ?decode=1 – galima atlikti ir tiesioginį dekodavimą.
-$forceSync = isset($_GET['sync']) || isset($_GET['decode']) || (!empty($payloadData['sync']));
-
+// Iškart dekoduojame ir apdorojame gautą paketą (~2–4 ms), kad maršrutai (last_path),
+// telemetrija (telemetry_updated_at) ir sesijos (skip_login) atsinaujintų akimirksniu,
+// nelaukiant iki 60 sek. trunkančio process_queue.php cron kvietimo.
+// Jei dėl kokios nors priežasties tiesioginis apdorojimas nepavyktų, įrašas lieka
+// raw_packets eilėje (processed = false) ir bus apdorotas per process_queue.php.
+$forceSync = true;
 $decoded = null;
-if ($forceSync) {
+
+if ($dbConnected && $repository && $recordId) {
+    try {
+        $decoded = $repository->processRecord((int)$recordId, $decoder);
+    } catch (\Throwable $e) {
+        $forceSync = false;
+    }
+} elseif ($forceSync) {
     if (is_array($payloadData) && count($payloadData) > 2) {
         $decoded = $decoder->decodeApiPayload($payloadData);
     } else {
         $decoded = $decoder->decodeRawPacket($rawHex, $sharedSecret);
-    }
-
-    if ($dbConnected && $repository && $recordId) {
-        try {
-            if (!empty($decoded['advert']) && is_array($decoded['advert']) && !empty($decoded['advert']['public_key'])) {
-                $meta = is_array($payloadData) ? $payloadData : [];
-                if (!empty($decoded['path'])) {
-                    $meta['path'] = $decoded['path'];
-                }
-                $repository->upsertNodeFromAdvert($decoded['advert'], $meta);
-            }
-
-            $savedTelemId = $repository->extractAndSaveTelemetry($recordId, $decoded, $payloadData);
-
-            if ($savedTelemId === null && is_array($payloadData) && !empty($payloadData['direction']) && strtoupper((string)$payloadData['direction']) === 'RX') {
-                $senderKey = !empty($payloadData['sender_public_key']) ? (string)$payloadData['sender_public_key'] : null;
-                if ($senderKey) {
-                    $bId = !empty($payloadData['bot_id']) ? (string)$payloadData['bot_id'] : 'KLP';
-                    $r = isset($payloadData['rssi']) ? (float)$payloadData['rssi'] : null;
-                    $s = isset($payloadData['snr']) ? (float)$payloadData['snr'] : null;
-
-                    $returnPath = null;
-                    $pathHopCount = isset($decoded['path']['hop_count']) ? (int)$decoded['path']['hop_count'] : null;
-                    $incomingHops = $decoded['path']['hops'] ?? [];
-                    if ($pathHopCount === 0) {
-                        if (($r === null || $r >= -98.0) && ($s === null || $s >= -5.0)) {
-                            $returnPath = 'DIRECT';
-                        }
-                    } elseif ($pathHopCount > 0 && !empty($incomingHops) && is_array($incomingHops)) {
-                        if (!($pathHopCount === 1 && $r !== null && $r < -105.0)) {
-                            $cand = strtoupper(implode('', array_reverse($incomingHops)));
-                            if (strlen($cand) >= 4 && strlen($cand) % 4 === 0) {
-                                $returnPath = $cand;
-                            }
-                        }
-                    }
-
-                    $repository->touchNodeSeen($senderKey, $bId, null, null, $r, $s, false, null, $returnPath);
-                }
-            }
-
-            $errorMsg = null;
-            if (!empty($decoded['error'])) {
-                $errorMsg = (string)$decoded['error'];
-            } elseif (!empty($decoded['encryption']['decryption_error'])) {
-                $errorMsg = (string)$decoded['encryption']['decryption_error'];
-            } elseif (!empty($decoded['advert']['error'])) {
-                $errorMsg = (string)$decoded['advert']['error'];
-            }
-
-            if (!empty($decoded['success'])) {
-                $repository->completeProcessing($recordId, $decoded, $errorMsg);
-            } else {
-                $repository->failProcessing($recordId, $errorMsg ?? 'Dekodavimo klaida', $decoded);
-            }
-        } catch (\Throwable $e) {
-            // DB atnaujinimo klaida
-        }
     }
 }
 

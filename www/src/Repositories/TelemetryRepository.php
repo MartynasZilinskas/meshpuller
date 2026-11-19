@@ -157,21 +157,25 @@ class TelemetryRepository implements TelemetryRepositoryInterface
         $hasTelemetry = true;
 
         $returnPath = null;
-        if ($this->nodeRepo !== null && !empty($decoded['path']) && is_array($decoded['path'])) {
-            $returnPath = $this->nodeRepo->extractReturnPathString($decoded['path'], $rssi, $snr);
+        if ($this->nodeRepo !== null) {
+            $returnPath = $this->nodeRepo->extractReturnPathString($decoded, $rssi, $snr);
         } else {
-            $incomingHops = $decoded['path']['hops'] ?? [];
-            $pathHopCount = isset($decoded['path']['hop_count']) ? (int)$decoded['path']['hop_count'] : null;
-            if ($pathHopCount === 0) {
-                if (($rssi === null || $rssi >= -98.0) && ($snr === null || $snr >= -5.0)) {
-                    $returnPath = 'DIRECT';
-                }
-            } elseif (!empty($incomingHops) && is_array($incomingHops)) {
-                $computedPath = strtoupper(implode('', array_reverse($incomingHops)));
-                if ($pathHopCount === 1 && $rssi !== null && $rssi < -105.0) {
-                    $returnPath = null;
-                } elseif (strlen($computedPath) >= 4 && strlen($computedPath) % 4 === 0) {
-                    $returnPath = $computedPath;
+            $routeType = $decoded['header']['route_type'] ?? null;
+            $isDirectRoute = ($routeType !== null && in_array((int)$routeType, [2, 3], true));
+            if (!$isDirectRoute) {
+                $incomingHops = $decoded['path']['hops'] ?? [];
+                $pathHopCount = isset($decoded['path']['hop_count']) ? (int)$decoded['path']['hop_count'] : null;
+                if ($pathHopCount === 0) {
+                    if (($rssi === null || $rssi >= -98.0) && ($snr === null || $snr >= -5.0)) {
+                        $returnPath = 'DIRECT';
+                    }
+                } elseif (!empty($incomingHops) && is_array($incomingHops)) {
+                    $computedPath = strtoupper(implode('', array_reverse($incomingHops)));
+                    if ($pathHopCount === 1 && $rssi !== null && $rssi < -105.0) {
+                        $returnPath = null;
+                    } elseif (strlen($computedPath) >= 4 && strlen($computedPath) % 4 === 0) {
+                        $returnPath = $computedPath;
+                    }
                 }
             }
         }
@@ -477,6 +481,7 @@ SQL;
                 'telemetry_fail_count' => (int)($row['telemetry_fail_count'] ?? 0),
                 'first_seen_at'        => $row['first_seen_at'] ?? null,
                 'last_seen_at'         => $row['last_seen_at'],
+                'last_advert_at'       => $row['last_seen_at'],
             ];
         }
 

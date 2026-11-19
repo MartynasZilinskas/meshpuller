@@ -345,14 +345,18 @@ SQL;
                 $savedTelemetryId = $this->telemetryRepo->extractAndSaveTelemetry($id, $decoded, $record);
             }
 
-            if ($savedTelemetryId === null && !empty($record['direction']) && strtoupper((string)$record['direction']) === 'RX') {
-                $senderKey = !empty($record['sender_public_key']) ? (string)$record['sender_public_key'] : null;
+            if ($savedTelemetryId === null && empty($decoded['advert']) && !empty($record['direction']) && strtoupper((string)$record['direction']) === 'RX') {
+                $senderKey = !empty($record['sender_public_key'])
+                    ? (string)$record['sender_public_key']
+                    : (!empty($decoded['encryption']['sender_public_key'])
+                        ? (string)$decoded['encryption']['sender_public_key']
+                        : (!empty($record['sender_name']) ? (string)$record['sender_name'] : null));
                 if ($senderKey && $this->nodeRepo !== null) {
                     $bId = !empty($record['bot_id']) ? (string)$record['bot_id'] : 'KLP';
                     $r = isset($record['rssi']) ? (float)$record['rssi'] : null;
                     $s = isset($record['snr']) ? (float)$record['snr'] : null;
 
-                    $returnPath = $this->nodeRepo->extractReturnPathString($decoded['path'] ?? null, $r, $s);
+                    $returnPath = $this->nodeRepo->extractReturnPathString($decoded, $r, $s);
 
                     $this->nodeRepo->touchNodeSeen($senderKey, $bId, null, null, $r, $s, false, null, $returnPath);
                 }

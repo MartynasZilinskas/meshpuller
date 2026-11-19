@@ -290,7 +290,12 @@ SQL;
             return false;
         }
 
-        $sets = ['last_seen_at = CURRENT_TIMESTAMP'];
+        $sets = [];
+        if (!$hasTelemetry) {
+            $sets[] = 'last_seen_at = CURRENT_TIMESTAMP';
+        } else {
+            $sets[] = 'last_seen_at = COALESCE(last_seen_at, CURRENT_TIMESTAMP)';
+        }
         $params = [':id1' => $id, ':id2' => $id];
 
         $heardBotId = !empty($botId) ? strtoupper(substr(trim($botId), 0, 16)) : null;
@@ -740,13 +745,39 @@ SQL;
             return ['path' => null, 'hops' => null];
         }
 
-        $pathData = $packetMeta['path'] ?? null;
-        if ($pathData === null && !empty($packetMeta['decoded_json'])) {
+        $dec = null;
+        if (!empty($packetMeta['decoded_json'])) {
             $dec = is_string($packetMeta['decoded_json'])
                 ? json_decode($packetMeta['decoded_json'], true)
                 : $packetMeta['decoded_json'];
-            if (is_array($dec) && !empty($dec['path'])) {
-                $pathData = $dec['path'];
+        } elseif (isset($packetMeta['header']) || isset($packetMeta['encryption'])) {
+            $dec = $packetMeta;
+        }
+
+        $routeType = $packetMeta['header']['route_type'] ?? ($dec['header']['route_type'] ?? null);
+        $isDirectRoute = ($routeType !== null && in_array((int)$routeType, [2, 3], true));
+
+        $returnedPath = $packetMeta['encryption']['parsed_data']['returned_path']
+            ?? ($dec['encryption']['parsed_data']['returned_path'] ?? null);
+
+        $isAlreadyForward = false;
+        $pathData = null;
+
+        if ($isDirectRoute) {
+            // SVARBU: Kai paketas atkeliauja per ROUTE_TYPE_DIRECT (2 arba 3),
+            // tarpiniai kartotuvai nuima savo šuolius iš išorinės antraštės (todėl hop_count tampa 0!).
+            // Iš tokio paketo maršrutą galime imti TIK tada, jei tai PAYLOAD_TYPE_PATH su vidiniu 'returned_path'.
+            if (is_array($returnedPath) && isset($returnedPath['hop_count'])) {
+                $pathData = $returnedPath;
+                $isAlreadyForward = true;
+            } else {
+                return ['path' => null, 'hops' => null];
+            }
+        } else {
+            $pathData = $packetMeta['path'] ?? ($dec['path'] ?? null);
+            if ((!is_array($pathData) || !isset($pathData['hop_count'])) && is_array($returnedPath) && isset($returnedPath['hop_count'])) {
+                $pathData = $returnedPath;
+                $isAlreadyForward = true;
             }
         }
 
@@ -767,14 +798,16 @@ SQL;
             return ['path' => null, 'hops' => null];
         }
 
-        // Daugiapakopis ryšys (1..N šuolių): apverčiame hops masyvą (Reverse Path)
+        // Daugiapakopis ryšys (1..N šuolių):
+        // Jei kelias paimtas iš FLOOD išorinės antraštės – apverčiame (Reverse Path).
+        // Jei kelias paimtas iš PAYLOAD_TYPE_PATH vidinio 'returned_path' – jis jau yra Botas->Kartotuvas tvarka!
         if ($hopCount > 0 && !empty($incomingHops)) {
             if ($hopCount === 1 && $rssi !== null && $rssi < -105.0) {
                 return ['path' => null, 'hops' => null];
             }
-            $reversed = array_reverse($incomingHops);
+            $orderedHops = $isAlreadyForward ? $incomingHops : array_reverse($incomingHops);
             $cleanHops = [];
-            foreach ($reversed as $h) {
+            foreach ($orderedHops as $h) {
                 $hex = strtoupper(preg_replace('/[^0-9A-Fa-f]/', '', (string)$h));
                 if (strlen($hex) === 2) {
                     // Senas ESP32 botų firmware tikisi 2 baitų (4 hex simbolių) hash kiekvienam šuoliui.
@@ -802,15 +835,18 @@ SQL;
     }
 
     /**
-     * Pagalbinis metodas atbuliniam keliui išgauti iš dekoduoto paketo 'path' masyvo
-     * (naudojamas tiek ADVERT, tiek TELEMETRY / RESPONSE paketams).
+     * Pagalbinis metodas atbuliniam keliui išgauti iš dekoduoto paketo masyvo arba jo 'path' elemento
+     * (naudojamas tiek ADVERT, tiek TELEMETRY / RESPONSE / PATH paketams).
      */
-    public function extractReturnPathString(?array $pathData, ?float $rssi = null, ?float $snr = null): ?string
+    public function extractReturnPathString(?array $pathOrDecoded, ?float $rssi = null, ?float $snr = null): ?string
     {
-        if (empty($pathData) || !is_array($pathData)) {
+        if (empty($pathOrDecoded) || !is_array($pathOrDecoded)) {
             return null;
         }
-        $res = $this->extractReturnPathFromMeta(['path' => $pathData], $rssi, $snr);
+        $meta = (isset($pathOrDecoded['header']) || isset($pathOrDecoded['path']) || isset($pathOrDecoded['encryption']))
+            ? $pathOrDecoded
+            : ['path' => $pathOrDecoded];
+        $res = $this->extractReturnPathFromMeta($meta, $rssi, $snr);
         return $res['path'];
     }
 

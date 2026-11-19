@@ -553,12 +553,23 @@ class MeshCoreDecoder
             $dataPtr = $plain;
             $dataLen = $len;
 
-            // Jei PATH paketas: išsipakuojame papildomą atsaką
+            // Jei PATH paketas: išsipakuojame vidinį maršrutą ir papildomą atsaką
             if ($payloadType === self::PAYLOAD_TYPE_PATH) {
                 $pLenByte = ord($plain[0]);
                 $hSize = (($pLenByte >> 6) & 0x03) + 1;
                 $hCount = $pLenByte & 63;
                 $k = 1 + $hSize * $hCount;
+                if ($k <= $len) {
+                    $innerHops = [];
+                    for ($i = 1; $i + $hSize <= $k; $i += $hSize) {
+                        $innerHops[] = strtoupper(bin2hex(substr($plain, $i, $hSize)));
+                    }
+                    $res['returned_path'] = [
+                        'hop_count' => $hCount,
+                        'hash_size' => $hSize,
+                        'hops'      => $innerHops,
+                    ];
+                }
                 if ($k < $len) {
                     $res['path_extra_type'] = ord($plain[$k]);
                     $dataPtr = substr($plain, $k + 1);

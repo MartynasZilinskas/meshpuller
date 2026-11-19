@@ -125,9 +125,8 @@ extern TelemetrySettings settings; // Nustatymų objektas
 // 8 arba 10! Jei jūsų kartotuvas sukonfigūruotas pagal nutylėjimą, naudokite
 // 869.618 MHz. Jei patys nustatėte kitokį dažnį repeaterio nustatymuose -
 // pakeiskite čia.
-#define LORA_FREQ                                                              
-  869.618 // MHz (Oficialus MeshCore ES dažnis; pakeiskite į 868.0 jei
-          // kartotuvas pakeistas)
+// Oficialus MeshCore ES dažnis (pakeiskite į 868.0 jei kartotuvas pakeistas)
+#define LORA_FREQ 869.618
 #define LORA_BW 62.5 // kHz (MeshCore standartas 62.5 arba 250.0)
 #define LORA_SF 8    // Spreading Factor (MeshCore standartas SF8 arba SF10)
 #define LORA_CR 8    // Coding Rate 4/8 (MeshCore EU regionui)

@@ -2258,7 +2258,7 @@
                             <strong id="sheetTelemVal">Nėra duomenų</strong>
                         </div>
                         <div style="color: var(--text-dim);">
-                            <span>👁️ Paskutinį kartą matytas: </span>
+                            <span>👁️ Paskutinis advertas: </span>
                             <strong id="sheetSeenVal" style="color: #ffffff;">-</strong>
                         </div>
                     </div>
@@ -2877,7 +2877,7 @@
                 telemValEl.title = telemTime ? formatLithuanianDateTime(telemTime) : '';
             }
 
-            const lastSeen = node.last_seen || null;
+            const lastSeen = node.last_advert_at || node.last_seen_at || node.last_seen || null;
             const seenEl = document.getElementById('sheetSeenVal');
             if (seenEl) {
                 seenEl.innerText = lastSeen ? `${formatRelativeTime(lastSeen)} (${formatLithuanianTime(lastSeen, false)})` : 'Nėra duomenų';
@@ -3614,6 +3614,10 @@
                                     <span>⏱️ Paskutinė telemetrija:</span>
                                     <strong>${telemTime ? formatRelativeTime(telemTime) + ' (' + formatLithuanianTime(telemTime, false) + ')' : 'Nėra duomenų'}</strong>
                                 </div>
+                                <div style="font-size: 0.72rem; color: var(--text-dim); display:flex; justify-content:space-between;" title="${formatLithuanianDateTime(lastSeen)}">
+                                    <span>👁️ Paskutinis advertas:</span>
+                                    <strong style="color: #ffffff;">${lastSeen ? formatRelativeTime(lastSeen) + ' (' + formatLithuanianTime(lastSeen, false) + ')' : 'Nėra duomenų'}</strong>
+                                </div>
                             </div>
                         </div>
                     `;
@@ -3742,7 +3746,7 @@
                         <div class="node-loc-status">
                             ${hasValidCoords ? `<span style="color:var(--accent-cyan);">📍 ${parseFloat(lat).toFixed(3)}, ${parseFloat(lon).toFixed(3)}</span>` : '<span style="color:var(--text-dim);">📍 Be koord.</span>'}
                         </div>
-                        <div class="node-seen-time" title="Paskutinį kartą matytas: ${formatLithuanianDateTime(lastSeen)}">
+                        <div class="node-seen-time" title="Paskutinis advertas: ${formatLithuanianDateTime(lastSeen)}">
                             <span>📡 ${formatRelativeTime(lastSeen)}</span>
                         </div>
                     </div>
