@@ -211,12 +211,12 @@ class PollingQueueService implements PollingQueueServiceInterface
                 if ($driver === 'pgsql') {
                     $sql = "SELECT public_key, node_id, node_name, is_repeater, password, \"update\", bot_id, last_path, telemetry_fail_count, latitude, longitude 
                             FROM nodes 
-                            WHERE \"update\" = true AND (is_disabled = false OR is_disabled IS NULL) {$failFilterPgsql} {$intervalFilterPgsql} {$botFilterPgsql} {$geoFilterPgsql}
+                            WHERE is_repeater = true AND \"update\" = true AND (is_disabled = false OR is_disabled IS NULL) {$failFilterPgsql} {$intervalFilterPgsql} {$botFilterPgsql} {$geoFilterPgsql}
                             ORDER BY last_seen_at DESC";
                 } else {
                     $sql = "SELECT public_key, node_id, node_name, is_repeater, `password`, `update`, `bot_id`, `last_path`, `telemetry_fail_count`, `latitude`, `longitude` 
                             FROM `nodes` 
-                            WHERE `update` = 1 AND (`is_disabled` = 0 OR `is_disabled` IS NULL) {$failFilterMysql} {$intervalFilterMysql} {$botFilterMysql} {$geoFilterMysql}
+                            WHERE (`is_repeater` = 1 OR `is_repeater` = true) AND (`update` = 1 OR `update` = true) AND (`is_disabled` = 0 OR `is_disabled` = false OR `is_disabled` IS NULL) {$failFilterMysql} {$intervalFilterMysql} {$botFilterMysql} {$geoFilterMysql}
                             ORDER BY last_seen_at DESC";
                 }
 
@@ -834,11 +834,10 @@ SQL;
         $params = [];
 
         $where[] = "(n.is_disabled = 0 OR n.is_disabled = false OR n.is_disabled IS NULL)";
+        $where[] = "({$repCol} = 1 OR {$repCol} = true)";
 
         if ($monitoredOnly) {
             $where[] = "({$updateCol} = 1 OR {$updateCol} = true)";
-        } else {
-            $where[] = "({$repCol} = 1 OR {$repCol} = true)";
         }
 
         if (!empty($botId)) {

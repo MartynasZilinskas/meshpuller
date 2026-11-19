@@ -473,14 +473,17 @@ if ($isNodesEndpoint) {
                            b.latitude AS bot_latitude, b.longitude AS bot_longitude
                     FROM nodes n
                     LEFT JOIN bots b ON UPPER(n.bot_id) = UPPER(b.bot_id)
-                    WHERE LOWER(n.public_key) = :t1 OR LOWER(n.node_id) = :t2 OR LOWER(n.public_key) LIKE :t3 OR LOWER(n.node_id) LIKE :t4
+                    WHERE (n.is_repeater = 1 OR n.is_repeater = true)
+                      AND (LOWER(n.public_key) = :t1 OR LOWER(n.node_id) = :t2 OR LOWER(n.public_key) LIKE :t3 OR LOWER(n.node_id) LIKE :t4)
+                    ORDER BY (LOWER(n.public_key) = :t_exact) DESC, n.id ASC
                     LIMIT 1
                 ");
                 $tStmt->execute([
-                    ':t1' => $cleanTarget,
-                    ':t2' => $cleanTarget,
-                    ':t3' => $cleanTarget . '%',
-                    ':t4' => '%' . $cleanTarget . '%'
+                    ':t1'      => $cleanTarget,
+                    ':t2'      => $cleanTarget,
+                    ':t3'      => $cleanTarget . '%',
+                    ':t4'      => '%' . $cleanTarget . '%',
+                    ':t_exact' => $cleanTarget,
                 ]);
                 $tRow = $tStmt->fetch(PDO::FETCH_ASSOC);
                 if ($tRow) {
@@ -670,8 +673,13 @@ if ($isNodeListEndpoint) {
         exit;
     }
 
-    // Gauname visus mazgus
-    $allNodes = $repository->getRepeatersWithLatestTelemetry(false);
+    // Automatiškai ištaisome prefiksų kolizijas (pvz. 'abcd' klientas vs kartotuvas) ir išvalome ne-kartotuvų telemetriją
+    try {
+        $repository->cleanupInvalidTelemetry();
+    } catch (\Throwable $e) {}
+
+    // Gauname tik kartotuvus (is_repeater = true), nes telemetrija renkama ir priskiriama tik kartotuvams
+    $allNodes = $repository->getRepeatersWithLatestTelemetry(true);
 
     // Filtruojame: tik įjungti (is_disabled = false/0/null) IR turintys telemetriją
     $enabledWithTelemetry = [];
@@ -798,7 +806,10 @@ if ($isNodeDetailEndpoint) {
         exit;
     }
 
-    // 1. Surandame mazgo duomenis iš 'nodes' lentelės
+    // 1. Surandame mazgo duomenis iš 'nodes' lentelės (pirmiausia sutvarkome prefiksų kolizijas)
+    try {
+        $repository->cleanupInvalidTelemetry();
+    } catch (\Throwable $e) {}
     $nodeInfo = null;
     $resolvedNodeId = $strippedTarget;
     $resolvedPublicKey = $cleanTarget;
@@ -812,12 +823,16 @@ if ($isNodeDetailEndpoint) {
                    b.name AS bot_name, b.enabled AS bot_enabled
             FROM nodes n
             LEFT JOIN bots b ON UPPER(n.bot_id) = UPPER(b.bot_id)
-            WHERE LOWER(n.public_key) = :pk1
-               OR LOWER(n.node_id) = :nid1
-               OR LOWER(n.node_id) = :nid2
-               OR LOWER(n.bot_id) = :bid1
-               OR (LENGTH(:pk_prefix) >= 4 AND LOWER(n.public_key) LIKE :pk_prefix_like)
-               OR LOWER(n.node_name) = :name1
+            WHERE (n.is_repeater = 1 OR n.is_repeater = true)
+              AND (
+                   LOWER(n.public_key) = :pk1
+                OR LOWER(n.node_id) = :nid1
+                OR LOWER(n.node_id) = :nid2
+                OR LOWER(n.bot_id) = :bid1
+                OR (LENGTH(:pk_prefix) >= 4 AND LOWER(n.public_key) LIKE :pk_prefix_like)
+                OR LOWER(n.node_name) = :name1
+              )
+            ORDER BY (LOWER(n.public_key) = :pk_exact) DESC, n.id ASC
             LIMIT 1
         ");
         $nStmt->execute([
@@ -828,6 +843,7 @@ if ($isNodeDetailEndpoint) {
             ':pk_prefix'      => $strippedTarget,
             ':pk_prefix_like' => $strippedTarget . '%',
             ':name1'          => $cleanTarget,
+            ':pk_exact'       => $cleanTarget,
         ]);
         $nodeRow = $nStmt->fetch(PDO::FETCH_ASSOC);
 

@@ -1016,7 +1016,7 @@ $isLoggedIn = isAdminLoggedIn();
                                 <th class="sortable" onclick="handleSortTable('telemetry', 'battery_v')" data-sort="battery_v">Baterija <span class="sort-icon"></span></th>
                                 <th class="sortable" onclick="handleSortTable('telemetry', 'temperature_c')" data-sort="temperature_c">Temperatūra <span class="sort-icon"></span></th>
                                 <th class="sortable" onclick="handleSortTable('telemetry', 'rssi')" data-sort="rssi">Signalo Kokybė <span class="sort-icon"></span></th>
-                                <th class="sortable" onclick="handleSortTable('telemetry', 'uptime')" data-sort="uptime">Veikimo Laikas (Uptime) <span class="sort-icon"></span></th>
+                                <th class="sortable" onclick="handleSortTable('telemetry', 'uptime')" data-sort="uptime">Atnaujinta Prieš <span class="sort-icon"></span></th>
                                 <th class="sortable" onclick="handleSortTable('telemetry', 'packets')" data-sort="packets">Paketai RX/TX <span class="sort-icon"></span></th>
                                 <th class="sortable" onclick="handleSortTable('telemetry', 'recorded_at')" data-sort="recorded_at">Užregistruota (LT laiku) <span class="sort-icon"></span></th>
                                 <th style="text-align: right;">Veiksmai</th>
@@ -3278,7 +3278,7 @@ $isLoggedIn = isAdminLoggedIn();
             tbody.innerHTML = records.map(r => {
                 const batt = r.battery_v !== null ? `${parseFloat(r.battery_v).toFixed(2)} V` : '-';
                 const temp = r.temperature_c !== null ? `${parseFloat(r.temperature_c).toFixed(1)} °C` : '-';
-                const uptime = r.uptime_seconds ? formatUptime(r.uptime_seconds) : '-';
+                const updatedAgo = r.recorded_at ? formatRelativeTime(r.recorded_at) : '-';
                 const displayName = r.node_name || r.node_id;
 
                 return `
@@ -3301,7 +3301,7 @@ $isLoggedIn = isAdminLoggedIn();
                             ${r.rssi ? `RSSI: ${r.rssi} dBm ` : ''}
                             ${r.snr ? `SNR: ${r.snr} dB` : ''}
                         </td>
-                        <td>${uptime}</td>
+                        <td style="color: var(--accent-cyan); font-weight: 500; font-size: 0.76rem;" title="${r.recorded_at ? formatVilniusDate(r.recorded_at) : ''}">${updatedAgo}</td>
                         <td style="font-family: var(--font-mono); font-size: 0.74rem;">
                             RX: ${r.packets_recv ?? '-'} / TX: ${r.packets_sent ?? '-'}
                         </td>
@@ -4412,8 +4412,14 @@ $isLoggedIn = isAdminLoggedIn();
                 const diffSec = Math.max(0, Math.floor((now - timestamp) / 1000));
                 if (diffSec < 60) return `prieš ${diffSec}s`;
                 if (diffSec < 3600) return `prieš ${Math.floor(diffSec / 60)} min.`;
-                if (diffSec < 86400) return `prieš ${Math.floor(diffSec / 3600)} val.`;
-                return `prieš ${Math.floor(diffSec / 86400)} d.`;
+                if (diffSec < 86400) {
+                    const hrs = Math.floor(diffSec / 3600);
+                    const mins = Math.floor((diffSec % 3600) / 60);
+                    return mins > 0 ? `prieš ${hrs} val. ${mins} min.` : `prieš ${hrs} val.`;
+                }
+                const days = Math.floor(diffSec / 86400);
+                const hrs = Math.floor((diffSec % 86400) / 3600);
+                return hrs > 0 ? `prieš ${days} d. ${hrs} val.` : `prieš ${days} d.`;
             } catch (e) {
                 return dateStr;
             }
@@ -5044,10 +5050,10 @@ $isLoggedIn = isAdminLoggedIn();
         document.addEventListener('DOMContentLoaded', () => {
             <?php if ($isLoggedIn): ?>
                 ['nodes', 'telemetry', 'raw', 'queue', 'apilogs'].forEach(t => updateTableSortHeaders(t));
-                loadStats();
-                loadBots();
                 applyUrlState(true);
                 updateAllAdminClearBtns();
+                loadBots();
+                loadStats();
             <?php endif; ?>
         });
     </script>

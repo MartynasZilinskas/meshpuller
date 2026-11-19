@@ -85,8 +85,9 @@ class NodeRepository implements NodeRepositoryInterface
         $lat = isset($advert['location']['latitude']) ? (float)$advert['location']['latitude'] : null;
         $lon = isset($advert['location']['longitude']) ? (float)$advert['location']['longitude'] : null;
 
-        $batteryMv = isset($advert['battery']['voltage_mv']) ? (int)$advert['battery']['voltage_mv'] : null;
-        $batteryV = isset($advert['battery']['voltage_v']) ? (float)$advert['battery']['voltage_v'] : null;
+        // Telemetrijos (baterijos) rodiklius priskiriame TIK kartotuvams:
+        $batteryMv = ($isRepeater && isset($advert['battery']['voltage_mv'])) ? (int)$advert['battery']['voltage_mv'] : null;
+        $batteryV = ($isRepeater && isset($advert['battery']['voltage_v'])) ? (float)$advert['battery']['voltage_v'] : null;
 
         $rssi = isset($packetMeta['rssi']) ? (float)$packetMeta['rssi'] : null;
         $snr = isset($packetMeta['snr']) ? (float)$packetMeta['snr'] : null;
@@ -171,6 +172,7 @@ class NodeRepository implements NodeRepositoryInterface
                 last_failed_request_at = CASE WHEN :reset_fails_at = 1 THEN NULL ELSE nodes.last_failed_request_at END,
                 last_seen_at = CURRENT_TIMESTAMP,
                 "update" = CASE 
+                    WHEN EXCLUDED.is_repeater = false OR nodes.is_disabled = true THEN false
                     WHEN (nodes.is_repeater = false OR nodes.is_repeater IS NULL) AND EXCLUDED.is_repeater = true AND :auto_add_flag = 1 
                     THEN true 
                     ELSE nodes."update" 
@@ -219,6 +221,7 @@ SQL;
                 `last_failed_request_at` = IF(:reset_fails_at = 1, NULL, `last_failed_request_at`),
                 `last_seen_at` = CURRENT_TIMESTAMP,
                 `update` = CASE 
+                    WHEN VALUES(`is_repeater`) = 0 OR `is_disabled` = 1 THEN 0
                     WHEN (`is_repeater` = 0 OR `is_repeater` IS NULL) AND VALUES(`is_repeater`) = 1 AND :auto_add_flag = 1 
                     THEN 1 
                     ELSE `update` 
@@ -301,7 +304,11 @@ SQL;
         $heardBotId = !empty($botId) ? strtoupper(substr(trim($botId), 0, 16)) : null;
         $cleanReturnPath = ($returnPath !== null && trim($returnPath) !== '') ? strtoupper(trim($returnPath)) : null;
 
-        $existingNode = $this->findExistingNodeState($id);
+        $existingNode = $this->findExistingNodeState($id, $hasTelemetry);
+        if ($hasTelemetry && $existingNode === null) {
+            // Telemetrija priskiriama TIK kartotuvams (is_repeater = 1). Jei kartotuvas nerastas – neatnaujiname kliento!
+            return false;
+        }
         $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
 
         // Jei turime maršrutą arba tai yra telemetrijos atsakymas – vertiname optimalų botą ir kelią
@@ -359,17 +366,17 @@ SQL;
             $sets[] = 'last_failed_request_at = NULL';
         }
 
-        if ($batteryV !== null && $batteryV >= 0.0 && $batteryV <= 15.0) {
+        if ($hasTelemetry && $batteryV !== null && $batteryV >= 0.0 && $batteryV <= 15.0) {
             $sets[] = 'battery_v = :batt_v';
             $params[':batt_v'] = $batteryV;
         }
 
-        if ($batteryMv !== null && $batteryMv >= 0 && $batteryMv <= 15000) {
+        if ($hasTelemetry && $batteryMv !== null && $batteryMv >= 0 && $batteryMv <= 15000) {
             $sets[] = 'battery_mv = :batt_mv';
             $params[':batt_mv'] = $batteryMv;
         }
 
-        if ($temperatureC !== null && $temperatureC >= -60.0 && $temperatureC <= 100.0) {
+        if ($hasTelemetry && $temperatureC !== null && $temperatureC >= -60.0 && $temperatureC <= 100.0) {
             $sets[] = 'temperature_c = :temp_c';
             $params[':temp_c'] = $temperatureC;
         }
@@ -385,7 +392,15 @@ SQL;
         }
 
         $setString = implode(', ', $sets);
-        $sql = "UPDATE nodes SET {$setString} WHERE LOWER(public_key) = LOWER(:id1) OR LOWER(node_id) = LOWER(:id2)";
+        if ($existingNode !== null && !empty($existingNode['id'])) {
+            unset($params[':id1'], $params[':id2']);
+            $params[':target_id'] = (int)$existingNode['id'];
+            $repGuard = $hasTelemetry ? ' AND (is_repeater = 1 OR is_repeater = true)' : '';
+            $sql = "UPDATE nodes SET {$setString} WHERE id = :target_id{$repGuard}";
+        } else {
+            $repGuard = $hasTelemetry ? ' AND (is_repeater = 1 OR is_repeater = true)' : '';
+            $sql = "UPDATE nodes SET {$setString} WHERE (LOWER(public_key) = LOWER(:id1) OR LOWER(node_id) = LOWER(:id2)){$repGuard}";
+        }
 
         try {
             $stmt = $this->pdo->prepare($sql);
@@ -547,6 +562,11 @@ SQL;
             $params[':is_disabled'] = ($driver === 'pgsql') 
                 ? (!empty($fields['is_disabled']) ? 'true' : 'false') 
                 : (!empty($fields['is_disabled']) ? 1 : 0);
+            if (!empty($fields['is_disabled']) && !array_key_exists('update', $fields)) {
+                $colUpdate = ($driver === 'pgsql') ? '"update"' : '`update`';
+                $sets[] = "{$colUpdate} = :auto_update_off";
+                $params[':auto_update_off'] = ($driver === 'pgsql') ? 'false' : 0;
+            }
         }
 
         if (array_key_exists('is_repeater', $fields)) {
@@ -554,6 +574,11 @@ SQL;
             $params[':is_repeater'] = ($driver === 'pgsql') 
                 ? (!empty($fields['is_repeater']) ? 'true' : 'false') 
                 : (!empty($fields['is_repeater']) ? 1 : 0);
+            if (empty($fields['is_repeater']) && !array_key_exists('update', $fields)) {
+                $colUpdate = ($driver === 'pgsql') ? '"update"' : '`update`';
+                $sets[] = "{$colUpdate} = :auto_rep_update_off";
+                $params[':auto_rep_update_off'] = ($driver === 'pgsql') ? 'false' : 0;
+            }
         }
 
         if (array_key_exists('latitude', $fields)) {
@@ -614,9 +639,14 @@ SQL;
 
         $setString = implode(', ', $sets);
 
-        $sql = "UPDATE nodes SET {$setString} WHERE LOWER(public_key) = LOWER(:id1) OR LOWER(node_id) = LOWER(:id2)";
-        $params[':id1'] = $cleanId;
-        $params[':id2'] = $cleanId;
+        if (strlen($cleanId) > 16) {
+            $sql = "UPDATE nodes SET {$setString} WHERE LOWER(public_key) = LOWER(:id1)";
+            $params[':id1'] = $cleanId;
+        } else {
+            $sql = "UPDATE nodes SET {$setString} WHERE LOWER(public_key) = LOWER(:id1) OR LOWER(node_id) = LOWER(:id2)";
+            $params[':id1'] = $cleanId;
+            $params[':id2'] = $cleanId;
+        }
 
         try {
             $stmt = $this->pdo->prepare($sql);
@@ -908,22 +938,24 @@ SQL;
     /**
      * Nuskaito esamą mazgo būseną iš 'nodes' lentelės.
      */
-    private function findExistingNodeState(string $pubKeyOrNodeId): ?array
+    private function findExistingNodeState(string $pubKeyOrNodeId, bool $repeaterOnly = false): ?array
     {
         $clean = strtolower(trim($pubKeyOrNodeId));
         if ($clean === '') {
             return null;
         }
         try {
+            $repCond = $repeaterOnly ? 'AND (is_repeater = 1 OR is_repeater = true)' : '';
             $stmt = $this->pdo->prepare("
-                SELECT id, public_key, node_id, bot_id, is_bot_locked, last_path,
+                SELECT id, public_key, node_id, is_repeater, bot_id, is_bot_locked, last_path,
                        last_seen_at, telemetry_updated_at, telemetry_fail_count,
                        last_rssi, last_snr, latitude, longitude
                 FROM nodes
-                WHERE LOWER(public_key) = :id1 OR LOWER(node_id) = :id2
+                WHERE (LOWER(public_key) = :id1 OR LOWER(node_id) = :id2) {$repCond}
+                ORDER BY (LOWER(public_key) = :id_exact) DESC, is_repeater DESC, id ASC
                 LIMIT 1
             ");
-            $stmt->execute([':id1' => $clean, ':id2' => $clean]);
+            $stmt->execute([':id1' => $clean, ':id2' => $clean, ':id_exact' => $clean]);
             $row = $stmt->fetch(PDO::FETCH_ASSOC);
             return $row ?: null;
         } catch (\Throwable $e) {

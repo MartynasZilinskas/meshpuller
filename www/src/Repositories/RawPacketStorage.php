@@ -445,31 +445,81 @@ SQL;
      */
     public function getStats(): array
     {
-        $sql = <<<SQL
-        SELECT 
-            COUNT(*) AS total_count,
-            COUNT(*) FILTER (WHERE processed = false AND processed_at IS NULL) AS pending_never_processed,
-            COUNT(*) FILTER (WHERE processed = false AND processed_at IS NOT NULL) AS in_progress_or_retry,
-            COUNT(*) FILTER (WHERE processed = true) AS completed_count,
-            COUNT(*) FILTER (WHERE error_message IS NOT NULL) AS error_count
-        FROM {$this->table}
-SQL;
+        $cacheFile = sys_get_temp_dir() . '/meshcore_raw_stats_' . md5($this->table) . '.json';
+        if (is_file($cacheFile) && (time() - (int)@filemtime($cacheFile)) < 60) {
+            $cached = @json_decode((string)@file_get_contents($cacheFile), true);
+            if (is_array($cached) && isset($cached['total_count'])) {
+                // Tik greitai (< 1 ms per indeksą idx_raw_packets_queue) atnaujiname processed = 0 eilutę:
+                try {
+                    $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+                    $unprocCond = ($driver === 'pgsql') ? 'processed = false' : 'processed = 0';
+                    $qStmt = $this->pdo->query("
+                        SELECT 
+                            COALESCE(SUM(CASE WHEN processed_at IS NULL THEN 1 ELSE 0 END), 0) AS pending_never_processed,
+                            COALESCE(SUM(CASE WHEN processed_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS in_progress_or_retry
+                        FROM {$this->table}
+                        WHERE {$unprocCond}
+                    ");
+                    if ($qRow = $qStmt->fetch(PDO::FETCH_ASSOC)) {
+                        $p1 = (int)$qRow['pending_never_processed'];
+                        $p2 = (int)$qRow['in_progress_or_retry'];
+                        $cached['pending_never_processed'] = $p1;
+                        $cached['in_progress_or_retry'] = $p2;
+                        $cached['pending'] = $p1 + $p2;
+                    }
+                } catch (\Throwable $e) {}
+                return $cached;
+            }
+        }
+
         try {
-            $stmt = $this->pdo->query($sql);
-            $stats = $stmt->fetch();
-            return $stats ?: [];
+            $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            $unprocCond = ($driver === 'pgsql') ? 'processed = false' : 'processed = 0';
+
+            // 1. Žaibiška užklausa per idx_raw_packets_queue indeksą (tik neapdoroti paketai, < 1 ms)
+            $p1 = 0;
+            $p2 = 0;
+            $qStmt = $this->pdo->query("
+                SELECT 
+                    COALESCE(SUM(CASE WHEN processed_at IS NULL THEN 1 ELSE 0 END), 0) AS pending_never_processed,
+                    COALESCE(SUM(CASE WHEN processed_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS in_progress_or_retry
+                FROM {$this->table}
+                WHERE {$unprocCond}
+            ");
+            if ($qRow = $qStmt->fetch(PDO::FETCH_ASSOC)) {
+                $p1 = (int)$qRow['pending_never_processed'];
+                $p2 = (int)$qRow['in_progress_or_retry'];
+            }
+
+            // 2. Bendras įrašų skaičius per siauriausią indeksą (neskaitant LONGTEXT/JSON duomenų puslapių!)
+            $totalStmt = $this->pdo->query("SELECT COUNT(id) FROM {$this->table}");
+            $total = (int)$totalStmt->fetchColumn();
+            $completed = max(0, $total - $p1 - $p2);
+
+            $result = [
+                'total_count'             => $total,
+                'total'                   => $total,
+                'pending_never_processed' => $p1,
+                'in_progress_or_retry'    => $p2,
+                'pending'                 => $p1 + $p2,
+                'completed_count'         => $completed,
+                'error_count'             => 0,
+                'errors'                  => 0,
+            ];
+
+            @file_put_contents($cacheFile, json_encode($result));
+            return $result;
         } catch (\Throwable $e) {
-            $fallback = <<<SQL
-            SELECT 
-                COUNT(*) AS total_count,
-                SUM(CASE WHEN processed = false AND processed_at IS NULL THEN 1 ELSE 0 END) AS pending_never_processed,
-                SUM(CASE WHEN processed = false AND processed_at IS NOT NULL THEN 1 ELSE 0 END) AS in_progress_or_retry,
-                SUM(CASE WHEN processed = true THEN 1 ELSE 0 END) AS completed_count,
-                SUM(CASE WHEN error_message IS NOT NULL THEN 1 ELSE 0 END) AS error_count
-            FROM {$this->table}
-SQL;
-            $stmt = $this->pdo->query($fallback);
-            return $stmt->fetch() ?: [];
+            return [
+                'total_count'             => 0,
+                'total'                   => 0,
+                'pending_never_processed' => 0,
+                'in_progress_or_retry'    => 0,
+                'pending'                 => 0,
+                'completed_count'         => 0,
+                'error_count'             => 0,
+                'errors'                  => 0,
+            ];
         }
     }
 
@@ -555,11 +605,11 @@ SQL;
                        rp.target_name, rp.target_public_key, 
                        rp.sender_name, rp.sender_public_key, 
                        COALESCE(
-                           (SELECT n1.node_name FROM nodes n1 WHERE (n1.public_key = rp.sender_public_key AND n1.public_key != '') OR (n1.node_id = rp.sender_name AND n1.node_id != '') LIMIT 1),
+                           (SELECT n1.node_name FROM nodes n1 WHERE (n1.public_key = rp.sender_public_key AND n1.public_key != '') OR (n1.node_id = rp.sender_name AND n1.node_id != '') ORDER BY (n1.public_key = rp.sender_public_key) DESC, n1.is_repeater DESC LIMIT 1),
                            rp.sender_name
                        ) AS sender_node_name,
                        COALESCE(
-                           (SELECT n2.node_name FROM nodes n2 WHERE (n2.public_key = rp.target_public_key AND n2.public_key != '') OR (n2.node_id = rp.target_name AND n2.node_id != '') LIMIT 1),
+                           (SELECT n2.node_name FROM nodes n2 WHERE (n2.public_key = rp.target_public_key AND n2.public_key != '') OR (n2.node_id = rp.target_name AND n2.node_id != '') ORDER BY (n2.public_key = rp.target_public_key) DESC, n2.is_repeater DESC LIMIT 1),
                            rp.target_name
                        ) AS target_node_name,
                        rp.is_encrypted, rp.processed, rp.created_at, rp.processed_at, rp.completed_at, rp.error_message, 
@@ -596,15 +646,15 @@ SQL;
             $row['target_node_name'] = null;
             if (!empty($row['sender_public_key']) || !empty($row['sender_name'])) {
                 try {
-                    $sStmt = $this->pdo->prepare("SELECT node_name FROM nodes WHERE (public_key = :pk AND public_key != '') OR (node_id = :name AND node_id != '') LIMIT 1");
-                    $sStmt->execute([':pk' => (string)$row['sender_public_key'], ':name' => (string)$row['sender_name']]);
+                    $sStmt = $this->pdo->prepare("SELECT node_name FROM nodes WHERE (public_key = :pk AND public_key != '') OR (node_id = :name AND node_id != '') ORDER BY (public_key = :pk_exact) DESC, is_repeater DESC LIMIT 1");
+                    $sStmt->execute([':pk' => (string)$row['sender_public_key'], ':name' => (string)$row['sender_name'], ':pk_exact' => (string)$row['sender_public_key']]);
                     $row['sender_node_name'] = $sStmt->fetchColumn() ?: null;
                 } catch (\Throwable $e) {}
             }
             if (!empty($row['target_public_key']) || !empty($row['target_name'])) {
                 try {
-                    $tStmt = $this->pdo->prepare("SELECT node_name FROM nodes WHERE (public_key = :pk AND public_key != '') OR (node_id = :name AND node_id != '') LIMIT 1");
-                    $tStmt->execute([':pk' => (string)$row['target_public_key'], ':name' => (string)$row['target_name']]);
+                    $tStmt = $this->pdo->prepare("SELECT node_name FROM nodes WHERE (public_key = :pk AND public_key != '') OR (node_id = :name AND node_id != '') ORDER BY (public_key = :pk_exact) DESC, is_repeater DESC LIMIT 1");
+                    $tStmt->execute([':pk' => (string)$row['target_public_key'], ':name' => (string)$row['target_name'], ':pk_exact' => (string)$row['target_public_key']]);
                     $row['target_node_name'] = $tStmt->fetchColumn() ?: null;
                 } catch (\Throwable $e) {}
             }

@@ -103,6 +103,10 @@ if ($action === 'logout') {
 // 2. Visi tolesni veiksmai reikalauja aktyvios administratoriaus sesijos
 // -----------------------------------------------------------------------------
 requireAdminAuthJson();
+// Iškart atrakiname PHP sesijos failą, kad lygiagrečios naršyklės užklausos (telemetry, bots, stats) neblokuotų viena kitos!
+if (session_status() === PHP_SESSION_ACTIVE) {
+    session_write_close();
+}
 
 $repository = null;
 $decoder = new MeshCoreDecoder();
@@ -121,6 +125,7 @@ try {
 // Duomenų bazės / sistemos statistika
 if ($action === 'stats') {
     try {
+        $repository->cleanupInvalidTelemetry();
         $nodeStats = $repository->getNodeStats();
         $rawStats  = $repository->getStats();
         $telStats  = $repository->getTelemetryStats();

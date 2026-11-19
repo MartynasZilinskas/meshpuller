@@ -112,17 +112,19 @@ class TelemetryRepository implements TelemetryRepositoryInterface
             return null;
         }
 
+        if (!empty($record['sender_public_key'])) {
+            $publicKey = strtolower(trim((string)$record['sender_public_key']));
+        } elseif (!empty($record['target_public_key'])) {
+            $publicKey = strtolower(trim((string)$record['target_public_key']));
+        }
+
         if (empty($nodeId)) {
             if (!empty($record['sender_name'])) {
-                $nodeId = $record['sender_name'];
-            } elseif (!empty($record['sender_public_key'])) {
-                $publicKey = strtolower($record['sender_public_key']);
-                $nodeId = substr($publicKey, 0, 4);
-            } elseif (!empty($record['target_public_key'])) {
-                $publicKey = strtolower($record['target_public_key']);
+                $nodeId = strtolower(trim((string)$record['sender_name']));
+            } elseif (!empty($publicKey)) {
                 $nodeId = substr($publicKey, 0, 4);
             } elseif (!empty($record['target_name'])) {
-                $nodeId = $record['target_name'];
+                $nodeId = strtolower(trim((string)$record['target_name']));
             } else {
                 $rawHex = $record['raw_hex'] ?? ($decoded['raw_hex'] ?? '');
                 if (strlen($rawHex) >= 6) {
@@ -133,13 +135,71 @@ class TelemetryRepository implements TelemetryRepositoryInterface
             }
         }
 
-        if (empty($publicKey) && !empty($nodeId) && strlen($nodeId) === 4) {
+        // PRIVALOMA: Telemetrija priskiriama TIK kartotuvams (is_repeater = 1 / true).
+        // Jei su tuo pačiu 4 simbolių prefiksu (pvz. 'abcd') egzistuoja ir klientas (chat), ir kartotuvas,
+        // visada parenkame TIK kartotuvo public_key, o jei kartotuvo nėra – telemetrijos klientui nepriskiriame.
+        if ($this->pdo) {
             try {
-                $nStmt = $this->pdo->prepare("SELECT public_key FROM nodes WHERE node_id = :nid OR public_key LIKE :pref LIMIT 1");
-                $nStmt->execute([':nid' => $nodeId, ':pref' => $nodeId . '%']);
-                $nRow = $nStmt->fetch();
-                if ($nRow) {
-                    $publicKey = $nRow['public_key'];
+                $repFound = false;
+                if (!empty($publicKey)) {
+                    $pkStmt = $this->pdo->prepare("
+                        SELECT public_key, node_id, is_repeater
+                        FROM nodes
+                        WHERE LOWER(public_key) = :pk
+                        LIMIT 1
+                    ");
+                    $pkStmt->execute([':pk' => $publicKey]);
+                    $pkRow = $pkStmt->fetch(PDO::FETCH_ASSOC);
+                    if ($pkRow) {
+                        if (!empty($pkRow['is_repeater'])) {
+                            $publicKey = strtolower(trim((string)$pkRow['public_key']));
+                            if (!empty($pkRow['node_id'])) {
+                                $nodeId = strtolower(trim((string)$pkRow['node_id']));
+                            }
+                            $repFound = true;
+                        } else {
+                            // Nurodytas public_key priklauso klientui (ne kartotuvui) – ieškome kartotuvo pagal prefiksą
+                            $publicKey = null;
+                        }
+                    }
+                }
+
+                if (!$repFound && !empty($nodeId) && $nodeId !== 'node') {
+                    $nStmt = $this->pdo->prepare("
+                        SELECT public_key, node_id
+                        FROM nodes
+                        WHERE (is_repeater = 1 OR is_repeater = true)
+                          AND (LOWER(node_id) = :nid OR LOWER(public_key) LIKE :pref)
+                        ORDER BY (LOWER(node_id) = :nid_exact) DESC, id ASC
+                        LIMIT 1
+                    ");
+                    $nStmt->execute([
+                        ':nid'       => $nodeId,
+                        ':pref'      => substr($nodeId, 0, 4) . '%',
+                        ':nid_exact' => $nodeId,
+                    ]);
+                    $nRow = $nStmt->fetch(PDO::FETCH_ASSOC);
+                    if ($nRow && !empty($nRow['public_key'])) {
+                        $publicKey = strtolower(trim((string)$nRow['public_key']));
+                        if (!empty($nRow['node_id'])) {
+                            $nodeId = strtolower(trim((string)$nRow['node_id']));
+                        }
+                        $repFound = true;
+                    } else {
+                        // Patikriname ar su šiuo prefiksu yra tik ne-kartotuvas (klientas): jei taip, telemetrijos nepriskiriame
+                        $nonRepStmt = $this->pdo->prepare("
+                            SELECT 1 FROM nodes
+                            WHERE LOWER(node_id) = :nid OR LOWER(public_key) LIKE :pref
+                            LIMIT 1
+                        ");
+                        $nonRepStmt->execute([
+                            ':nid'  => $nodeId,
+                            ':pref' => substr($nodeId, 0, 4) . '%',
+                        ]);
+                        if ($nonRepStmt->fetchColumn()) {
+                            return null;
+                        }
+                    }
                 }
             } catch (\Throwable $ignored) {}
         }
@@ -352,6 +412,7 @@ SQL;
             $sql = <<<SQL
             SELECT 
                 COUNT(*) AS total_points,
+                COUNT(*) AS total_records,
                 COUNT(DISTINCT node_id) AS monitored_nodes,
                 MAX(recorded_at) AS last_telemetry_at
             FROM telemetry
@@ -508,12 +569,49 @@ SQL;
      */
     public function cleanupInvalidTelemetry(): int
     {
-        try {
-            $sql = "DELETE FROM telemetry WHERE (battery_v IS NOT NULL AND (battery_v > 15.0 OR battery_v < 0.0)) OR (battery_mv IS NOT NULL AND (battery_mv > 15000 OR battery_mv < 0)) OR noise_floor < -160 OR rssi < -160 OR snr > 50 OR snr < -50";
-            return (int)$this->pdo->exec($sql);
-        } catch (\Throwable $e) {
+        // Vykdome ne dažniau kaip kartą per 10 minučių, kad neapkrautume DB kiekvienos užklausos metu:
+        $stampFile = sys_get_temp_dir() . '/meshcore_telemetry_cleanup_stamp.txt';
+        if (is_file($stampFile) && (time() - (int)@filemtime($stampFile)) < 600) {
             return 0;
         }
+        @file_put_contents($stampFile, (string)time());
+
+        $affected = 0;
+        try {
+            $sql = "DELETE FROM telemetry WHERE (battery_v IS NOT NULL AND (battery_v > 15.0 OR battery_v < 0.0)) OR (battery_mv IS NOT NULL AND (battery_mv > 15000 OR battery_mv < 0)) OR noise_floor < -160 OR rssi < -160 OR snr > 50 OR snr < -50";
+            $affected += (int)$this->pdo->exec($sql);
+        } catch (\Throwable $e) {}
+
+        // Perrinkti ir ištaisyti telemetrijos įrašus, kurie dėl 4 simbolių prefikso kolizijos (pvz. 'abcd')
+        // buvo priskirti klientui (is_repeater = 0), nors egzistuoja kartotuvas (is_repeater = 1) su tuo pačiu node_id:
+        try {
+            $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+            if ($driver !== 'pgsql' && $driver !== 'sqlite') {
+                // Vienas greitas indeksuotas JOIN atnaujinimas MySQL (< 10 ms vietoj 641 ciklo užklausų):
+                $affected += (int)$this->pdo->exec("
+                    UPDATE `telemetry` t
+                    INNER JOIN `nodes` r ON r.`node_id` = t.`node_id` AND r.`is_repeater` = 1
+                    SET t.`public_key` = r.`public_key`
+                    WHERE t.`public_key` IS NULL OR t.`public_key` != r.`public_key`
+                ");
+            }
+
+            // Išvalome telemetrijos laukus visiems ne-kartotuvams (klientams / kambariams) 'nodes' lentelėje:
+            $this->pdo->exec("
+                UPDATE nodes
+                SET telemetry_updated_at = NULL,
+                    temperature_c = NULL,
+                    battery_v = NULL,
+                    battery_mv = NULL,
+                    requested_date = NULL,
+                    telemetry_fail_count = 0,
+                    last_failed_request_at = NULL
+                WHERE (is_repeater = 0 OR is_repeater = false OR is_repeater IS NULL)
+                  AND (telemetry_updated_at IS NOT NULL OR temperature_c IS NOT NULL OR battery_v IS NOT NULL)
+            ");
+        } catch (\Throwable $e) {}
+
+        return $affected;
     }
 
     /**
@@ -526,7 +624,7 @@ SQL;
 
         if (!empty($filters['node_id'])) {
             $cleanNode = trim(strtolower($filters['node_id']));
-            $where[] = "(LOWER(t.node_id) = :node_id1 OR LOWER(t.public_key) = :node_id2 OR EXISTS (SELECT 1 FROM nodes n WHERE ((n.public_key = t.public_key AND n.public_key != '') OR (n.node_id = t.node_id AND n.node_id != '')) AND LOWER(n.node_name) LIKE :node_name))";
+            $where[] = "(LOWER(t.node_id) = :node_id1 OR LOWER(t.public_key) = :node_id2 OR EXISTS (SELECT 1 FROM nodes n WHERE (n.is_repeater = 1 OR n.is_repeater = true) AND ((n.public_key = t.public_key AND n.public_key != '') OR (n.node_id = t.node_id AND n.node_id != '')) AND LOWER(n.node_name) LIKE :node_name))";
             $params[':node_id1'] = $cleanNode;
             $params[':node_id2'] = $cleanNode;
             $params[':node_name'] = '%' . $cleanNode . '%';
@@ -569,7 +667,7 @@ SQL;
             'temperature_c'  => 't.temperature_c',
             'rssi'           => 't.rssi',
             'snr'            => 't.snr',
-            'uptime'         => 't.uptime_seconds',
+            'uptime'         => 't.recorded_at',
             'uptime_seconds' => 't.uptime_seconds',
             'packets'        => 't.packets_recv',
             'packets_recv'   => 't.packets_recv',
@@ -580,8 +678,9 @@ SQL;
 
         $sql = "SELECT t.*, 
                        COALESCE(
-                           (SELECT n1.node_name FROM nodes n1 WHERE n1.public_key = t.public_key AND n1.public_key != '' LIMIT 1),
-                           (SELECT n2.node_name FROM nodes n2 WHERE n2.node_id = t.node_id AND n2.node_id != '' LIMIT 1)
+                           (SELECT n1.node_name FROM nodes n1 WHERE (n1.is_repeater = 1 OR n1.is_repeater = true) AND n1.public_key = t.public_key AND n1.public_key != '' LIMIT 1),
+                           (SELECT n2.node_name FROM nodes n2 WHERE (n2.is_repeater = 1 OR n2.is_repeater = true) AND n2.node_id = t.node_id AND n2.node_id != '' LIMIT 1),
+                           (SELECT n3.node_name FROM nodes n3 WHERE n3.public_key = t.public_key AND n3.public_key != '' LIMIT 1)
                        ) AS node_name
                 FROM telemetry t 
                 {$whereSql} 
@@ -620,13 +719,21 @@ SQL;
         $resolvedPubKey = $clean;
 
         try {
-            $nStmt = $this->pdo->prepare("SELECT node_id, public_key, node_name FROM nodes WHERE LOWER(node_id) = :id1 OR LOWER(node_id) = :id1_strip OR LOWER(public_key) = :id2 OR LOWER(public_key) LIKE :id3 OR LOWER(node_name) = :id4 LIMIT 1");
+            $nStmt = $this->pdo->prepare("
+                SELECT node_id, public_key, node_name
+                FROM nodes
+                WHERE (is_repeater = 1 OR is_repeater = true)
+                  AND (LOWER(node_id) = :id1 OR LOWER(node_id) = :id1_strip OR LOWER(public_key) = :id2 OR LOWER(public_key) LIKE :id3 OR LOWER(node_name) = :id4)
+                ORDER BY (LOWER(public_key) = :id_exact) DESC, id ASC
+                LIMIT 1
+            ");
             $nStmt->execute([
-                ':id1' => $clean,
-                ':id1_strip' => $stripped,
-                ':id2' => $clean,
-                ':id3' => $clean . '%',
-                ':id4' => $clean,
+                ':id1'      => $clean,
+                ':id1_strip'=> $stripped,
+                ':id2'      => $clean,
+                ':id3'      => $clean . '%',
+                ':id4'      => $clean,
+                ':id_exact' => $clean,
             ]);
             $nodeRow = $nStmt->fetch(PDO::FETCH_ASSOC);
             if ($nodeRow) {
