@@ -468,9 +468,10 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
     }
     if (lOk) {
       markLocalSessionActive(targetPubKey);
-      // Trumpa 3.0 s pauzė eteriui nurimti po sėkmingo login atsakymo
-      yieldDelay(3000);
     }
+    // Trumpa 3.0 s pauzė eteriui nurimti po Login užklausos (net jei LOGIN_OK aidas pasimetė grįždamas,
+    // kartotuvas dažnai jau priėmė Login ir yra pasiruošęs atsakyti į trumpą 22 B telemetrijos užklausą!)
+    yieldDelay(3000);
     loginSucceeded = lOk;
     return lOk;
   };
@@ -479,9 +480,8 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
   // Jei sesija jau aktyvi – praleidžiame Login ir iškart taupome eterio laiką!
   if (!sessionActive) {
     if (!performLoginStep()) {
-      Serial.printf("[Ciklas] ⛔ Kartotuvas '%s' neatsakė į Login (ANON_REQ) – tolesnės užklausos praleidžiamos taupant LoRa eterį.\n",
+      Serial.printf("[Ciklas] ⚠️ LOGIN_OK iš '%s' negautas (gali būti prarastas grįžtant per multi-hop), tačiau bandoma 22 B užklausa...\n",
                     rep.name.c_str());
-      return;
     }
   } else {
     Serial.printf("[Sesija] 🔑 Kartotuvas '%s' jau turi aktyvią sesiją (ACL) – Login (ANON_REQ) praleidžiamas!\n",
@@ -496,35 +496,27 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
     sendMeshCoreStatusRequest(repIdx);
     bool statusOk = waitForReply(statusTimeout, targetHash, WAIT_STATUS);
 
-    if (!statusOk) {
-      if (!didLoginThisCycle) {
-        // Buvome praleidę Login: jei bandėme per nepatvirtintą DIRECT maršrutą ir jis neatsakė –
-        // iškart izoliuojame šį DIRECT maršrutą prieš vykdant Login, kad negaištume dar 30s tam pačiam keliui!
-        if (monitoredNodes[repIdx].hasRoute && !monitoredNodes[repIdx].routeConfirmed) {
-          Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė be Login! Kelias izoliuojamas (karantinas 15 min.) prieš vykdant Login per FLOOD...\n",
-                        rep.name.c_str());
-          quarantineFailedRoute(repIdx);
-        }
-        Serial.printf("[Sesija Fallback] ⚠️ '%s' neatsakė į Status be Login. Išvaloma sesija, vykdomas Login...\n",
-                      rep.name.c_str());
-        clearLocalSession(targetPubKey);
-        if (performLoginStep()) {
-          unsigned long retryStatusTimeout = getDynamicReplyTimeout();
-          sendMeshCoreStatusRequest(repIdx);
-          statusOk = waitForReply(retryStatusTimeout, targetHash, WAIT_STATUS);
-          if (!statusOk && monitoredNodes[repIdx].hasRoute) {
-            Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Status po Login! Kartojama per FLOOD...\n", rep.name.c_str());
-            quarantineFailedRoute(repIdx);
-            sendMeshCoreStatusRequest(repIdx);
-            statusOk = waitForReply(REPEATER_REMOTE_REPLY_TIMEOUT_MS, targetHash, WAIT_STATUS);
-          }
-        } else {
-          Serial.printf("[Ciklas] ⛔ Kartotuvas '%s' neatsakė į fallback Login – ciklas nutraukiamas taupant LoRa eterį.\n",
-                        rep.name.c_str());
-          return;
-        }
-      } else if (monitoredNodes[repIdx].hasRoute) {
-        Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Status! Kelias izoliuojamas (karantinas 15 min.) ir kartojama per FLOOD...\n", rep.name.c_str());
+    // 1) Jei siuntėme per DIRECT maršrutą ir jis neatsakė – pirmiausia izoliuojame DIRECT kelią
+    // ir pakartojame trumpą 22 B Status užklausą per FLOOD (nes sesija kartotuve greičiausiai vis dar aktyvi, o sugedo tik asimetrinis DIRECT kelias!)
+    if (!statusOk && monitoredNodes[repIdx].hasRoute) {
+      Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Status! Kelias izoliuojamas (karantinas 15 min.) ir kartojama per FLOOD...\n", rep.name.c_str());
+      quarantineFailedRoute(repIdx);
+      sendMeshCoreStatusRequest(repIdx);
+      statusOk = waitForReply(REPEATER_REMOTE_REPLY_TIMEOUT_MS, targetHash, WAIT_STATUS);
+    }
+
+    // 2) Jei net per FLOOD neatsakė ir šį ciklą buvome praleidę Login – vadinasi pasibaigė sesija (pvz. kartotuvas persikrovė):
+    // atliekame Login ir pakartojame Status užklausą
+    if (!statusOk && !didLoginThisCycle) {
+      Serial.printf("[Sesija Fallback] ⚠️ '%s' neatsakė į Status be Login (net per FLOOD). Išvaloma sesija, vykdomas Login...\n",
+                    rep.name.c_str());
+      clearLocalSession(targetPubKey);
+      performLoginStep();
+      unsigned long retryStatusTimeout = getDynamicReplyTimeout();
+      sendMeshCoreStatusRequest(repIdx);
+      statusOk = waitForReply(retryStatusTimeout, targetHash, WAIT_STATUS);
+      if (!statusOk && monitoredNodes[repIdx].hasRoute) {
+        Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Status po Login! Kartojama per FLOOD...\n", rep.name.c_str());
         quarantineFailedRoute(repIdx);
         sendMeshCoreStatusRequest(repIdx);
         statusOk = waitForReply(REPEATER_REMOTE_REPLY_TIMEOUT_MS, targetHash, WAIT_STATUS);
@@ -551,34 +543,28 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
     sendMeshCoreTelemetryRequest(repIdx);
     bool telemOk = waitForReply(telemTimeout, targetHash, WAIT_TELEMETRY);
 
-    if (!telemOk) {
-      if (!didLoginThisCycle) {
-        // Buvome praleidę Login: jei bandėme per nepatvirtintą DIRECT maršrutą ir jis neatsakė –
-        // iškart izoliuojame šį DIRECT maršrutą prieš vykdant Login, kad negaištume dar 30s tam pačiam keliui!
-        if (monitoredNodes[repIdx].hasRoute && !monitoredNodes[repIdx].routeConfirmed) {
-          Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė be Login! Kelias izoliuojamas (karantinas 15 min.) prieš vykdant Login per FLOOD...\n",
-                        rep.name.c_str());
-          quarantineFailedRoute(repIdx);
-        }
-        Serial.printf("[Sesija Fallback] ⚠️ '%s' neatsakė į Telemetriją be Login. Išvaloma sesija, vykdomas Login...\n",
-                      rep.name.c_str());
-        clearLocalSession(targetPubKey);
-        if (performLoginStep()) {
-          unsigned long retryTelemTimeout = getDynamicReplyTimeout();
-          sendMeshCoreTelemetryRequest(repIdx);
-          telemOk = waitForReply(retryTelemTimeout, targetHash, WAIT_TELEMETRY);
-          if (!telemOk && monitoredNodes[repIdx].hasRoute) {
-            Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Telemetriją po Login! Kartojama per FLOOD...\n", rep.name.c_str());
-            quarantineFailedRoute(repIdx);
-            sendMeshCoreTelemetryRequest(repIdx);
-            telemOk = waitForReply(REPEATER_REMOTE_REPLY_TIMEOUT_MS, targetHash, WAIT_TELEMETRY);
-          }
-        } else {
-          Serial.printf("[Ciklas] ⛔ Kartotuvas '%s' neatsakė į fallback Login – papildoma Telemetrijos užklausa nesiunčiama taupant eterį.\n",
-                        rep.name.c_str());
-        }
-      } else if (monitoredNodes[repIdx].hasRoute) {
-        Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Telemetriją! Kelias izoliuojamas (karantinas 15 min.) ir kartojama per FLOOD...\n", rep.name.c_str());
+    // 1) Jei siuntėme per DIRECT maršrutą (pvz., iš ADVERT išmoktą asimetrinį B9DD4BBD) ir jis neatsakė –
+    // pirmiausia izoliuojame DIRECT kelią ir iškart pakartojame trumpą 22 B Telemetrijos užklausą per FLOOD!
+    // Kai sesija kartotuve aktyvi (skip_login: true), kartotuvas į FLOOD telemetriją atsako per 5–7 sek. be jokio 53 B Login!
+    if (!telemOk && monitoredNodes[repIdx].hasRoute) {
+      Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Telemetriją! Kelias izoliuojamas (karantinas 15 min.) ir kartojama 22 B Telemetrija per FLOOD...\n", rep.name.c_str());
+      quarantineFailedRoute(repIdx);
+      sendMeshCoreTelemetryRequest(repIdx);
+      telemOk = waitForReply(REPEATER_REMOTE_REPLY_TIMEOUT_MS, targetHash, WAIT_TELEMETRY);
+    }
+
+    // 2) Jei net per FLOOD neatsakė ir šį ciklą buvome praleidę Login – vadinasi kartotuve tikrai pasibaigė sesija:
+    // išvalome sesiją, atliekame Login ir dar kartą išsiunčiame 22 B Telemetrijos užklausą!
+    if (!telemOk && !didLoginThisCycle) {
+      Serial.printf("[Sesija Fallback] ⚠️ '%s' neatsakė į Telemetriją be Login (net per FLOOD). Išvaloma sesija, vykdomas Login...\n",
+                    rep.name.c_str());
+      clearLocalSession(targetPubKey);
+      performLoginStep();
+      unsigned long retryTelemTimeout = getDynamicReplyTimeout();
+      sendMeshCoreTelemetryRequest(repIdx);
+      telemOk = waitForReply(retryTelemTimeout, targetHash, WAIT_TELEMETRY);
+      if (!telemOk && monitoredNodes[repIdx].hasRoute) {
+        Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Telemetriją po Login! Kartojama per FLOOD...\n", rep.name.c_str());
         quarantineFailedRoute(repIdx);
         sendMeshCoreTelemetryRequest(repIdx);
         telemOk = waitForReply(REPEATER_REMOTE_REPLY_TIMEOUT_MS, targetHash, WAIT_TELEMETRY);
@@ -1537,10 +1523,14 @@ bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
         bool isFloodRx = (routeType == ROUTE_TYPE_FLOOD || routeType == ROUTE_TYPE_TRANSPORT_FLOOD);
         if (monitoredNodes[matchedIdx].forceFlood) {
           // Mazgui nustatytas priverstinis FLOOD - nesimokome DIRECT kelio
-        } else if (isFloodRx || hasInnerPath) {
-          uint8_t learnedHops = isFloodRx ? pathHopCount : innerPathHops;
-          uint8_t learnedHashSize = isFloodRx ? pathHashSize : innerPathHashSize;
-          size_t learnedByteLen = isFloodRx ? pathByteLength : innerPathByteLen;
+        } else if (hasInnerPath || isFloodRx) {
+          // SVARBU: Jei tai PAYLOAD_TYPE_PATH paketas (net jei atkeliavo per FLOOD 0x21!),
+          // jo viduje esantis 'innerPath' yra tikrasis priekinis kelias (Botas -> Kartotuvas),
+          // kuriuo mūsų užklausa pasiekė kartotuvą (pvz., B9DD -> 4607), o išorinis FLOOD kelias
+          // yra atgalinis (Kartotuvas -> Botas, pvz., 3BBD -> B9DD), kuris gali būti asimetrinis!
+          uint8_t learnedHops = hasInnerPath ? innerPathHops : pathHopCount;
+          uint8_t learnedHashSize = hasInnerPath ? innerPathHashSize : pathHashSize;
+          size_t learnedByteLen = hasInnerPath ? innerPathByteLen : pathByteLength;
 
           if (monitoredNodes[matchedIdx].hasRoute && learnedHops > monitoredNodes[matchedIdx].routeHopCount) {
             // Jau turime TRUMPESNĮ maršrutą (pvz., 0 arba 1 šuolio) – neperrašome jo ilgesniais eterio aidais!
@@ -1550,7 +1540,13 @@ bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
             // Suformuojame kandidatinį kelią (Botas -> Kartotuvas):
             uint8_t candPath[32] = {0};
             size_t candLen = 0;
-            if (isFloodRx) {
+            if (hasInnerPath) {
+              if (innerPathByteLen > 0 && innerPathByteLen <= sizeof(candPath) && innerPathPtr != nullptr) {
+                // PAYLOAD_TYPE_PATH vidinis maršrutas jau yra tiesiogine (Botas -> Kartotuvas) tvarka
+                memcpy(candPath, innerPathPtr, innerPathByteLen);
+                candLen = innerPathByteLen;
+              }
+            } else if (isFloodRx) {
               if (pathByteLength > 0 && pathByteLength <= sizeof(candPath)) {
                 for (uint8_t k = 0; k < pathHopCount; k++) {
                   uint8_t srcHopIdx = pathHopCount - 1 - k;
@@ -1560,10 +1556,6 @@ bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
                 }
                 candLen = pathByteLength;
               }
-            } else if (hasInnerPath && innerPathByteLen > 0 && innerPathByteLen <= sizeof(candPath) && innerPathPtr != nullptr) {
-              // PAYLOAD_TYPE_PATH vidinis maršrutas jau yra tiesiogine (Botas -> Kartotuvas) tvarka
-              memcpy(candPath, innerPathPtr, innerPathByteLen);
-              candLen = innerPathByteLen;
             }
 
             // Apsauga nuo asimetrinio ryšio (asymmetric fringe link):

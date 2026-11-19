@@ -763,22 +763,19 @@ SQL;
         $isAlreadyForward = false;
         $pathData = null;
 
-        if ($isDirectRoute) {
-            // SVARBU: Kai paketas atkeliauja per ROUTE_TYPE_DIRECT (2 arba 3),
+        if (is_array($returnedPath) && isset($returnedPath['hop_count'])) {
+            // SVARBU: Jei tai PAYLOAD_TYPE_PATH paketas (tiek 0x22 DIRECT, tiek 0x21 FLOOD!),
+            // jo viduje esantis 'returned_path' yra tikrasis priekinis kelias (Botas -> Kartotuvas),
+            // kuriuo mūsų užklausa pasiekė kartotuvą (pvz., B9DD -> 4607), o išorinis FLOOD kelias
+            // yra atgalinis (Kartotuvas -> Botas, pvz., 3BBD -> B9DD), kuris gali būti asimetrinis!
+            $pathData = $returnedPath;
+            $isAlreadyForward = true;
+        } elseif ($isDirectRoute) {
+            // Kai paprastas RESPONSE paketas atkeliauja per ROUTE_TYPE_DIRECT (2 arba 3),
             // tarpiniai kartotuvai nuima savo šuolius iš išorinės antraštės (todėl hop_count tampa 0!).
-            // Iš tokio paketo maršrutą galime imti TIK tada, jei tai PAYLOAD_TYPE_PATH su vidiniu 'returned_path'.
-            if (is_array($returnedPath) && isset($returnedPath['hop_count'])) {
-                $pathData = $returnedPath;
-                $isAlreadyForward = true;
-            } else {
-                return ['path' => null, 'hops' => null];
-            }
+            return ['path' => null, 'hops' => null];
         } else {
             $pathData = $packetMeta['path'] ?? ($dec['path'] ?? null);
-            if ((!is_array($pathData) || !isset($pathData['hop_count'])) && is_array($returnedPath) && isset($returnedPath['hop_count'])) {
-                $pathData = $returnedPath;
-                $isAlreadyForward = true;
-            }
         }
 
         if (!is_array($pathData) || !isset($pathData['hop_count'])) {
@@ -1074,7 +1071,12 @@ SQL;
 
             $chosenPath = $existingPath;
             if ($candidatePath !== null) {
-                if ($newHops <= $oldHops) {
+                $hasProvenWorkingPath = ($existingPath !== null && $existingFailCount === 0 && $telemUpdatedTs > 0 && $secSinceTelem < 86400);
+                if (!$isTelemetryResponse && $hasProvenWorkingPath) {
+                    // Jei jau turime išbandytą ir veikiantį telemetrijos kelią (0 klaidų per 24 val.),
+                    // neleidžiame nepatikrintam ADVERT atgaliniam keliui (pvz., asimetriniam B9DD4BBD) jo perrašyti!
+                    $chosenPath = $existingPath;
+                } elseif ($newHops <= $oldHops) {
                     // Trumpesnis arba tokio pat ilgio kelias – atnaujiname!
                     // Jei kelias tokio pat ilgio ir gautas per tą pačią bangą (< 30s), pasiliekame geresnį SNR
                     if ($newHops === $oldHops && $existingPath !== null && $secSinceSeen < 30 && $snr !== null && $existingSnr !== null && $snr < $existingSnr) {
