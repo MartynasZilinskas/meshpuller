@@ -169,7 +169,7 @@ class NodeRepository implements NodeRepositoryInterface
                 bot_id = CASE WHEN nodes.is_bot_locked THEN nodes.bot_id ELSE COALESCE(EXCLUDED.bot_id, nodes.bot_id) END,
                 last_path = CASE WHEN UPPER(COALESCE(nodes.last_path, '')) = 'FLOOD' THEN 'FLOOD' ELSE :last_path_upd END,
                 telemetry_fail_count = CASE WHEN :reset_fails_cnt = 1 THEN 0 ELSE nodes.telemetry_fail_count END,
-                last_failed_request_at = CASE WHEN :reset_fails_at = 1 THEN NULL ELSE nodes.last_failed_request_at END,
+                last_failed_request_at = CASE WHEN :reset_fails_at = 1 THEN COALESCE(nodes.last_failed_request_at, nodes.requested_date) ELSE nodes.last_failed_request_at END,
                 last_seen_at = CURRENT_TIMESTAMP,
                 "update" = CASE 
                     WHEN EXCLUDED.is_repeater = false OR nodes.is_disabled = true THEN false
@@ -218,7 +218,7 @@ SQL;
                 `bot_id` = CASE WHEN `is_bot_locked` = 1 THEN `bot_id` ELSE COALESCE(VALUES(`bot_id`), `bot_id`) END,
                 `last_path` = IF(UPPER(COALESCE(`last_path`, '')) = 'FLOOD', 'FLOOD', :last_path_upd),
                 `telemetry_fail_count` = IF(:reset_fails_cnt = 1, 0, `telemetry_fail_count`),
-                `last_failed_request_at` = IF(:reset_fails_at = 1, NULL, `last_failed_request_at`),
+                `last_failed_request_at` = IF(:reset_fails_at = 1, COALESCE(`last_failed_request_at`, `requested_date`), `last_failed_request_at`),
                 `last_seen_at` = CURRENT_TIMESTAMP,
                 `update` = CASE 
                     WHEN VALUES(`is_repeater`) = 0 OR `is_disabled` = 1 THEN 0
@@ -349,7 +349,7 @@ SQL;
 
             if (!empty($resolved['reset_fails']) && !$hasTelemetry) {
                 $sets[] = 'telemetry_fail_count = 0';
-                $sets[] = 'last_failed_request_at = NULL';
+                $sets[] = 'last_failed_request_at = COALESCE(last_failed_request_at, requested_date)';
             }
         } elseif ($existingNode === null && !empty($heardBotId)) {
             if ($driver === 'pgsql') {
@@ -829,7 +829,12 @@ SQL;
         // Jei kelias paimtas iš FLOOD išorinės antraštės – apverčiame (Reverse Path).
         // Jei kelias paimtas iš PAYLOAD_TYPE_PATH vidinio 'returned_path' – jis jau yra Botas->Kartotuvas tvarka!
         if ($hopCount > 0 && !empty($incomingHops)) {
-            if ($hopCount === 1 && $rssi !== null && $rssi < -105.0) {
+            if ($hopCount === 1 && $rssi !== null && $rssi < -108.0) {
+                return ['path' => null, 'hops' => null];
+            }
+            // Jei net paskutinis vietinis šuolis į botą yra ties triukšmo riba (< -118 dBm arba SNR < -7.5 dB,
+            // pvz. tolimas 4 šuolių aidas į kitą miestą su -125 dBm), tokio kelio nelaikome tinkamu:
+            if ($hopCount > 1 && (($rssi !== null && $rssi < -118.0) || ($snr !== null && $snr < -7.5))) {
                 return ['path' => null, 'hops' => null];
             }
             $orderedHops = $isAlreadyForward ? $incomingHops : array_reverse($incomingHops);
@@ -1160,25 +1165,35 @@ SQL;
         } elseif ($isTelemetryResponse) {
             // Šis botas ką tik sėkmingai gavo šifruotą telemetrijos atsakymą iš kartotuvo!
             $shouldSwitchBot = true;
-        } elseif ($existingFailCount >= 1 && $newHops < 999) {
-            // Senasis botas nesėkmingai bando pasiekti kartotuvą, o šis botas jį girdi su aiškiu keliu
-            $shouldSwitchBot = true;
         } elseif ($newHops < $oldHops) {
-            // Šis botas turi GRIEŽTAI TRUMPESNĮ kelią (pvz., 0 šuolių DIRECT vietoj 1-2 šuolių arba FLOOD)
+            // Šis botas turi GRIEŽTAI TRUMPESNĮ kelią (pvz., 0-2 šuoliai vietoj 3-4 šuolių arba FLOOD)
             $shouldSwitchBot = true;
+        } elseif ($existingFailCount >= 1 && $newHops < 999 && ($newHops <= $oldHops || $secSinceSeen > 120)) {
+            // Senasis botas nesėkmingai bando pasiekti kartotuvą:
+            // Kitas botas perima tik jei jo kelias nėra ilgesnis už ką tik toje pačioje ADVERT bangoje girdėtą kelią,
+            // arba jei senasis botas šios ADVERT bangos išvis negirdėjo ($secSinceSeen > 120s).
+            if ($newHops === $oldHops && $secSinceSeen < 60 && $snr !== null && $existingSnr !== null && $snr < $existingSnr) {
+                $shouldSwitchBot = false;
+            } else {
+                $shouldSwitchBot = true;
+            }
         } elseif ($newHops === $oldHops && $newHops < 999) {
-            // Abu botai turi VIENODO ILGIO kelią (pvz., abu girdi per 0 šuolių arba abu per 1 šuolį):
-            // Paskirstome krūvį tolygiai tarp gretimų botų!
-            $counts = $this->getBotActiveRepeaterCounts();
-            $existingLoad = $counts[$existingBotId] ?? 0;
-            $heardLoad = $counts[$heardBotId] ?? 0;
+            // Abu botai turi VIENODO ILGIO kelią (pvz., abu girdi per 0 šuolių arba abu per 1-3 šuolius):
+            // Jei tai ta pati ADVERT banga (< 60s), ir šis botas girdi ženkliai stipresnį signalą (+4 dB SNR) – perima:
+            if ($snr !== null && $existingSnr !== null && ($snr - $existingSnr) >= 4.0) {
+                $shouldSwitchBot = true;
+            } else {
+                // Paskirstome krūvį tolygiai tarp gretimų botų (tik jei naujo boto SNR nėra prastesnis > 3 dB):
+                $counts = $this->getBotActiveRepeaterCounts();
+                $existingLoad = $counts[$existingBotId] ?? 0;
+                $heardLoad = $counts[$heardBotId] ?? 0;
 
-            if (($existingLoad - $heardLoad) >= 2) {
-                // Naujasis botas turi bent 2 kartotuvais mažiau nei esamas -> perima darbui subalansuoti
-                $shouldSwitchBot = true;
-            } elseif ($existingLoad >= $heardLoad && $snr !== null && $existingSnr !== null && ($snr - $existingSnr) >= 3.0 && $secSinceSeen > 30) {
-                // Krūvis panašus, bet šis botas girdi ženkliai stipresnį signalą (+3 dB SNR)
-                $shouldSwitchBot = true;
+                $snrAcceptable = ($snr === null || $existingSnr === null || ($existingSnr - $snr) <= 3.0);
+                if (($existingLoad - $heardLoad) >= 2 && $snrAcceptable) {
+                    $shouldSwitchBot = true;
+                } elseif ($existingLoad >= $heardLoad && $snr !== null && $existingSnr !== null && ($snr - $existingSnr) >= 3.0 && $secSinceSeen > 30) {
+                    $shouldSwitchBot = true;
+                }
             }
         } elseif ($newHops > $oldHops && $newHops < 999 && $secSinceSeen > 7200) {
             // Senasis botas mazgo negirdėjo jau > 2 val., o naujasis botas jį girdi
