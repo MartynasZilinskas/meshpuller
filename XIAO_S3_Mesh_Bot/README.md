@@ -33,6 +33,40 @@ Pilna sistemos dokumentacija, veikimo principai, parametrų aprašymas ir duomen
 
 ## 2. Failų struktūra ir paskirtis
 
+### GitHub Actions: firmware kompiliavimas
+
+GitHub skiltyje **Actions → Build bot firmware** pasirinkite **Run workflow**.
+Darbo eiga taip pat kompiliuoja susijusius pakeitimus į `main` ir pull request;
+pull request atvaizdai neįkeliami. Baigto rankinio ar `main` darbo skiltyje
+**Artifacts** atsisiųskite `meshpuller-xiao-esp32s3-8mb-<SHA>`:
+
+- `XIAO_S3_Mesh_Bot.ino.bin` – programos atvaizdas (`0x10000`), kuriam reikia suderinamo įkroviklio ir skaidinių lentelės.
+- `XIAO_S3_Mesh_Bot.ino.merged.bin` – visas 8 MB atvaizdas (`0x0`); jo įrašymas gali perrašyti NVS nustatymus.
+
+Naujam arba ištrintam **XIAO ESP32-S3 (8 MB)** įrašykite `*.ino.merged.bin`
+nuo `0x0`. Darbo eiga pati neįrašo programos į įrenginį ir nepublikuoja GitHub Release.
+
+1. Perkraukite įrenginį ir per pirmą minutę prisijunkite prie atviro
+   `MeshPuller` Wi-Fi tinklo. Slaptažodžio nereikia.
+2. Naršyklėje atverkite `http://192.168.4.1/`.
+3. Įveskite Wi‑Fi nustatymus, serverio priskirtą boto ID (pvz., `KUN`) ir, jei
+   reikia, įjunkite `ENABLE_SCOPE` su regionu `kun`. Išsaugokite ir perkraukite.
+   Įrenginys pats sukuria ir išsaugo tapatybę; sėklą įveskite tik norėdami
+   išsaugoti jau turimą tapatybę.
+4. Po perkrovimo nesijunkite prie `MeshPuller`, jei konfigūravimas baigtas.
+   Po minutės konfigūravimo tinklas išsijungs ir įrenginys prisijungs prie
+   išsaugoto Wi‑Fi. Jei reikia grįžti į portalą, vėl prisijunkite prie
+   `MeshPuller` tinklo per pirmą minutę po perkrovimo.
+
+Konfigūravimo tinklas atviras, o portalas naudoja nešifruotą HTTP. Kol jis
+veikia, netoliese esantys įrenginiai gali stebėti siunčiamus duomenis arba
+keisti nustatymus. Konfigūruokite patikimoje aplinkoje.
+
+Atvaizdas naudoja `https://telemetry.ite.lt/api/repeater` ir
+`https://telemetry.ite.lt/api/raw.php`, be API rakto. Jei serveris reikalauja
+rakto, šis viešas atvaizdas tam diegimui netinka. Artifakte nėra vietinio
+`config.h`, ankstesnių build failų, Wi‑Fi slaptažodžių ar tapatybės raktų.
+
 | Failas / Aplankas | Paskirtis |
 | --- | --- |
 | `XIAO_S3_Mesh_Bot.ino` | Pagrindinis programinės įrangos failas: valdiklio inicializavimas, `loop()` ciklas, paketų siuntimas/priėmimas, ADVERT dekodavimas, CayenneLPP ir RepeaterStats parsavimas, HTTP klientas. |

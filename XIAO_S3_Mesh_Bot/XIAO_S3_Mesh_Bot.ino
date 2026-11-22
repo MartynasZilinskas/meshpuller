@@ -9,6 +9,7 @@
 */
 
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <RadioLib.h>
 #include <ArduinoJson.h>
@@ -16,6 +17,10 @@
 #include "MeshCrypto.h"
 #include "MeshCorePacket.h"
 #include "WebConfigPortal.h"
+
+// ESP-IDF's default public CA bundle, included in the ESP32 Arduino core.
+extern const uint8_t caBundleStart[] asm("_binary_x509_crt_bundle_start");
+extern const uint8_t caBundleEnd[] asm("_binary_x509_crt_bundle_end");
 
 // ================================================================================
 // 📡 MESHCORE PROTOKOLO KONSTANTOS
@@ -74,8 +79,6 @@ struct RepeaterStats {
 // ================================================================================
 // 🔌 APARATŪROS IR BŪSENOS KINTAMIEJI
 // ================================================================================
-
-TelemetrySettings settings;
 
 // SX1262 Modulio inicijavimas
 SX1262 radio = new Module(PIN_LORA_NSS, PIN_LORA_DIO1, PIN_LORA_RESET, PIN_LORA_BUSY);
@@ -210,7 +213,7 @@ uint32_t getNextTimestamp() {
 void scanWiFiNetworks();
 void connectToWiFi();
 void initLoRa();
-void generateSelfIdentity();
+void generateSelfIdentity(const uint8_t* seed);
 bool fetchRepeatersFromURL();
 void initMonitoredNodeKeys();
 void requestTelemetryFromAllRepeaters();
@@ -248,11 +251,15 @@ void setup() {
   Serial.begin(115200);
   delay(1500);
 
-  // 0. Užkrauname nustatymus iš NVS atminties (arba paimame numatytuosius iš config.h)
-  initConfigNVS();
-
-  // 1. Inicijuojame Wi-Fi AP ('MeshPuller') ir laukiame 1 minutę, ar kas nors prisijungs
+  // Start the Wi-Fi radio before generating or migrating a missing seed.
   initWebConfigPortal();
+  uint8_t seed[SEED_SIZE];
+  if (!initConfigNVS() || !decodeSeed(savedConfig.seed, seed)) {
+    Serial.println("[Sistema] Nepavyko užkrauti nustatymų. Sutvarkykite juos portale ir perkraukite.");
+    return;
+  }
+  activeConfig = savedConfig;
+  generateSelfIdentity(seed);
   waitForApClients(AP_WAIT_WINDOW_MS);
 
   Serial.println("\n========================================================");
@@ -260,26 +267,23 @@ void setup() {
   Serial.println("========================================================");
   Serial.printf("[Info] Kartotuvų sąrašas bus parsiųstas prieš kiekvieną ciklą iš: %s\n", REPEATERS_URL);
   Serial.printf("[Info] Laukimo laikas po kiekvienos užklausos: %lu ms (%.1f s)\n",
-                REPEATER_REPLY_TIMEOUT_MS, REPEATER_REPLY_TIMEOUT_MS / 1000.0f);
+                activeConfig.replyTimeout, activeConfig.replyTimeout / 1000.0f);
   Serial.printf("[Info] Tikrinimo ciklo intervalas: %lu min (%lu ms)\n",
-                TELEMETRY_REQUEST_INTERVAL_MS / 60000, TELEMETRY_REQUEST_INTERVAL_MS);
+                activeConfig.interval / 60000, activeConfig.interval);
   Serial.printf("[Info] API Bazinis URL: %s\n", API_BASE_URL);
   Serial.printf("  * RAW trafiko endpoint:  %s%s (visi įrašai siunčiami čia ir apdorojami serveryje)\n", API_BASE_URL, API_ENDPOINT_RAW);
-  Serial.printf("[Info] Mazgų kelio (Path) hash: %u bitai (%u baitai)\n", PATH_HASH_BITS, (unsigned int)(PATH_HASH_BITS / 8));
-  Serial.printf("[Info] ESP32 Boto Identifikatorius (BOT_ID): '%s'\n", BOT_ID.c_str());
-  if (ENABLE_SCOPE) {
+  Serial.printf("[Info] Mazgų kelio (Path) hash: %u bitai (%u baitai)\n", activeConfig.pathBits, (unsigned int)(activeConfig.pathBits / 8));
+  Serial.printf("[Info] ESP32 Boto Identifikatorius (BOT_ID): '%s'\n", activeConfig.botId.c_str());
+  if (activeConfig.scopeEnabled) {
     if (SCOPE_CODE_1 != 0) {
       Serial.println("[Info] Regioninis Scope: naudojami fiksuoti (legacy) FLOOD transporto kodai.");
     } else {
       Serial.printf("[Info] Regioninis Scope: ĮJUNGTAS ('%s', FLOOD kodas skaičiuojamas kiekvienam paketui)\n",
-                    SCOPE_NAME.c_str());
+                    activeConfig.scope.c_str());
     }
   } else {
     Serial.println("[Info] Regioninis Scope: IŠJUNGTAS (Unscoped flood)");
   }
-
-  // 2. Generuojame unikalų ESP32 mazgo raktą (tik save – kartotuvų raktai generuojami po JSON parsisiuntimo)
-  generateSelfIdentity();
 
   // 3. Wi-Fi ryšys ir NTP laikas
   connectToWiFi();
@@ -290,7 +294,7 @@ void setup() {
   // o pagrindinis branduolys (Core 1) netrukdomas klausytųsi LoRa radijo eterio!
   apiQueue = xQueueCreate(32, sizeof(QueuedApiMessage));
   wifiHttpMutex = xSemaphoreCreateMutex();
-  xTaskCreatePinnedToCore(
+  if (!apiQueue || !wifiHttpMutex || xTaskCreatePinnedToCore(
     apiWorkerTask,
     "apiWorkerTask",
     8192,
@@ -298,7 +302,10 @@ void setup() {
     1,
     &apiTaskHandle,
     0 // Paleidžiama ant Core 0 (Wi-Fi branduolys)
-  );
+  ) != pdPASS) {
+    Serial.println("[Sistema] Nepavyko paleisti API siuntėjo.");
+    return;
+  }
 
   // 4. SX1262 LoRa radijas
   initLoRa();
@@ -306,7 +313,7 @@ void setup() {
   Serial.println("\n[Sistema] Paruošta darbui. Iškart inicijuojamas pirmasis duomenų gavimas...");
   requestTelemetryFromAllRepeaters();
   lastTelemetryRequest = millis(); // Nuo šio momento skaičiuojamas sekantis intervalas
-  Serial.printf("[Sistema] Pirmas ciklas baigtas. Sekantis tikrinimas po %lu min.\n", TELEMETRY_REQUEST_INTERVAL_MS / 60000);
+  Serial.printf("[Sistema] Pirmas ciklas baigtas. Sekantis tikrinimas po %lu min.\n", activeConfig.interval / 60000);
 }
 
 // ================================================================================
@@ -315,6 +322,10 @@ void setup() {
 void loop() {
   // Aptarnaujame Web konfigūracijos portalą
   handleWebConfigPortal();
+  if (!apiTaskHandle || telemetryPaused) {
+    delay(20);
+    return;
+  }
 
   // 1. Klausomės eterio (jei kartotuvas atsiunčia paketą, pvz. ADVERT)
   if (receivedFlag) {
@@ -324,10 +335,10 @@ void loop() {
   }
 
   // 2. Periodiškas užklausų inicijavimas po nustatyto laiko intervalo
-  if (millis() - lastTelemetryRequest >= TELEMETRY_REQUEST_INTERVAL_MS) {
+  if (millis() - lastTelemetryRequest >= activeConfig.interval) {
     lastTelemetryRequest = millis();
     requestTelemetryFromAllRepeaters();
-    Serial.printf("[Sistema] Ciklas baigtas. Sekantis tikrinimas po %lu min.\n", TELEMETRY_REQUEST_INTERVAL_MS / 60000);
+    Serial.printf("[Sistema] Ciklas baigtas. Sekantis tikrinimas po %lu min.\n", activeConfig.interval / 60000);
   }
 
   // 3. Wi-Fi ryšio palaikymas (su 30 s pauze tarp bandymų, kad neperkrautų Wi-Fi posistemės)
@@ -353,6 +364,7 @@ void yieldDelay(unsigned long ms) {
       radio.startReceive();
     }
     handleWebConfigPortal();
+    if (telemetryPaused) return;
     delay(10);
   }
 }
@@ -375,10 +387,10 @@ void requestTelemetryFromAllRepeaters() {
   initMonitoredNodeKeys();
 
   Serial.printf("[Ciklas] Pradedama %u kartotuvų apklausa paeiliui...\n", (unsigned int)monitoredRepeatersCount);
-  Serial.printf("[Ciklas] Nustatytas laukimo laikas po kiekvienos užklausos: %.1f s\n", REPEATER_REPLY_TIMEOUT_MS / 1000.0f);
+  Serial.printf("[Ciklas] Nustatytas laukimo laikas po kiekvienos užklausos: %.1f s\n", activeConfig.replyTimeout / 1000.0f);
   Serial.println("========================================================");
 
-  for (size_t i = 0; i < monitoredRepeatersCount; i++) {
+  for (size_t i = 0; i < monitoredRepeatersCount && !telemetryPaused; i++) {
     if (!monitoredNodes[i].initialized) {
       Serial.printf("[Ciklas] Kartotuvas '%s' neinicializuotas (patikrinkite raktą). Praleidžiama.\n",
                     monitoredRepeaters[i].name.c_str());
@@ -392,16 +404,16 @@ void requestTelemetryFromAllRepeaters() {
 
     requestTelemetryFromSingleRepeater(i);
 
-    if (i + 1 < monitoredRepeatersCount) {
+    if (!telemetryPaused && i + 1 < monitoredRepeatersCount) {
       Serial.printf("\n[Pauzė] Baigtas darbas su '%s'. Pauzė %.1f s prieš kreipiantis į sekantį...\n",
-                    monitoredRepeaters[i].name.c_str(), REPEATER_COOLDOWN_MS / 1000.0f);
-      yieldDelay(REPEATER_COOLDOWN_MS);
+                    monitoredRepeaters[i].name.c_str(), activeConfig.cooldown / 1000.0f);
+      yieldDelay(activeConfig.cooldown);
     }
   }
 
   // Grįžtame į nuolatinio klausymosi režimą
   radio.startReceive();
-  Serial.println("\n[Ciklas] Visi kartotuvai patikrinti!");
+  Serial.println(telemetryPaused ? "\n[Ciklas] Telemetrija pristabdyta iki perkrovimo." : "\n[Ciklas] Visi kartotuvai patikrinti!");
 }
 
 void requestTelemetryFromSingleRepeater(size_t repIdx) {
@@ -412,7 +424,7 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
   currentRepHasData = false;
 
   bool isDirectZeroHop = (monitoredNodes[repIdx].hasRoute && monitoredNodes[repIdx].routeHopCount == 0);
-  unsigned long replyTimeout = isDirectZeroHop ? REPEATER_REPLY_TIMEOUT_MS : REPEATER_REMOTE_REPLY_TIMEOUT_MS;
+  unsigned long replyTimeout = isDirectZeroHop ? activeConfig.replyTimeout : activeConfig.remoteTimeout;
 
   String routeDesc = "FLOOD (kelias nežinomas)";
   if (monitoredNodes[repIdx].hasRoute) {
@@ -440,7 +452,7 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
 
   auto getDynamicReplyTimeout = [&]() -> unsigned long {
     bool curDirectZero = (monitoredNodes[repIdx].hasRoute && monitoredNodes[repIdx].routeHopCount == 0);
-    return curDirectZero ? REPEATER_REPLY_TIMEOUT_MS : REPEATER_REMOTE_REPLY_TIMEOUT_MS;
+    return curDirectZero ? activeConfig.replyTimeout : activeConfig.remoteTimeout;
   };
 
   // Pagalbinė lambda funkcija prisijungimui (naudojama arba iškart, arba kaip fallback)
@@ -448,20 +460,15 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
     didLoginThisCycle = true;
     unsigned long loginTimeout = getDynamicReplyTimeout();
 
-    if (rep.password.length() > 0) {
-      Serial.printf("[Užklausa 1/3] Siunčiamas užšifruotas Login į '%s' su slaptažodžiu '%s' (Laukiama iki %.1f s)...\n",
-                    rep.name.c_str(), rep.password.c_str(), loginTimeout / 1000.0f);
-    } else {
-      Serial.printf("[Užklausa 1/3] Siunčiamas užšifruotas Login į '%s' su numatytuoju slaptažodžiu 'hello' (Laukiama iki %.1f s)...\n",
-                    rep.name.c_str(), loginTimeout / 1000.0f);
-    }
+    Serial.printf("[Užklausa 1/3] Siunčiamas užšifruotas Login į '%s' (Laukiama iki %.1f s)...\n",
+                  rep.name.c_str(), loginTimeout / 1000.0f);
     sendMeshCoreLogin(repIdx);
     bool lOk = waitForReply(loginTimeout, targetHash, WAIT_LOGIN);
     if (!lOk && monitoredNodes[repIdx].hasRoute) {
       Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Login! Bandomas atsarginis Login per FLOOD (išsaugant DIRECT kelią 22 B telemetrijos bandymui)...\n", rep.name.c_str());
       monitoredNodes[repIdx].hasRoute = false;
       sendMeshCoreLogin(repIdx);
-      lOk = waitForReply(REPEATER_REMOTE_REPLY_TIMEOUT_MS, targetHash, WAIT_LOGIN);
+      lOk = waitForReply(activeConfig.remoteTimeout, targetHash, WAIT_LOGIN);
       if (!lOk && monitoredNodes[repIdx].routePathLen > 0) {
         // Jei LOGIN_OK aidas pasimetė grįžtant, bet DIRECT Login galėjo pasiekti kartotuvą –
         // grąžiname DIRECT kelią, kad Žingsnis 3 pirmiausia išbandytų DIRECT telemetriją (ir tik jai neatsakius – FLOOD)!
@@ -504,7 +511,7 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
       Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Status! Kelias izoliuojamas (karantinas 15 min.) ir kartojama per FLOOD...\n", rep.name.c_str());
       quarantineFailedRoute(repIdx);
       sendMeshCoreStatusRequest(repIdx);
-      statusOk = waitForReply(REPEATER_REMOTE_REPLY_TIMEOUT_MS, targetHash, WAIT_STATUS);
+      statusOk = waitForReply(activeConfig.remoteTimeout, targetHash, WAIT_STATUS);
     }
 
     // 2) Jei net per FLOOD neatsakė ir šį ciklą buvome praleidę Login – vadinasi pasibaigė sesija (pvz. kartotuvas persikrovė):
@@ -521,7 +528,7 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
         Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Status po Login! Kartojama per FLOOD...\n", rep.name.c_str());
         quarantineFailedRoute(repIdx);
         sendMeshCoreStatusRequest(repIdx);
-        statusOk = waitForReply(REPEATER_REMOTE_REPLY_TIMEOUT_MS, targetHash, WAIT_STATUS);
+        statusOk = waitForReply(activeConfig.remoteTimeout, targetHash, WAIT_STATUS);
       }
     }
     if (statusOk) {
@@ -533,8 +540,8 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
 
   // Tarpas tarp užklausų laukimo (10 sekundžių):
   if (rep.reqStatus && rep.reqTelemetry) {
-    Serial.printf("[Pauzė] Laukimo tarpas tarp užklausų: %.1f s...\n", INTER_REQUEST_DELAY_MS / 1000.0f);
-    yieldDelay(INTER_REQUEST_DELAY_MS);
+    Serial.printf("[Pauzė] Laukimo tarpas tarp užklausų: %.1f s...\n", activeConfig.interDelay / 1000.0f);
+    yieldDelay(activeConfig.interDelay);
   }
 
   // Žingsnis 3: Telemetrijos užklausa (REQ_TYPE_GET_TELEMETRY_DATA - Baterija ir Temp)
@@ -552,7 +559,7 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
       Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Telemetriją! Kelias izoliuojamas (karantinas 15 min.) ir kartojama 22 B Telemetrija per FLOOD...\n", rep.name.c_str());
       quarantineFailedRoute(repIdx);
       sendMeshCoreTelemetryRequest(repIdx);
-      telemOk = waitForReply(REPEATER_REMOTE_REPLY_TIMEOUT_MS, targetHash, WAIT_TELEMETRY);
+      telemOk = waitForReply(activeConfig.remoteTimeout, targetHash, WAIT_TELEMETRY);
     }
 
     // 2) Jei net per FLOOD neatsakė ir šį ciklą buvome praleidę Login – vadinasi kartotuve tikrai pasibaigė sesija:
@@ -569,7 +576,7 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
         Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Telemetriją po Login! Kartojama per FLOOD...\n", rep.name.c_str());
         quarantineFailedRoute(repIdx);
         sendMeshCoreTelemetryRequest(repIdx);
-        telemOk = waitForReply(REPEATER_REMOTE_REPLY_TIMEOUT_MS, targetHash, WAIT_TELEMETRY);
+        telemOk = waitForReply(activeConfig.remoteTimeout, targetHash, WAIT_TELEMETRY);
       }
     }
     if (telemOk) {
@@ -587,6 +594,7 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
 // ⏳ AKTYVUS ATSAKYMO LAUKIMAS (LAUKIAMA IKI TIMEOUT ARBA IKI TIKSLINIO ATSAKYMO)
 // ================================================================================
 bool waitForReply(unsigned long timeoutMs, uint8_t expectedSenderHash, WaitTarget waitTarget) {
+  if (telemetryPaused) return false;
   unsigned long start = millis();
   int packetsCount = 0;
   bool gotTargetResponse = false;
@@ -661,28 +669,17 @@ void initLoRa() {
 // ================================================================================
 // 🔑 ESP32 IDENTITETO GENERAVIMAS IR KRIPTOGRAFINIS RYŠYS
 // ================================================================================
-void generateSelfIdentity() {
-  // Užkrauname vartotojo nurodytus ESP32 Ed25519 raktus iš nustatymų
-  uint8_t seed[SEED_SIZE];
-  size_t seedLen = 0;
-  if (hexStringToBytes(MY_SEED_HEX.c_str(), seed, SEED_SIZE, seedLen) && seedLen == SEED_SIZE) {
-    MeshCrypto::generateKeypair(myPublicKey, myPrivateKey, seed);
-  } else {
-    uint8_t mac[6];
-    WiFi.macAddress(mac);
-    for (int i = 0; i < 32; i++) seed[i] = (uint8_t)(mac[i % 6] ^ (i * 0x5A + 0x33));
-    MeshCrypto::generateKeypair(myPublicKey, myPrivateKey, seed);
-  }
+void generateSelfIdentity(const uint8_t* seed) {
+  MeshCrypto::generateKeypair(myPublicKey, myPrivateKey, seed);
   myNodeHash = myPublicKey[0];
+  activeSessionCount = 0;
   MY_PUBKEY_HEX = bytesToHexString(myPublicKey, PUB_KEY_SIZE);
-  MY_PRVKEY_HEX = bytesToHexString(myPrivateKey, PRV_KEY_SIZE);
 
   Serial.println("\n[MeshCore Kriptografija - Mūsų Tapatybė]");
   Serial.printf("  * Mūsų ESP32 Mazgo Hash: %02X\n", myNodeHash);
   Serial.print("  * Mūsų Ed25519 Viešasis: ");
   printHexBuffer(myPublicKey, PUB_KEY_SIZE);
   Serial.println();
-  // Kartotuvų raktai bus sugeneruoti po fetchRepeatersFromURL() kiekvieną ciklą
 }
 
 // Parsiunčia kartotuvų sąrašą iš REPEATERS_URL prieš kiekvieną ciklą.
@@ -690,8 +687,18 @@ void generateSelfIdentity() {
 bool fetchRepeatersFromURL() {
   monitoredRepeatersCount = 0;
 
-  if (WiFi.status() != WL_CONNECTED) {
+  if (telemetryPaused) return false;
+  if (!activeConfig.botId.length()) {
+    Serial.println("[FetchRepeaters] Nenurodytas arba netinkamas BOT_ID. Nustatykite jį konfigūracijos portale.");
+    return false;
+  }
+  if (!activeStationConnected()) {
     Serial.println("[FetchRepeaters] Wi-Fi neprisijungtas, negalima parsisiųsti sąrašo.");
+    return false;
+  }
+
+  if (time(nullptr) < 1700000000UL) {
+    Serial.println("[FetchRepeaters] Laukiama laiko sinchronizacijos prieš HTTPS užklausą.");
     return false;
   }
 
@@ -701,18 +708,20 @@ bool fetchRepeatersFromURL() {
   }
 
   String requestUrl = String(REPEATERS_URL);
-  if (BOT_ID.length() > 0) {
-    requestUrl += (requestUrl.indexOf('?') >= 0) ? "&bot_id=" : "?bot_id=";
-    requestUrl += BOT_ID;
-  }
+  requestUrl += (requestUrl.indexOf('?') >= 0) ? "&bot_id=" : "?bot_id=";
+  requestUrl += activeConfig.botId;
 
+  WiFiClientSecure client;
+  client.setCACertBundle(caBundleStart, caBundleEnd - caBundleStart);
   HTTPClient http;
-  http.begin(requestUrl);
-  http.setTimeout(8000);
-  if (BOT_ID.length() > 0) {
-    http.addHeader("X-Bot-ID", BOT_ID);
+  if (!requestUrl.startsWith("https://") || !http.begin(client, requestUrl)) {
+    Serial.println("[FetchRepeaters] Nepavyko paruošti HTTPS užklausos.");
+    if (wifiHttpMutex != nullptr) xSemaphoreGive(wifiHttpMutex);
+    return false;
   }
-  Serial.printf("[FetchRepeaters] Užklausiama sekantis kartotuvas botui '%s': %s\n", BOT_ID.c_str(), requestUrl.c_str());
+  http.setTimeout(8000);
+  http.addHeader("X-Bot-ID", activeConfig.botId);
+  Serial.printf("[FetchRepeaters] Užklausiama sekantis kartotuvas botui '%s': %s\n", activeConfig.botId.c_str(), requestUrl.c_str());
   int code = http.GET();
 
   if (code != 200) {
@@ -726,7 +735,7 @@ bool fetchRepeatersFromURL() {
   http.end();
   if (wifiHttpMutex != nullptr) xSemaphoreGive(wifiHttpMutex);
 
-  Serial.printf("[FetchRepeaters] Gautas atsakymas (%d baitai): %s\n", body.length(), body.substring(0, 120).c_str());
+  Serial.printf("[FetchRepeaters] Gautas atsakymas (%u baitai)\n", (unsigned int)body.length());
 
 #if ARDUINOJSON_VERSION_MAJOR >= 7
   JsonDocument doc;
@@ -790,11 +799,10 @@ bool fetchRepeatersFromURL() {
 
   Serial.printf("[FetchRepeaters] Sėkmingai įkelti %u kartotuvai:\n", (unsigned int)monitoredRepeatersCount);
   for (size_t i = 0; i < monitoredRepeatersCount; i++) {
-    Serial.printf("  [%u] %s (%s) | login: %s | pw: '%s' | status: %s | telemetry: %s\n",
+    Serial.printf("  [%u] %s (%s) | login: %s | status: %s | telemetry: %s\n",
                   (unsigned int)(i + 1), monitoredRepeaters[i].name.c_str(),
                   monitoredRepeaters[i].isDirect ? "DIRECT" : "FLOOD",
                   monitoredRepeaters[i].skipLogin ? "SKIP (Sesija aktyvi)" : "TAIP",
-                  monitoredRepeaters[i].password.c_str(),
                   monitoredRepeaters[i].reqStatus ? "TAIP" : "NE",
                   monitoredRepeaters[i].reqTelemetry ? "TAIP" : "NE");
   }
@@ -818,9 +826,6 @@ void initMonitoredNodeKeys() {
                     (unsigned int)(i + 1), monitoredRepeaters[i].name.c_str(),
                     monitoredNodes[i].hash,
                     monitoredRepeaters[i].isDirect ? "DIRECT 0 hops" : "FLOOD multi-hop");
-      Serial.print("    - Bendras šifravimo raktas: ");
-      printHexBuffer(monitoredNodes[i].sharedSecret, 8);
-      Serial.println("...");
 
       // Kiekvieno ciklo pradžioje išvalome seno mazgo karantiną (nes per /api/repeater slotas [0] keičiasi!)
       // ir nustatome maršrutą pagal serverio pateiktą 'path':
@@ -840,7 +845,7 @@ void initMonitoredNodeKeys() {
       } else if (p.equalsIgnoreCase("DIRECT") || (p.length() == 0 && monitoredRepeaters[i].isDirect)) {
         monitoredNodes[i].hasRoute = true;
         monitoredNodes[i].routeHopCount = 0;
-        monitoredNodes[i].routeHashSize = (PATH_HASH_BITS == 16) ? 2 : 1;
+        monitoredNodes[i].routeHashSize = (activeConfig.pathBits == 16) ? 2 : 1;
         monitoredNodes[i].routePathLen = 0;
         monitoredNodes[i].routeLearnedAt = millis();
         Serial.printf("    - Maršrutas: TIESIOGINIS DIRECT (0 šuolių)\n");
@@ -848,7 +853,7 @@ void initMonitoredNodeKeys() {
         size_t pBytes = 0;
         if (hexStringToBytes(p.c_str(), monitoredNodes[i].routePath, sizeof(monitoredNodes[i].routePath), pBytes)) {
           monitoredNodes[i].hasRoute = true;
-          uint8_t defHashSize = (PATH_HASH_BITS == 24) ? 3 : ((PATH_HASH_BITS == 16) ? 2 : 1);
+          uint8_t defHashSize = (activeConfig.pathBits == 24) ? 3 : ((activeConfig.pathBits == 16) ? 2 : 1);
           if (pBytes % defHashSize != 0) defHashSize = 1;
           monitoredNodes[i].routeHashSize = defHashSize;
           monitoredNodes[i].routeHopCount = (uint8_t)(pBytes / defHashSize);
@@ -938,7 +943,7 @@ void confirmRoute(size_t repIdx) {
 // Jei kelias nežinomas: ROUTE_TYPE_FLOOD (arba ROUTE_TYPE_TRANSPORT_FLOOD su Scope)
 uint8_t getRepeaterRouteHeader(uint8_t payloadType, size_t repIdx) {
   bool hasKnownRoute = repIdx < monitoredRepeatersCount && monitoredNodes[repIdx].hasRoute;
-  uint8_t rType = MeshCorePacket::repeaterRouteType(hasKnownRoute, ENABLE_SCOPE);
+  uint8_t rType = MeshCorePacket::repeaterRouteType(hasKnownRoute, activeConfig.scopeEnabled);
   return ((payloadType & 0x0F) << 2) | rType;
 }
 
@@ -969,8 +974,8 @@ const uint8_t* getRepeaterRoutePath(size_t repIdx) {
 // Bits 5:0 = šuolių skaičius (hops: 0..63)
 uint8_t getPathLengthByte(uint8_t hops) {
   uint8_t hashSize = 1;
-  if (PATH_HASH_BITS == 16) hashSize = 2;
-  else if (PATH_HASH_BITS == 24) hashSize = 3;
+  if (activeConfig.pathBits == 16) hashSize = 2;
+  else if (activeConfig.pathBits == 24) hashSize = 3;
   return ((hashSize - 1) << 6) | (hops & 0x3F);
 }
 
@@ -980,9 +985,10 @@ uint8_t getPathLengthByte(uint8_t hops) {
 
 void sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const uint8_t* payload, size_t payloadLen,
                      const char* targetName, const char* targetPubKey, const uint8_t* sharedSecret) {
+  if (telemetryPaused) return;
   uint8_t packet[256];
   size_t idx = MeshCorePacket::encode(packet, sizeof(packet), header, pathLen, path, payload, payloadLen,
-                                      {SCOPE_NAME.c_str(), static_cast<uint16_t>(SCOPE_CODE_1),
+                                       {activeConfig.scope.c_str(), static_cast<uint16_t>(SCOPE_CODE_1),
                                        static_cast<uint16_t>(SCOPE_CODE_2)});
   uint8_t rType = header & 0x03;
   if (!idx) {
@@ -1011,7 +1017,7 @@ void sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const
   #endif
 
   rawTxDoc["direction"] = "TX";
-  rawTxDoc["bot_id"] = BOT_ID;
+  rawTxDoc["bot_id"] = activeConfig.botId;
   time_t now = time(nullptr);
   rawTxDoc["timestamp"] = (now >= 1700000000UL) ? (uint32_t)now : lastTxTimestamp;
   rawTxDoc["length"] = idx;
@@ -1370,7 +1376,7 @@ bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
   #endif
 
   rawRxDoc["direction"] = "RX";
-  rawRxDoc["bot_id"] = BOT_ID;
+  rawRxDoc["bot_id"] = activeConfig.botId;
   time_t now = time(nullptr);
   rawRxDoc["timestamp"] = (now >= 1700000000UL) ? (uint32_t)now : lastTxTimestamp;
   rawRxDoc["length"] = length;
@@ -1708,31 +1714,33 @@ void scanWiFiNetworks() {
 }
 
 void connectToWiFi() {
-  if (WiFi.status() == WL_CONNECTED) return;
+  if (telemetryPaused || !activeConfig.wifiSsid.length()) return;
 
-  // Prieš jungiantis nuskaitome ir išvedame pasiekiamų Wi-Fi tinklų sąrašą
-  scanWiFiNetworks();
+  if (WiFi.status() != WL_CONNECTED) {
+    // Prieš jungiantis nuskaitome ir išvedame pasiekiamų Wi-Fi tinklų sąrašą
+    scanWiFiNetworks();
 
-  // Atjungiame stotį (STA), bet AP režimą išlaikome tik jei jis aktyvus
-  if (isWebConfigAPActive()) {
-    WiFi.mode(WIFI_AP_STA);
-  } else {
-    WiFi.mode(WIFI_STA);
+    WiFi.mode(isWebConfigAPActive() ? WIFI_AP_STA : WIFI_STA);
+    WiFi.disconnect(false);
+    delay(200);
+
+    Serial.printf("\n[Wi-Fi] Jungiamasi prie tinklo '%s'...", activeConfig.wifiSsid.c_str());
+    WiFi.setSleep(false); // Užtikrina stabilų ryšį su iPhone Hotspot
+    WiFi.begin(activeConfig.wifiSsid.c_str(), activeConfig.wifiPassword.c_str());
+
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+      delay(500);
+      Serial.print(".");
+      attempts++;
+      handleWebConfigPortal();
+    }
   }
-  WiFi.disconnect(false);
-  delay(200);
 
-  Serial.printf("\n[Wi-Fi] Jungiamasi prie tinklo '%s'...", WIFI_SSID.c_str());
-  WiFi.setSleep(false); // Užtikrina stabilų ryšį su iPhone Hotspot
-  WiFi.begin(WIFI_SSID.c_str(), WIFI_PASSWORD.c_str());
-
-  // iPhone Hotspot gali užtrukti ilgiau išduodant IP (laukiama iki 20 sekundžių)
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 30) {
-    delay(500);
-    Serial.print(".");
-    attempts++;
-    handleWebConfigPortal();
+  if (stationConflictsWithSetupAP()) {
+    WiFi.disconnect(false);
+    Serial.println("[Wi-Fi] Tinklas persidengia su konfigūravimo tinklu 192.168.4.0/24.");
+    return;
   }
 
   if (WiFi.status() == WL_CONNECTED) {
@@ -1773,33 +1781,33 @@ void apiWorkerTask(void* pvParameters) {
   while (true) {
     QueuedApiMessage msg;
     if (xQueueReceive(apiQueue, &msg, portMAX_DELAY) == pdTRUE && msg.payload != nullptr) {
-      if (WiFi.status() == WL_CONNECTED) {
-        if (wifiHttpMutex == nullptr || xSemaphoreTake(wifiHttpMutex, pdMS_TO_TICKS(5000)) == pdTRUE) {
+      if (xSemaphoreTake(wifiHttpMutex, pdMS_TO_TICKS(5000)) == pdTRUE) {
+        if (activeStationConnected()) {
           const char* endpointPath = API_ENDPOINT_RAW;
           String fullUrl = String(API_BASE_URL) + endpointPath;
 
+          WiFiClientSecure client;
+          client.setCACertBundle(caBundleStart, caBundleEnd - caBundleStart);
           HTTPClient http;
-          http.begin(fullUrl);
-          http.addHeader("Content-Type", "application/json");
-          if (strlen(API_AUTH_KEY) > 0) {
-            http.addHeader("Authorization", API_AUTH_KEY);
-          }
-          http.setTimeout(2500); // 2.5s apsauga nuo pakibimo
+          if (fullUrl.startsWith("https://") && http.begin(client, fullUrl)) {
+            http.addHeader("Content-Type", "application/json");
+            if (strlen(API_AUTH_KEY) > 0) http.addHeader("Authorization", API_AUTH_KEY);
+            http.setTimeout(2500);
 
-          int httpCode = http.POST((uint8_t*)msg.payload, strlen(msg.payload));
-          if (httpCode > 0) {
-            Serial.printf("[API Foninis Siuntėjas] %s -> Kodas: %d (išsiųsta sėkmingai).\n", endpointPath, httpCode);
+            int httpCode = http.POST((uint8_t*)msg.payload, strlen(msg.payload));
+            if (httpCode >= 200 && httpCode < 300) {
+              Serial.printf("[API Foninis Siuntėjas] %s -> Kodas: %d (išsiųsta sėkmingai).\n", endpointPath, httpCode);
+            } else if (httpCode > 0) {
+              Serial.printf("[API Foninis Siuntėjas] %s -> HTTP klaida %d.\n", endpointPath, httpCode);
+            } else {
+              Serial.printf("[API Foninis Siuntėjas] %s -> Siuntimo klaida: %s\n", endpointPath, http.errorToString(httpCode).c_str());
+            }
+            http.end();
           } else {
-            Serial.printf("[API Foninis Siuntėjas] %s -> Siuntimo klaida: %s\n", endpointPath, http.errorToString(httpCode).c_str());
-          }
-          http.end();
-
-          if (wifiHttpMutex != nullptr) {
-            xSemaphoreGive(wifiHttpMutex);
+            Serial.println("[API Foninis Siuntėjas] Nepavyko paruošti HTTPS užklausos.");
           }
         }
-      } else {
-        Serial.println("[API Foninis Siuntėjas] Wi-Fi neprisijungtas, paketas praleistas.");
+        xSemaphoreGive(wifiHttpMutex);
       }
       free(msg.payload);
     }
@@ -1815,6 +1823,7 @@ void sendToAPI(const JsonDocument& doc) {
 #else
 void sendToAPI(const JsonDocument& doc) {
 #endif
+  if (telemetryPaused || !activeConfig.botId.length() || time(nullptr) < 1700000000UL) return;
   String jsonString;
   serializeJson(doc, jsonString);
 

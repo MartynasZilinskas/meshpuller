@@ -4,57 +4,82 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
-#include <DNSServer.h>
-#include <ESPmDNS.h>
 #include <Preferences.h>
 #include <ArduinoJson.h>
+#include <atomic>
+#include <ctype.h>
+#include <esp_random.h>
+#include <nvs.h>
+#include <type_traits>
 #include "config.h"
 #include "MeshCrypto.h"
 
 // ================================================================================
 // 🚀 AKTYVIŲ NUSTATYMŲ KINTAMIEJI (APIBRĖŽIMAS)
 // ================================================================================
-String WIFI_SSID = DEFAULT_WIFI_SSID;
-String WIFI_PASSWORD = DEFAULT_WIFI_PASSWORD;
-String BOT_ID = DEFAULT_BOT_ID;
-unsigned long REPEATER_REPLY_TIMEOUT_MS = DEFAULT_REPEATER_REPLY_TIMEOUT_MS;
-unsigned long REPEATER_REMOTE_REPLY_TIMEOUT_MS = DEFAULT_REPEATER_REMOTE_REPLY_TIMEOUT_MS;
-unsigned long INTER_REQUEST_DELAY_MS = DEFAULT_INTER_REQUEST_DELAY_MS;
-unsigned long REPEATER_COOLDOWN_MS = DEFAULT_REPEATER_COOLDOWN_MS;
-String MY_SEED_HEX = DEFAULT_MY_SEED_HEX;
-String MY_PUBKEY_HEX = DEFAULT_MY_PUBKEY_HEX;
-String MY_PRVKEY_HEX = DEFAULT_MY_PRVKEY_HEX;
-unsigned long TELEMETRY_REQUEST_INTERVAL_MS = DEFAULT_TELEMETRY_REQUEST_INTERVAL_MS;
-uint8_t PATH_HASH_BITS = DEFAULT_PATH_HASH_BITS;
-bool ENABLE_SCOPE = DEFAULT_ENABLE_SCOPE;
-String SCOPE_NAME = DEFAULT_SCOPE_NAME;
+struct BotConfig {
+  String wifiSsid = DEFAULT_WIFI_SSID;
+  String wifiPassword = DEFAULT_WIFI_PASSWORD;
+  String botId = DEFAULT_BOT_ID;
+  String seed = DEFAULT_MY_SEED_HEX;
+  String scope = DEFAULT_SCOPE_NAME;
+  unsigned long replyTimeout = DEFAULT_REPEATER_REPLY_TIMEOUT_MS;
+  unsigned long remoteTimeout = DEFAULT_REPEATER_REMOTE_REPLY_TIMEOUT_MS;
+  unsigned long interDelay = DEFAULT_INTER_REQUEST_DELAY_MS;
+  unsigned long cooldown = DEFAULT_REPEATER_COOLDOWN_MS;
+  unsigned long interval = DEFAULT_TELEMETRY_REQUEST_INTERVAL_MS;
+  uint8_t pathBits = DEFAULT_PATH_HASH_BITS;
+  bool scopeEnabled = DEFAULT_ENABLE_SCOPE;
+};
 
-// Web serverio ir DNS serverio objektai (Portas 80 ir Captive Portal DNS 53)
-WebServer webServer(80);
-DNSServer dnsServer;
+static BotConfig activeConfig;
+static BotConfig savedConfig;
+static BotConfig legacyRecoveryConfig;
+static bool recoveringLegacyConfig = false;
+static std::atomic<bool> telemetryPaused{false};
+extern SemaphoreHandle_t wifiHttpMutex;
+String MY_PUBKEY_HEX;
+
+// The setup page is accessed directly over the temporary AP.
+const IPAddress webConfigIP(192, 168, 4, 1);
+const IPAddress webConfigMask(255, 255, 255, 0);
+WebServer webServer(webConfigIP, 80);
 
 // AP būsenos ir automatinio išjungimo kintamieji (10 min. limitas)
 static bool apActive = false;
-static unsigned long apStartTime = 0;
 static unsigned long lastApActivityTime = 0;
 
 inline bool isWebConfigAPActive() {
   return apActive;
 }
 
+inline bool stationConflictsWithSetupAP() {
+  if (!WiFi.AP.started() || WiFi.status() != WL_CONNECTED) return false;
+  const uint32_t apMask = webConfigMask;
+  const uint32_t sharedMask = apMask & static_cast<uint32_t>(WiFi.subnetMask());
+  const uint32_t apIP = webConfigIP;
+  return (static_cast<uint32_t>(WiFi.localIP()) & sharedMask) == (apIP & sharedMask) ||
+         (static_cast<uint32_t>(WiFi.gatewayIP()) & apMask) == (apIP & apMask);
+}
+
+inline bool activeStationConnected() {
+  return !telemetryPaused && activeConfig.wifiSsid.length() && WiFi.status() == WL_CONNECTED &&
+         WiFi.SSID() == activeConfig.wifiSsid && !stationConflictsWithSetupAP();
+}
+
+inline const BotConfig& editableConfig() {
+  return recoveringLegacyConfig ? legacyRecoveryConfig : savedConfig;
+}
+
 inline void stopWebConfigAP() {
   if (!apActive) return;
   apActive = false;
-  dnsServer.stop();
   webServer.stop();
   WiFi.softAPdisconnect(true);
   WiFi.enableAP(false);
   WiFi.mode(WIFI_STA);
   Serial.println("[WebPortal] Wi-Fi AP ('MeshPuller') pilnai išjungtas ir paslėptas.");
 }
-
-// Pirmyn deklaruojame pagrindinio kodo funkcijas
-void generateSelfIdentity();
 
 // ================================================================================
 // 🛠️ PAGALBINĖS HEKSADECIMALIOS FUNKCIJOS
@@ -69,6 +94,8 @@ inline bool hexStringToBytes(const char* hexStr, uint8_t* outBytes, size_t maxLe
   outLen = hexLen / 2;
   for (size_t i = 0; i < outLen; i++) {
     char byteStr[3] = { hexStr[i * 2], hexStr[i * 2 + 1], '\0' };
+    if (!isxdigit(static_cast<unsigned char>(byteStr[0])) ||
+        !isxdigit(static_cast<unsigned char>(byteStr[1]))) return false;
     outBytes[i] = (uint8_t)strtoul(byteStr, nullptr, 16);
   }
   return true;
@@ -89,79 +116,157 @@ inline String bytesToHexString(const uint8_t* buf, size_t len) {
 // ================================================================================
 // 💾 NVS (VIDINĖS FLASH ATMINTIES) VALDYMAS PER PREFERENCES
 // ================================================================================
-inline void initConfigNVS() {
-  Preferences prefs;
-  if (!prefs.begin("meshbot", true)) { // Read-only bandymas
-    Serial.println("[NVS] NVS inicializavimas... Pirmasis paleidimas arba tuščia atmintis.");
-  } else {
-    WIFI_SSID = prefs.getString("wifi_ssid", DEFAULT_WIFI_SSID);
-    WIFI_PASSWORD = prefs.getString("wifi_pass", DEFAULT_WIFI_PASSWORD);
-    BOT_ID = prefs.getString("bot_id", DEFAULT_BOT_ID);
-    REPEATER_REPLY_TIMEOUT_MS = prefs.getULong("rep_timeout", DEFAULT_REPEATER_REPLY_TIMEOUT_MS);
-    REPEATER_REMOTE_REPLY_TIMEOUT_MS = prefs.getULong("rem_timeout", DEFAULT_REPEATER_REMOTE_REPLY_TIMEOUT_MS);
-    INTER_REQUEST_DELAY_MS = prefs.getULong("inter_delay", DEFAULT_INTER_REQUEST_DELAY_MS);
-    REPEATER_COOLDOWN_MS = prefs.getULong("rep_cooldown", DEFAULT_REPEATER_COOLDOWN_MS);
-    MY_SEED_HEX = prefs.getString("seed_hex", DEFAULT_MY_SEED_HEX);
-    MY_PUBKEY_HEX = prefs.getString("pubkey_hex", DEFAULT_MY_PUBKEY_HEX);
-    MY_PRVKEY_HEX = prefs.getString("prvkey_hex", DEFAULT_MY_PRVKEY_HEX);
-    TELEMETRY_REQUEST_INTERVAL_MS = prefs.getULong("telem_intvl", DEFAULT_TELEMETRY_REQUEST_INTERVAL_MS);
-    PATH_HASH_BITS = prefs.getUChar("path_bits", DEFAULT_PATH_HASH_BITS);
-    ENABLE_SCOPE = prefs.getBool("en_scope", DEFAULT_ENABLE_SCOPE);
-    SCOPE_NAME = prefs.getString("scope_name", DEFAULT_SCOPE_NAME);
-    prefs.end();
-    Serial.println("[NVS] Nustatymai sėkmingai užkrauti iš vidinės flash atminties.");
-    return;
+inline bool validBotId(const String& botId) {
+  if (botId.length() > 16) return false;
+  for (size_t i = 0; i < botId.length(); ++i) {
+    char c = botId[i];
+    if (!(c >= 'A' && c <= 'Z') && !(c >= 'a' && c <= 'z') &&
+        !(c >= '0' && c <= '9') && c != '-' && c != '_') return false;
   }
-
-  Serial.println("[NVS] Naudojami numatytieji nustatymai iš config.h.");
+  return true; // Empty means the device has not been provisioned.
 }
 
-inline bool saveConfigToNVS() {
+inline bool decodeSeed(const String& hex, uint8_t (&seed)[SEED_SIZE]) {
+  size_t len = 0;
+  return strlen(hex.c_str()) == hex.length() &&
+         hexStringToBytes(hex.c_str(), seed, sizeof(seed), len) && len == sizeof(seed);
+}
+
+inline bool validConfig(const BotConfig& cfg, bool allowMissingSeed = false) {
+  uint8_t seed[SEED_SIZE];
+  return validBotId(cfg.botId) && cfg.wifiSsid.length() <= 32 && cfg.wifiPassword.length() <= 64 &&
+         (cfg.pathBits == 8 || cfg.pathBits == 16 || cfg.pathBits == 24) &&
+         ((allowMissingSeed && !cfg.seed.length()) || decodeSeed(cfg.seed, seed));
+}
+
+inline void writeConfigFields(JsonDocument& doc, const BotConfig& cfg) {
+  doc["WIFI_SSID"] = cfg.wifiSsid;
+  doc["BOT_ID"] = cfg.botId;
+  doc["REPEATER_REPLY_TIMEOUT_MS"] = cfg.replyTimeout;
+  doc["REPEATER_REMOTE_REPLY_TIMEOUT_MS"] = cfg.remoteTimeout;
+  doc["INTER_REQUEST_DELAY_MS"] = cfg.interDelay;
+  doc["REPEATER_COOLDOWN_MS"] = cfg.cooldown;
+  doc["TELEMETRY_REQUEST_INTERVAL_MS"] = cfg.interval;
+  doc["PATH_HASH_BITS"] = cfg.pathBits;
+  doc["ENABLE_SCOPE"] = cfg.scopeEnabled;
+  doc["SCOPE_NAME"] = cfg.scope;
+}
+
+inline bool readConfigFields(JsonObjectConst obj, BotConfig& cfg, bool required) {
+  if (obj.isNull()) return false;
+  auto read = [obj, required](const char* key, auto& value) {
+    using T = typename std::decay<decltype(value)>::type;
+    if (!required && !obj.containsKey(key)) return true;
+    if (!obj[key].is<T>()) return false;
+    value = obj[key].as<T>();
+    return true;
+  };
+  return read("WIFI_SSID", cfg.wifiSsid) && read("BOT_ID", cfg.botId) &&
+         read("REPEATER_REPLY_TIMEOUT_MS", cfg.replyTimeout) &&
+         read("REPEATER_REMOTE_REPLY_TIMEOUT_MS", cfg.remoteTimeout) &&
+         read("INTER_REQUEST_DELAY_MS", cfg.interDelay) && read("REPEATER_COOLDOWN_MS", cfg.cooldown) &&
+         read("TELEMETRY_REQUEST_INTERVAL_MS", cfg.interval) && read("PATH_HASH_BITS", cfg.pathBits) &&
+         read("ENABLE_SCOPE", cfg.scopeEnabled) && read("SCOPE_NAME", cfg.scope);
+}
+
+// One NVS value keeps settings and identity together across a failed or interrupted save.
+constexpr char configKey[] = "provision_v1";
+constexpr size_t configMaxBytes = 3072; // Includes terminator; below NVS's 4000-byte limit.
+
+inline bool saveConfigToNVS(BotConfig& candidate) {
+  if (!candidate.seed.length()) {
+    if (!isWebConfigAPActive()) return false;
+    uint8_t seed[SEED_SIZE];
+    esp_fill_random(seed, sizeof(seed));
+    candidate.seed = bytesToHexString(seed, sizeof(seed));
+  }
+  if (!validConfig(candidate)) return false;
+  JsonDocument doc;
+  writeConfigFields(doc, candidate);
+  doc["WIFI_PASSWORD"] = candidate.wifiPassword;
+  doc["MY_SEED_HEX"] = candidate.seed;
+  size_t size = measureJson(doc);
+  if (doc.overflowed() || size >= configMaxBytes) return false;
+  String json;
+  if (serializeJson(doc, json) != size || json.length() != size) return false;
+
   Preferences prefs;
-  if (!prefs.begin("meshbot", false)) { // Read-write
-    Serial.println("[NVS Klaida] Nepavyko atidaryti NVS įrašymui!");
+  if (!prefs.begin("meshbot", false) || prefs.putString(configKey, json) != size) {
+    telemetryPaused = true;
     return false;
   }
-  prefs.putString("wifi_ssid", WIFI_SSID);
-  prefs.putString("wifi_pass", WIFI_PASSWORD);
-  prefs.putString("bot_id", BOT_ID);
-  prefs.putULong("rep_timeout", REPEATER_REPLY_TIMEOUT_MS);
-  prefs.putULong("rem_timeout", REPEATER_REMOTE_REPLY_TIMEOUT_MS);
-  prefs.putULong("inter_delay", INTER_REQUEST_DELAY_MS);
-  prefs.putULong("rep_cooldown", REPEATER_COOLDOWN_MS);
-  prefs.putString("seed_hex", MY_SEED_HEX);
-  prefs.putString("pubkey_hex", MY_PUBKEY_HEX);
-  prefs.putString("prvkey_hex", MY_PRVKEY_HEX);
-  prefs.putULong("telem_intvl", TELEMETRY_REQUEST_INTERVAL_MS);
-  prefs.putUChar("path_bits", PATH_HASH_BITS);
-  prefs.putBool("en_scope", ENABLE_SCOPE);
-  prefs.putString("scope_name", SCOPE_NAME);
-  prefs.end();
-  Serial.println("[NVS] Visi nustatymai sėkmingai išsaugoti į NVS.");
+  savedConfig = candidate;
+  recoveringLegacyConfig = false;
   return true;
 }
 
-inline void resetConfigNVS() {
-  Preferences prefs;
-  prefs.begin("meshbot", false);
-  prefs.clear();
-  prefs.end();
+inline bool initConfigNVS() {
+  BotConfig candidate;
+  nvs_handle_t handle;
+  esp_err_t err = nvs_open("meshbot", NVS_READONLY, &handle);
+  if (err == ESP_ERR_NVS_NOT_FOUND) return saveConfigToNVS(candidate);
+  if (err != ESP_OK) return false;
 
-  WIFI_SSID = DEFAULT_WIFI_SSID;
-  WIFI_PASSWORD = DEFAULT_WIFI_PASSWORD;
-  BOT_ID = DEFAULT_BOT_ID;
-  REPEATER_REPLY_TIMEOUT_MS = DEFAULT_REPEATER_REPLY_TIMEOUT_MS;
-  REPEATER_REMOTE_REPLY_TIMEOUT_MS = DEFAULT_REPEATER_REMOTE_REPLY_TIMEOUT_MS;
-  INTER_REQUEST_DELAY_MS = DEFAULT_INTER_REQUEST_DELAY_MS;
-  REPEATER_COOLDOWN_MS = DEFAULT_REPEATER_COOLDOWN_MS;
-  MY_SEED_HEX = DEFAULT_MY_SEED_HEX;
-  MY_PUBKEY_HEX = DEFAULT_MY_PUBKEY_HEX;
-  MY_PRVKEY_HEX = DEFAULT_MY_PRVKEY_HEX;
-  TELEMETRY_REQUEST_INTERVAL_MS = DEFAULT_TELEMETRY_REQUEST_INTERVAL_MS;
-  PATH_HASH_BITS = DEFAULT_PATH_HASH_BITS;
-  ENABLE_SCOPE = DEFAULT_ENABLE_SCOPE;
-  SCOPE_NAME = DEFAULT_SCOPE_NAME;
-  Serial.println("[NVS] Nustatymai atstatyti į pradines config.h reikšmes.");
+  size_t len = 0;
+  err = nvs_get_str(handle, configKey, nullptr, &len);
+  if (err == ESP_OK && len > 0 && len <= configMaxBytes) {
+    char json[configMaxBytes];
+    err = nvs_get_str(handle, configKey, json, &len);
+    nvs_close(handle);
+    JsonDocument doc;
+    if (err != ESP_OK || deserializeJson(doc, json, len - 1) ||
+        !readConfigFields(doc.as<JsonObjectConst>(), candidate, true) ||
+        !doc["WIFI_PASSWORD"].is<const char*>() || !doc["MY_SEED_HEX"].is<const char*>()) return false;
+    candidate.wifiPassword = doc["WIFI_PASSWORD"].as<String>();
+    candidate.seed = doc["MY_SEED_HEX"].as<String>();
+    if (!validConfig(candidate)) return false;
+    savedConfig = candidate;
+    return true;
+  }
+  if (err != ESP_ERR_NVS_NOT_FOUND) {
+    nvs_close(handle);
+    return false;
+  }
+
+  // An unreadable legacy seed is not a missing seed; never silently rotate it.
+  size_t legacySeedLen = 0;
+  err = nvs_get_str(handle, "seed_hex", nullptr, &legacySeedLen);
+  if (err == ESP_OK) {
+    char legacySeed[2 * SEED_SIZE + 3]; // Also accepts the historical optional 0x prefix.
+    if (legacySeedLen <= sizeof(legacySeed)) {
+      err = nvs_get_str(handle, "seed_hex", legacySeed, &legacySeedLen);
+      if (err == ESP_OK) candidate.seed = legacySeed;
+    }
+    if (err != ESP_OK || candidate.seed.length() + 1 != legacySeedLen) {
+      nvs_close(handle);
+      return false;
+    }
+  } else if (err != ESP_ERR_NVS_NOT_FOUND) {
+    nvs_close(handle);
+    return false;
+  }
+  nvs_close(handle);
+
+  Preferences prefs;
+  if (!prefs.begin("meshbot", true)) return false;
+  candidate.wifiSsid = prefs.getString("wifi_ssid", DEFAULT_WIFI_SSID);
+  candidate.wifiPassword = prefs.getString("wifi_pass", DEFAULT_WIFI_PASSWORD);
+  candidate.botId = prefs.getString("bot_id", DEFAULT_BOT_ID);
+  candidate.replyTimeout = prefs.getULong("rep_timeout", DEFAULT_REPEATER_REPLY_TIMEOUT_MS);
+  candidate.remoteTimeout = prefs.getULong("rem_timeout", DEFAULT_REPEATER_REMOTE_REPLY_TIMEOUT_MS);
+  candidate.interDelay = prefs.getULong("inter_delay", DEFAULT_INTER_REQUEST_DELAY_MS);
+  candidate.cooldown = prefs.getULong("rep_cooldown", DEFAULT_REPEATER_COOLDOWN_MS);
+  candidate.interval = prefs.getULong("telem_intvl", DEFAULT_TELEMETRY_REQUEST_INTERVAL_MS);
+  candidate.pathBits = prefs.getUChar("path_bits", DEFAULT_PATH_HASH_BITS);
+  candidate.scopeEnabled = prefs.getBool("en_scope", DEFAULT_ENABLE_SCOPE);
+  candidate.scope = prefs.getString("scope_name", DEFAULT_SCOPE_NAME);
+  prefs.end();
+  if (saveConfigToNVS(candidate)) return true;
+  if (validConfig(candidate, true)) {
+    legacyRecoveryConfig = candidate;
+    recoveringLegacyConfig = true;
+  }
+  return false;
 }
 
 // ================================================================================
@@ -251,6 +356,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       border-radius: 999px;
       font-size: 0.75rem;
       font-weight: 600;
+      overflow-wrap: anywhere;
       background: rgba(255,255,255,0.05);
       border: 1px solid var(--card-border);
     }
@@ -307,6 +413,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       align-items: center;
       flex-wrap: wrap;
       gap: 16px;
+      overflow-wrap: anywhere;
     }
     .signal-meter {
       display: flex;
@@ -404,22 +511,30 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       display: flex;
       justify-content: space-between;
       align-items: center;
+      gap: 10px;
+      width: 100%;
       padding: 10px 14px;
+      background: transparent;
+      border: 0;
       border-bottom: 1px solid rgba(255,255,255,0.04);
+      font: inherit;
+      text-align: left;
       cursor: pointer;
       transition: background 0.15s;
     }
     .net-item:last-child { border-bottom: none; }
+    .net-item:focus-visible { outline: 2px solid var(--cyan); outline-offset: -2px; }
     .net-item:hover {
       background: rgba(56, 189, 248, 0.08);
     }
     .net-item.selected {
       background: rgba(56, 189, 248, 0.15);
-      border-left: 3px solid var(--cyan);
+      box-shadow: inset 3px 0 var(--cyan);
     }
     .net-name {
       font-weight: 600;
       color: #fff;
+      overflow-wrap: anywhere;
     }
     .net-meta {
       display: flex;
@@ -428,6 +543,8 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       font-size: 0.78rem;
       color: var(--text-muted);
     }
+    .scan-message { padding: 14px; text-align: center; color: var(--text-muted); overflow-wrap: anywhere; }
+    .scan-message.error { color: #f87171; }
 
     .form-grid {
       display: grid;
@@ -458,6 +575,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       display: flex;
       align-items: center;
     }
+    .input-wrap > input { padding-right: 42px; }
     input, select {
       width: 100%;
       background: #0a0f1d;
@@ -541,6 +659,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       border-radius: 8px;
       margin-top: 12px;
       font-size: 0.82rem;
+      overflow-wrap: anywhere;
       display: none;
     }
     .alert.success {
@@ -567,6 +686,8 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       bottom: 24px;
       right: 24px;
       padding: 12px 20px;
+      max-width: calc(100% - 48px);
+      overflow-wrap: anywhere;
       background: #1e293b;
       color: #fff;
       border-radius: 8px;
@@ -648,8 +769,23 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
       <!-- Nuskenuotų tinklų sąrašas -->
       <div id="scanWrap" style="display:none;">
-        <label>Aptikti Wi-Fi tinklai <span class="label-hint">(paspauskite ant tinklo, kad užpildytumėte SSID)</span></label>
-        <div class="network-list" id="networkList"></div>
+        <label id="scanLabel">Aptikti Wi-Fi tinklai <span class="label-hint">(pasirinkite tinklą, kad užpildytumėte SSID)</span></label>
+        <div class="network-list" id="networkList" role="group" aria-labelledby="scanLabel"></div>
+        <template id="networkRow">
+          <button type="button" class="net-item" aria-pressed="false">
+            <span class="net-name"></span>
+            <span class="net-meta">
+              <span class="net-auth"></span>
+              <span class="net-rssi" style="font-weight:700;"></span>
+              <span class="signal-bars" style="height:14px;" aria-hidden="true">
+                <span class="bar b1"></span>
+                <span class="bar b2"></span>
+                <span class="bar b3"></span>
+                <span class="bar b4"></span>
+              </span>
+            </span>
+          </button>
+        </template>
       </div>
 
       <!-- Prisijungimo forma -->
@@ -659,24 +795,24 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
           <input type="text" id="WIFI_SSID" placeholder="Pvz. 2.4GHz arba ManoTinklas">
         </div>
         <div class="form-group">
-          <label for="WIFI_PASSWORD">Wi-Fi Slaptažodis</label>
+          <label for="WIFI_PASSWORD">Wi-Fi Slaptažodis <span class="label-hint">(jei SSID nekeičiate, tuščias laukas palieka išsaugotą slaptažodį; pakeitus SSID, jis reiškia atvirą tinklą)</span></label>
           <div class="input-wrap">
-            <input type="password" id="WIFI_PASSWORD" placeholder="Įveskite tinklo slaptažodį">
-            <button type="button" class="toggle-pass" onclick="togglePass('WIFI_PASSWORD', this)">👁️</button>
+            <input type="password" id="WIFI_PASSWORD" autocomplete="new-password" spellcheck="false" placeholder="Įveskite tinklo slaptažodį">
+            <button type="button" class="toggle-pass" aria-label="Rodyti Wi-Fi slaptažodį" aria-pressed="false" onclick="togglePass('WIFI_PASSWORD', this)">👁️</button>
           </div>
         </div>
       </div>
 
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-top:8px;">
         <div style="font-size:0.78rem; color:var(--text-dim);">
-          Spauskite „Prisijungti“, jei norite išbandyti ryšį dabar. Sėkmingai prisijungus, duomenys automatiškai išsaugomi į atmintį.
+          „Prisijungti dabar“ iškart išbando ryšį. Jei pavyksta, išsaugomi tik Wi-Fi nustatymai.
         </div>
         <button type="button" class="btn btn-success" id="btnConnect" onclick="connectWifi()">
           <span>⚡ Prisijungti dabar</span>
         </button>
       </div>
 
-      <div id="connectAlert" class="alert"></div>
+      <div id="connectAlert" class="alert" role="status"></div>
     </div>
 
     <!-- KORTELĖ 2: BOTO IR PERIODIŠKUMO NUSTATYMAI -->
@@ -689,7 +825,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       <div class="form-grid">
         <div class="form-group">
           <label for="BOT_ID">BOT_ID <span class="label-hint">(3-16 simbolių boto ID)</span></label>
-          <input type="text" id="BOT_ID" maxlength="16" placeholder="KLP">
+          <input type="text" id="BOT_ID" maxlength="16">
         </div>
         <div class="form-group">
           <label for="TELEMETRY_REQUEST_INTERVAL_MS">TELEMETRY_REQUEST_INTERVAL_MS <span class="label-hint">(Ciklo intervalas, ms)</span></label>
@@ -720,23 +856,31 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <div class="card-title">
           <span>🔑 Kriptografija & Ed25519 Raktai</span>
         </div>
-        <button type="button" class="btn btn-secondary btn-sm" id="btnGenKeys" onclick="generateAllKeys()">
-          <span>🎲 Generuoti visus raktus</span>
-        </button>
+        <div class="status-chips">
+          <button type="button" class="btn btn-secondary btn-sm" id="btnPreviewKeys" onclick="generateKeys(true)">
+            <span>Peržiūrėti sėklos raktus</span>
+          </button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btnGenKeys" onclick="generateKeys(false)">
+            <span>🎲 Generuoti visus raktus</span>
+          </button>
+        </div>
       </div>
       <div class="form-group">
-        <label for="MY_SEED_HEX">MY_SEED_HEX <span class="label-hint">(32 baitai / 64 hex simboliai – mūsų tapatybės sėkla)</span></label>
-        <input type="text" id="MY_SEED_HEX" class="mono" placeholder="4a9232cb...">
-      </div>
-      <div class="form-group">
-        <label for="MY_PUBKEY_HEX">MY_PUBKEY_HEX <span class="label-hint">(32 baitai / 64 hex simboliai – Ed25519 viešasis raktas tinkle)</span></label>
-        <input type="text" id="MY_PUBKEY_HEX" class="mono" placeholder="0bbd84b0...">
-      </div>
-      <div class="form-group">
-        <label for="MY_PRVKEY_HEX">MY_PRVKEY_HEX <span class="label-hint">(64 baitai / 128 hex simboliai – privatus raktas)</span></label>
+        <label for="MY_SEED_HEX">MY_SEED_HEX <span class="label-hint">(64 hex simboliai; palikite tuščią, jei tapatybės nekeičiate)</span></label>
         <div class="input-wrap">
-          <input type="password" id="MY_PRVKEY_HEX" class="mono" placeholder="4a9232cb...">
-          <button type="button" class="toggle-pass" onclick="togglePass('MY_PRVKEY_HEX', this)">👁️</button>
+          <input type="password" id="MY_SEED_HEX" class="mono" autocomplete="new-password" spellcheck="false">
+          <button type="button" class="toggle-pass" aria-label="Rodyti tapatybės sėklą" aria-pressed="false" onclick="togglePass('MY_SEED_HEX', this)">👁️</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="MY_PUBKEY_HEX">MY_PUBKEY_HEX <span class="label-hint">(išsaugotos arba peržiūrimos Ed25519 tapatybės viešasis raktas)</span></label>
+        <input type="text" id="MY_PUBKEY_HEX" class="mono" readonly>
+      </div>
+      <div class="form-group">
+        <label for="MY_PRVKEY_HEX">MY_PRVKEY_HEX <span class="label-hint">(privataus rakto peržiūra; išsaugotas raktas nerodomas)</span></label>
+        <div class="input-wrap">
+          <input type="password" id="MY_PRVKEY_HEX" class="mono" readonly autocomplete="off" spellcheck="false">
+          <button type="button" class="toggle-pass" aria-label="Rodyti privatų raktą" aria-pressed="false" onclick="togglePass('MY_PRVKEY_HEX', this)">👁️</button>
         </div>
       </div>
     </div>
@@ -773,79 +917,160 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     </div>
 
     <!-- VEIKSMŲ MYGTUKŲ JUOSTA -->
+    <p>Išsaugoti arba atstatyti nustatymai įsigalios tik perkrovus ESP32.</p>
     <div class="actions-bar">
-      <button type="button" class="btn btn-danger btn-sm" onclick="resetDefaults()">
+      <button type="button" class="btn btn-danger btn-sm" id="btnReset" onclick="resetDefaults()">
         <span>↺ Atstatyti numatytuosius (iš config.h)</span>
       </button>
-      <button type="button" class="btn btn-secondary" onclick="restartDevice()">
+      <button type="button" class="btn btn-secondary" id="btnRestart" onclick="restartDevice()">
         <span>⚡ Perkrauti ESP32</span>
       </button>
-      <button type="button" class="btn btn-secondary" onclick="saveSettings(false)">
+      <button type="button" class="btn btn-secondary" id="btnSave" onclick="saveSettings(false)" disabled>
         <span>💾 Išsaugoti nustatymus</span>
       </button>
-      <button type="button" class="btn" onclick="saveSettings(true)">
+      <button type="button" class="btn" id="btnSaveRestart" onclick="saveSettings(true)" disabled>
         <span>🔄 Išsaugoti ir perkrauti</span>
       </button>
     </div>
+    <div id="settingsAlert" class="alert" role="status"></div>
   </div>
 
-  <div id="toast" class="toast">Nustatymai išsaugoti</div>
+  <div id="toast" class="toast" role="status"></div>
 
   <script>
+    const numericSettings = [
+      'TELEMETRY_REQUEST_INTERVAL_MS', 'REPEATER_REPLY_TIMEOUT_MS',
+      'REPEATER_REMOTE_REPLY_TIMEOUT_MS', 'INTER_REQUEST_DELAY_MS',
+      'REPEATER_COOLDOWN_MS', 'PATH_HASH_BITS'
+    ];
+    const reconnectInstructions = 'Po perkrovimo vėl prisijunkite prie atviro konfigūravimo Wi-Fi tinklo ir atverkite http://192.168.4.1/.';
+    let savedPublicKey = '';
+    let settingsReady = false;
+    let portalWritePending = false;
+    let restartAccepted = false;
+    let statusPoll;
+
+    function setSettingsReady(ready) {
+      settingsReady = ready;
+      updateActions();
+    }
+
+    function updateActions() {
+      for (const id of ['btnSave', 'btnSaveRestart']) {
+        document.getElementById(id).disabled = !settingsReady || portalWritePending;
+      }
+      for (const id of ['btnConnect', 'btnReset', 'btnRestart']) {
+        document.getElementById(id).disabled = portalWritePending;
+      }
+    }
+
+    function beginPortalWrite() {
+      portalWritePending = true;
+      updateActions();
+      return () => {
+        portalWritePending = false;
+        updateActions();
+      };
+    }
+
+    async function requestJson(path, fallback, payload) {
+      const options = {mode: 'same-origin', cache: 'no-store'};
+      if (payload !== undefined) {
+        options.method = 'POST';
+        options.headers = {'Content-Type': 'application/json'};
+        options.body = JSON.stringify(payload);
+      }
+      const res = await fetch(path, options);
+      const contentType = res.headers.get('Content-Type') || '';
+      const data = contentType.includes('application/json') ? await res.json().catch(() => null) : null;
+      if (!res.ok || data?.success === false || (payload !== undefined && data?.success !== true)) {
+        const message = [data?.message, data?.error].find(text => typeof text === 'string' && text);
+        const detail = message || (!res.ok && contentType.startsWith('text/plain') ? await res.text() : '');
+        throw new Error(detail || (res.ok ? fallback : `${fallback} (HTTP ${res.status})`));
+      }
+      if (!data) throw new Error(fallback);
+      return data;
+    }
+
+    function startBusy(btn, message) {
+      const label = btn.firstElementChild;
+      const previous = label.textContent;
+      const spinner = document.createElement('span');
+      spinner.className = 'spinner';
+      spinner.setAttribute('aria-hidden', 'true');
+      btn.prepend(spinner);
+      label.textContent = message;
+      btn.disabled = true;
+      return () => {
+        spinner.remove();
+        label.textContent = previous;
+        btn.disabled = restartAccepted;
+      };
+    }
+
+    let toastTimer;
     function showToast(msg, type='info') {
       const t = document.getElementById('toast');
-      t.innerText = msg;
+      t.textContent = msg;
       t.style.borderLeftColor = (type === 'success') ? 'var(--green)' : (type === 'error' ? 'var(--red)' : 'var(--cyan)');
       t.classList.add('show');
-      setTimeout(() => t.classList.remove('show'), 3500);
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
     }
 
     function togglePass(id, btn) {
       const el = document.getElementById(id);
-      if (el.type === 'password') {
-        el.type = 'text';
-        btn.innerText = '🔒';
-      } else {
-        el.type = 'password';
-        btn.innerText = '👁️';
-      }
+      const show = el.type === 'password';
+      el.type = show ? 'text' : 'password';
+      btn.textContent = show ? '🔒' : '👁️';
+      btn.setAttribute('aria-pressed', String(show));
     }
 
-    async function generateAllKeys() {
-      const btn = document.getElementById('btnGenKeys');
-      if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span> <span>Generuojama...</span>';
+    function clearSecret(id) {
+      const el = document.getElementById(id);
+      el.value = '';
+      if (el.type !== 'password') togglePass(id, el.nextElementSibling);
+    }
+
+    function clearKeyPreview() {
+      document.getElementById('MY_PUBKEY_HEX').value = savedPublicKey;
+      clearSecret('MY_PRVKEY_HEX');
+    }
+
+    async function generateKeys(preview) {
+      const seedField = document.getElementById('MY_SEED_HEX');
+      const original = seedField.value;
+      const seed = original.trim();
+      if (preview && !/^[a-f0-9]{64}$/i.test(seed)) {
+        showToast('Įveskite 64 šešioliktainius sėklos simbolius.', 'error');
+        seedField.focus();
+        return;
       }
+      const btn = document.getElementById(preview ? 'btnPreviewKeys' : 'btnGenKeys');
+      const other = document.getElementById(preview ? 'btnGenKeys' : 'btnPreviewKeys');
+      const finish = startBusy(btn, 'Generuojama...');
+      other.disabled = true;
       try {
-        const res = await fetch('/api/generate_keys', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({})
-        });
-        const data = await res.json();
-        if (data.success) {
-          document.getElementById('MY_SEED_HEX').value = data.seed;
-          document.getElementById('MY_PUBKEY_HEX').value = data.pubkey;
-          document.getElementById('MY_PRVKEY_HEX').value = data.prvkey;
-          showToast('Sugeneruoti nauji raktai: Seed, Viešasis ir Privatus!', 'success');
-        } else {
-          showToast('Nepavyko sugeneruoti raktų', 'error');
-        }
+        const data = await requestJson('/api/generate_keys', 'Nepavyko sugeneruoti raktų', preview ? { seed } : {});
+        if (restartAccepted || seedField.value !== original) return;
+        clearSecret('MY_SEED_HEX');
+        clearSecret('MY_PRVKEY_HEX');
+        seedField.value = data.seed;
+        document.getElementById('MY_PUBKEY_HEX').value = data.pubkey;
+        document.getElementById('MY_PRVKEY_HEX').value = data.prvkey;
+        showToast('Raktai paruošti peržiūrai. Norėdami pakeisti tapatybę, išsaugokite nustatymus.', 'success');
       } catch (err) {
-        showToast('Klaida: ' + err.message, 'error');
+        if (!restartAccepted) showToast(`Raktų generavimo klaida: ${err.message}`, 'error');
       } finally {
-        if (btn) {
-          btn.disabled = false;
-          btn.innerHTML = '<span>🎲 Generuoti visus raktus</span>';
-        }
+        finish();
+        other.disabled = restartAccepted;
       }
     }
 
     async function fetchStatus() {
       try {
-        const res = await fetch('/api/status');
-        const data = await res.json();
+        const data = await requestJson('/api/status', 'Nepavyko gauti Wi-Fi būsenos');
+        if (restartAccepted) return;
         
         const isConn = data.wifi_connected;
         const chip = document.getElementById('chipWifi');
@@ -896,227 +1121,242 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
           document.getElementById('stSignalQuality').innerText = 'Nėra ryšio';
         }
       } catch (err) {
-        console.warn('Status klaida:', err);
+        if (restartAccepted) return;
+        document.getElementById('chipWifi').className = 'chip';
+        document.getElementById('chipWifiText').textContent = 'Būsena nepasiekiama';
+        document.getElementById('chipStaIp').textContent = '—';
+        document.getElementById('stWifiName').textContent = 'Nepavyko gauti Wi-Fi būsenos';
+        document.getElementById('stWifiDetails').textContent = err.message;
+        document.getElementById('stSignalBars').className = 'signal-bars s0';
+        document.getElementById('stSignalDbm').textContent = '— dBm';
+        document.getElementById('stSignalQuality').textContent = 'Būsena nežinoma';
       }
+    }
+
+    function scanMessage(list, message, type) {
+      const note = document.createElement('div');
+      note.className = type === 'error' ? 'scan-message error' : 'scan-message';
+      note.setAttribute('role', 'status');
+      list.replaceChildren(note);
+      note.textContent = message;
     }
 
     async function scanWifi() {
       const btn = document.getElementById('btnScan');
       const list = document.getElementById('networkList');
       const wrap = document.getElementById('scanWrap');
-      btn.disabled = true;
-      btn.innerHTML = '<span class="spinner"></span> <span>Skenuojama...</span>';
+      const finish = startBusy(btn, 'Skenuojama...');
 
       try {
         wrap.style.display = 'block';
-        list.innerHTML = '<div style="padding:14px; text-align:center; color:var(--text-muted);"><span class="spinner"></span> Ieškoma aplinkinių Wi-Fi tinklų...</div>';
-        
-        const res = await fetch('/api/scan');
-        const data = await res.json();
-        const networks = data.networks || [];
+        scanMessage(list, 'Ieškoma aplinkinių Wi-Fi tinklų...');
+
+        const { networks } = await requestJson('/api/scan', 'Nepavyko nuskenuoti tinklų');
+        if (restartAccepted) return;
+        if (!Array.isArray(networks)) throw new Error('Negautas Wi-Fi tinklų sąrašas.');
 
         if (networks.length === 0) {
-          list.innerHTML = '<div style="padding:14px; text-align:center; color:var(--text-muted);">Tinklų neaptikta. Pabandykite dar kartą.</div>';
-        } else {
-          list.innerHTML = '';
-          networks.forEach(net => {
-            const item = document.createElement('div');
-            item.className = 'net-item';
-            
-            let sigClass = 's1';
-            if (net.rssi >= -60) sigClass = 's4';
-            else if (net.rssi >= -70) sigClass = 's3';
-            else if (net.rssi >= -82) sigClass = 's2';
+          scanMessage(list, 'Tinklų neaptikta. Pabandykite dar kartą.');
+          return;
+        }
 
-            item.innerHTML = `
-              <div class="net-name">${net.ssid || '<i>(Paslėptas SSID)</i>'}</div>
-              <div class="net-meta">
-                <span>${net.auth}</span>
-                <span style="font-weight:700;">${net.rssi} dBm</span>
-                <div class="signal-bars ${sigClass}" style="height:14px;">
-                  <div class="bar b1"></div>
-                  <div class="bar b2"></div>
-                  <div class="bar b3"></div>
-                  <div class="bar b4"></div>
-                </div>
-              </div>
-            `;
-            item.onclick = () => {
-              document.querySelectorAll('.net-item').forEach(el => el.classList.remove('selected'));
-              item.classList.add('selected');
-              document.getElementById('WIFI_SSID').value = net.ssid;
+        const template = document.getElementById('networkRow');
+        const rows = document.createDocumentFragment();
+        networks.forEach(net => {
+          const item = template.content.firstElementChild.cloneNode(true);
+          item.querySelector('.net-name').textContent = net.ssid || '(Paslėptas SSID)';
+          item.querySelector('.net-auth').textContent = net.auth;
+          item.querySelector('.net-rssi').textContent = `${net.rssi} dBm`;
+          const signal = net.rssi >= -60 ? 's4' : net.rssi >= -70 ? 's3' : net.rssi >= -82 ? 's2' : 's1';
+          item.querySelector('.signal-bars').classList.add(signal);
+          item.onclick = () => {
+            const previous = list.querySelector('.selected');
+            if (previous) {
+              previous.classList.remove('selected');
+              previous.setAttribute('aria-pressed', 'false');
+            }
+            item.classList.add('selected');
+            item.setAttribute('aria-pressed', 'true');
+            const ssidField = document.getElementById('WIFI_SSID');
+            if (ssidField.value !== net.ssid) clearSecret('WIFI_PASSWORD');
+            ssidField.value = net.ssid;
+            if (net.ssid) {
               document.getElementById('WIFI_PASSWORD').focus();
               showToast(`Pasirinktas tinklas: ${net.ssid}`);
-            };
-            list.appendChild(item);
-          });
-        }
+            } else {
+              ssidField.focus();
+              showToast('Paslėptas tinklas: įveskite jo SSID.');
+            }
+          };
+          rows.appendChild(item);
+        });
+        list.replaceChildren(rows);
+        showToast(`Aptikta tinklų: ${networks.length}`);
       } catch (err) {
-        list.innerHTML = `<div style="padding:14px; text-align:center; color:var(--red);">Klaida skenuojant: ${err.message}</div>`;
+        if (!restartAccepted) scanMessage(list, `Klaida skenuojant: ${err.message}`, 'error');
       } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<span>📡 Skenuoti tinklus</span>';
+        finish();
       }
     }
 
     async function connectWifi() {
+      if (portalWritePending) return;
       const btn = document.getElementById('btnConnect');
       const alert = document.getElementById('connectAlert');
-      const ssid = document.getElementById('WIFI_SSID').value.trim();
+      const ssid = document.getElementById('WIFI_SSID').value;
       const password = document.getElementById('WIFI_PASSWORD').value;
 
       if (!ssid) {
         alert.className = 'alert error';
-        alert.innerText = 'Prašome nurodyti Wi-Fi tinklo SSID!';
+        alert.textContent = 'Prašome nurodyti Wi-Fi tinklo SSID!';
+        document.getElementById('WIFI_SSID').focus();
         return;
       }
 
-      btn.disabled = true;
-      btn.innerHTML = '<span class="spinner"></span> <span>Jungiamasi...</span>';
+      const unlock = beginPortalWrite();
+      const finish = startBusy(btn, 'Jungiamasi...');
       alert.className = 'alert info';
-      alert.innerText = `Jungiamasi prie '${ssid}'... Tai gali užtrukti iki 15 sekundžių.`;
+      alert.textContent = `Jungiamasi prie '${ssid}'... Tai gali užtrukti iki 15 sekundžių.`;
 
       try {
-        const res = await fetch('/api/connect', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ ssid, password })
-        });
-        const data = await res.json();
-        
-        if (data.success) {
-          alert.className = 'alert success';
-          alert.innerText = `✅ ${data.message} IP: ${data.ip} | Signalas: ${data.rssi} dBm`;
-          showToast('Prisijungta sėkmingai!', 'success');
-          fetchStatus();
-        } else {
-          alert.className = 'alert error';
-          alert.innerText = `❌ ${data.error || 'Nepavyko prisijungti prie nurodyto Wi-Fi tinklo.'}`;
-        }
+        const data = await requestJson('/api/connect', 'Nepavyko prisijungti prie nurodyto Wi-Fi tinklo.', { ssid, password });
+        if (document.getElementById('WIFI_PASSWORD').value === password) clearSecret('WIFI_PASSWORD');
+        alert.className = 'alert success';
+        alert.textContent = `✅ ${data.message || 'Prisijungta sėkmingai!'} IP: ${data.ip} | Signalas: ${data.rssi} dBm`;
+        fetchStatus();
       } catch (err) {
         alert.className = 'alert error';
-        alert.innerText = `Klaida: ${err.message}`;
+        alert.textContent = `Prisijungimo klaida: ${err.message}`;
       } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<span>⚡ Prisijungti dabar</span>';
+        finish();
+        unlock();
       }
     }
 
-    async function loadSettings() {
+    function showSettingsStatus(message, type = '') {
+      const alert = document.getElementById('settingsAlert');
+      alert.className = type ? `alert ${type}` : 'alert';
+      alert.textContent = message;
+    }
+
+    async function loadSettings(savedMessage = '') {
+      setSettingsReady(false);
+      showSettingsStatus(savedMessage || 'Kraunami išsaugoti nustatymai...', 'info');
       try {
-        const res = await fetch('/api/settings');
-        const data = await res.json();
-        
-        document.getElementById('WIFI_SSID').value = data.WIFI_SSID || '';
-        document.getElementById('WIFI_PASSWORD').value = data.WIFI_PASSWORD || '';
-        document.getElementById('BOT_ID').value = data.BOT_ID || 'KLP';
-        document.getElementById('TELEMETRY_REQUEST_INTERVAL_MS').value = data.TELEMETRY_REQUEST_INTERVAL_MS || 60000;
-        document.getElementById('REPEATER_REPLY_TIMEOUT_MS').value = data.REPEATER_REPLY_TIMEOUT_MS || 12000;
-        document.getElementById('REPEATER_REMOTE_REPLY_TIMEOUT_MS').value = data.REPEATER_REMOTE_REPLY_TIMEOUT_MS || 30000;
-        document.getElementById('INTER_REQUEST_DELAY_MS').value = data.INTER_REQUEST_DELAY_MS || 10000;
-        document.getElementById('REPEATER_COOLDOWN_MS').value = data.REPEATER_COOLDOWN_MS || 10000;
-        document.getElementById('MY_SEED_HEX').value = data.MY_SEED_HEX || '';
-        document.getElementById('MY_PUBKEY_HEX').value = data.MY_PUBKEY_HEX || '';
-        document.getElementById('MY_PRVKEY_HEX').value = data.MY_PRVKEY_HEX || '';
-        document.getElementById('PATH_HASH_BITS').value = data.PATH_HASH_BITS || 16;
+        const data = await requestJson('/api/settings', 'Nepavyko įkelti nustatymų');
+        if (restartAccepted) return;
+
+        for (const id of ['WIFI_SSID', 'BOT_ID', 'SCOPE_NAME', ...numericSettings]) {
+          document.getElementById(id).value = data[id] ?? '';
+        }
+        savedPublicKey = data.MY_PUBKEY_HEX ?? '';
+        if (!document.getElementById('MY_PRVKEY_HEX').value) clearKeyPreview();
         document.getElementById('ENABLE_SCOPE').checked = !!data.ENABLE_SCOPE;
-        document.getElementById('SCOPE_NAME').value = data.SCOPE_NAME || 'lt';
+        showSettingsStatus(savedMessage, savedMessage ? 'success' : '');
+        setSettingsReady(true);
       } catch (err) {
-        console.error('Klaida kraunant nustatymus:', err);
+        if (restartAccepted) return;
+        showSettingsStatus(`${savedMessage ? `${savedMessage} ` : ''}Nustatymų įkėlimo klaida: ${err.message}. Įkelkite puslapį iš naujo.`, 'error');
       }
     }
 
     async function saveSettings(restartAfter) {
+      if (!settingsReady || portalWritePending) return;
+      const seedField = document.getElementById('MY_SEED_HEX');
+      const seed = seedField.value.trim();
+      if (seed && !/^[a-f0-9]{64}$/i.test(seed)) {
+        showToast('Įveskite 64 šešioliktainius sėklos simbolius arba palikite lauką tuščią.', 'error');
+        seedField.focus();
+        return;
+      }
       const payload = {
-        WIFI_SSID: document.getElementById('WIFI_SSID').value.trim(),
+        WIFI_SSID: document.getElementById('WIFI_SSID').value,
         WIFI_PASSWORD: document.getElementById('WIFI_PASSWORD').value,
         BOT_ID: document.getElementById('BOT_ID').value.trim(),
-        TELEMETRY_REQUEST_INTERVAL_MS: parseInt(document.getElementById('TELEMETRY_REQUEST_INTERVAL_MS').value, 10),
-        REPEATER_REPLY_TIMEOUT_MS: parseInt(document.getElementById('REPEATER_REPLY_TIMEOUT_MS').value, 10),
-        REPEATER_REMOTE_REPLY_TIMEOUT_MS: parseInt(document.getElementById('REPEATER_REMOTE_REPLY_TIMEOUT_MS').value, 10),
-        INTER_REQUEST_DELAY_MS: parseInt(document.getElementById('INTER_REQUEST_DELAY_MS').value, 10),
-        REPEATER_COOLDOWN_MS: parseInt(document.getElementById('REPEATER_COOLDOWN_MS').value, 10),
-        MY_SEED_HEX: document.getElementById('MY_SEED_HEX').value.trim(),
-        MY_PUBKEY_HEX: document.getElementById('MY_PUBKEY_HEX').value.trim(),
-        MY_PRVKEY_HEX: document.getElementById('MY_PRVKEY_HEX').value.trim(),
-        PATH_HASH_BITS: parseInt(document.getElementById('PATH_HASH_BITS').value, 10),
         ENABLE_SCOPE: document.getElementById('ENABLE_SCOPE').checked,
         SCOPE_NAME: document.getElementById('SCOPE_NAME').value.trim()
       };
-
-      try {
-        const res = await fetch('/api/settings', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json();
-        
-        if (data.success) {
-          showToast('Nustatymai sėkmingai išsaugoti į vidinę atmintį!', 'success');
-          if (restartAfter) {
-            setTimeout(() => restartDevice(), 600);
-          } else {
-            loadSettings();
-            fetchStatus();
-          }
-        } else {
-          showToast(data.error || 'Klaida išsaugant', 'error');
+      if (seed) payload.MY_SEED_HEX = seed;
+      for (const id of numericSettings) {
+        const field = document.getElementById(id);
+        const value = Number(field.value);
+        if (field.value === '' || !Number.isSafeInteger(value) || value < 0) {
+          showToast(`${id}: įveskite neneigiamą sveikąjį skaičių.`, 'error');
+          field.focus();
+          return;
         }
+        payload[id] = value;
+      }
+
+      const unlock = beginPortalWrite();
+      let restarting = false;
+      try {
+        await requestJson('/api/settings', 'Nepavyko išsaugoti nustatymų', payload);
+        clearSecret('WIFI_PASSWORD');
+        clearSecret('MY_SEED_HEX');
+        clearKeyPreview();
+        restarting = restartAfter && confirm(`Nustatymai išsaugoti. Perkrauti ESP32 dabar?\n\n${reconnectInstructions}`) && await requestRestart();
+        if (restarting) return;
+        await loadSettings('Nustatymai išsaugoti. Norėdami juos pritaikyti, spauskite „Perkrauti ESP32“.');
       } catch (err) {
-        showToast('Tinklo klaida išsaugant: ' + err.message, 'error');
+        showToast(`Nustatymų išsaugojimo klaida: ${err.message}`, 'error');
+      } finally {
+        if (!restarting) unlock();
       }
     }
 
     async function resetDefaults() {
-      if (!confirm('Ar tikrai norite atstatyti visus nustatymus į numatytuosius iš config.h?')) return;
+      if (portalWritePending) return;
+      if (!confirm('Pakeisti visus išsaugotus nustatymus numatytaisiais iš config.h? Jie įsigalios perkrovus ESP32.')) return;
+      const unlock = beginPortalWrite();
+      const btn = document.getElementById('btnReset');
+      const finish = startBusy(btn, 'Atstatoma...');
       try {
-        const res = await fetch('/api/reset', { method: 'POST' });
-        const data = await res.json();
-        showToast(data.message || 'Atstatyta!', 'info');
-        loadSettings();
-        fetchStatus();
+        await requestJson('/api/reset', 'Nepavyko atstatyti nustatymų', {});
+        clearSecret('WIFI_PASSWORD');
+        clearSecret('MY_SEED_HEX');
+        clearKeyPreview();
+        await loadSettings('Numatytieji nustatymai išsaugoti. Norėdami juos pritaikyti, spauskite „Perkrauti ESP32“.');
       } catch (err) {
-        showToast('Klaida atstatant: ' + err.message, 'error');
+        showToast(`Nustatymų atstatymo klaida: ${err.message}`, 'error');
+      } finally {
+        finish();
+        unlock();
       }
     }
 
     async function restartDevice() {
-      if (!confirm('Perkrauti ESP32 modulį?')) return;
-      showToast('ESP32 persikrauna... Palaukite kelias sekundes.', 'info');
+      if (portalWritePending || !confirm(`Perkrauti ESP32 ir pritaikyti išsaugotus nustatymus?\n\n${reconnectInstructions}`)) return;
+      const unlock = beginPortalWrite();
+      if (!await requestRestart()) unlock();
+    }
+
+    async function requestRestart() {
+      const finish = startBusy(document.getElementById('btnRestart'), 'Perkraunama...');
       try {
-        await fetch('/api/restart', { method: 'POST' });
-      } catch (e) {}
-      setTimeout(() => { location.reload(); }, 6000);
+        await requestJson('/api/restart', 'Nepavyko perkrauti ESP32 modulio', {});
+        restartAccepted = true;
+        clearInterval(statusPoll);
+        setSettingsReady(false);
+        for (const id of ['btnScan', 'btnGenKeys', 'btnPreviewKeys']) document.getElementById(id).disabled = true;
+        showSettingsStatus(`ESP32 persikrauna. ${reconnectInstructions}`, 'info');
+        return true;
+      } catch (err) {
+        showToast(`ESP32 perkrovimo klaida: ${err.message}`, 'error');
+        return false;
+      } finally {
+        finish();
+        updateActions();
+      }
     }
 
     // Inicializacija
     window.onload = () => {
       fetchStatus();
       loadSettings();
-      setInterval(fetchStatus, 4000);
+      statusPoll = setInterval(fetchStatus, 4000);
 
-      const seedEl = document.getElementById('MY_SEED_HEX');
-      if (seedEl) {
-        seedEl.addEventListener('change', async function() {
-          const val = this.value.trim();
-          if (val.length === 64) {
-            try {
-              const res = await fetch('/api/generate_keys', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ seed: val })
-              });
-              const data = await res.json();
-              if (data.success) {
-                document.getElementById('MY_PUBKEY_HEX').value = data.pubkey;
-                document.getElementById('MY_PRVKEY_HEX').value = data.prvkey;
-                showToast('Pagal įvestą Seed atnaujinti viešasis ir privatus raktai!', 'info');
-              }
-            } catch (e) {}
-          }
-        });
-      }
+      document.getElementById('MY_SEED_HEX').addEventListener('input', clearKeyPreview);
     };
   </script>
 </body>
@@ -1145,14 +1385,14 @@ inline void handleApiStatus() {
 #endif
   doc["wifi_connected"] = isConn;
   doc["wifi_status"] = isConn ? "connected" : "disconnected";
-  doc["wifi_ssid"] = isConn ? WiFi.SSID() : WIFI_SSID;
+  doc["wifi_ssid"] = isConn ? WiFi.SSID() : activeConfig.wifiSsid;
   doc["wifi_ip"] = ip;
   doc["wifi_rssi"] = rssi;
   doc["ap_active"] = apActive;
   doc["ap_ssid"] = DEFAULT_AP_SSID;
   doc["ap_ip"] = apActive ? WiFi.softAPIP().toString() : "0.0.0.0";
   doc["ap_clients"] = apActive ? WiFi.softAPgetStationNum() : 0;
-  doc["bot_id"] = BOT_ID;
+  doc["bot_id"] = activeConfig.botId;
   doc["uptime_sec"] = millis() / 1000;
   doc["free_heap"] = ESP.getFreeHeap();
 
@@ -1223,51 +1463,71 @@ inline void handleApiConnect() {
     return;
   }
 
+  if (!doc["ssid"].is<const char*>() || !doc["password"].is<const char*>()) {
+    webServer.send(400, "application/json", "{\"success\":false,\"error\":\"Neteisingi Wi-Fi nustatymai\"}");
+    return;
+  }
+  BotConfig candidate = editableConfig();
   String newSsid = doc["ssid"].as<String>();
   String newPass = doc["password"].as<String>();
+  if (!newSsid.length() || newSsid.length() > 32 || newPass.length() > 64) {
+    webServer.send(400, "application/json", "{\"success\":false,\"error\":\"Neteisingas SSID arba Wi-Fi slaptažodžio ilgis\"}");
+    return;
+  }
+  if (!newPass.length() && newSsid == candidate.wifiSsid) newPass = candidate.wifiPassword;
+  candidate.wifiSsid = newSsid;
+  candidate.wifiPassword = newPass;
 
-  if (newSsid.length() == 0) {
-    webServer.send(400, "application/json", "{\"success\":false,\"error\":\"SSID negali būti tuščias\"}");
+  if (wifiHttpMutex && xSemaphoreTake(wifiHttpMutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+    webServer.send(503, "application/json", "{\"success\":false,\"error\":\"Wi-Fi užimtas. Pabandykite dar kartą.\"}");
     return;
   }
 
   Serial.printf("\n[WebPortal] Bandymas jungtis prie Wi-Fi '%s'...\n", newSsid.c_str());
 
-  WiFi.disconnect(false);
-  delay(100);
-  WiFi.begin(newSsid.c_str(), newPass.c_str());
+  if (!WiFi.STA.disconnect(false, 1000)) {
+    telemetryPaused = true;
+    if (wifiHttpMutex) xSemaphoreGive(wifiHttpMutex);
+    webServer.send(503, "application/json", "{\"success\":false,\"error\":\"Nepavyko atjungti Wi-Fi. Perkraukite įrenginį.\"}");
+    return;
+  }
+  const bool started = WiFi.STA.connect(newSsid.c_str(), newPass.c_str());
 
   unsigned long start = millis();
   bool connected = false;
-  while (millis() - start < 14000) {
-    if (WiFi.status() == WL_CONNECTED) {
+  while (started && millis() - start < 14000) {
+    if (WiFi.status() == WL_CONNECTED && WiFi.SSID() == newSsid) {
       connected = true;
       break;
     }
     delay(200);
-    dnsServer.processNextRequest();
-    webServer.handleClient();
   }
 
-  if (connected) {
-    WIFI_SSID = newSsid;
-    WIFI_PASSWORD = newPass;
-    saveConfigToNVS();
+  const bool conflict = connected && stationConflictsWithSetupAP();
+  const bool saved = connected && !conflict && saveConfigToNVS(candidate);
+  const bool disconnected = saved || WiFi.STA.disconnect(false, 1000);
+  if (!disconnected) telemetryPaused = true;
+  if (saved && (newSsid != activeConfig.wifiSsid || newPass != activeConfig.wifiPassword)) telemetryPaused = true;
+  if (wifiHttpMutex) xSemaphoreGive(wifiHttpMutex);
 
-    String ipStr = WiFi.localIP().toString();
-    int rssi = WiFi.RSSI();
-    Serial.printf("[WebPortal] Sėkmingai prisijungta prie '%s'! IP: %s, RSSI: %d dBm\n",
-                  newSsid.c_str(), ipStr.c_str(), rssi);
-
-    configTime(0, 0, "pool.ntp.org", "time.google.com");
-
-    String resp = "{\"success\":true,\"message\":\"Sėkmingai prisijungta!\",\"ssid\":\"" + newSsid +
-                  "\",\"ip\":\"" + ipStr + "\",\"rssi\":" + String(rssi) + "}";
-    webServer.send(200, "application/json", resp);
+  if (saved) {
+    doc.clear();
+    doc["success"] = true;
+    doc["message"] = "Prisijungta ir išsaugota. Užbaikite konfigūravimą ir perkraukite.";
+    doc["ip"] = WiFi.localIP().toString();
+    doc["rssi"] = WiFi.RSSI();
+    String out;
+    serializeJson(doc, out);
+    webServer.send(200, "application/json", out);
+  } else if (!disconnected) {
+    webServer.send(503, "application/json", "{\"success\":false,\"error\":\"Nepavyko atjungti bandomojo Wi-Fi. Perkraukite įrenginį.\"}");
+  } else if (conflict) {
+    webServer.send(409, "application/json", "{\"success\":false,\"message\":\"Wi-Fi tinklas persidengia su 192.168.4.0/24. Išsaugokite nustatymus, perkraukite ir leiskite išsijungti konfigūravimo tinklui.\"}");
+  } else if (connected) {
+    webServer.send(500, "application/json", "{\"success\":false,\"message\":\"Nepavyko išsaugoti Wi-Fi nustatymų\"}");
   } else {
     Serial.printf("[WebPortal] Nepavyko prisijungti prie '%s'\n", newSsid.c_str());
-    String resp = "{\"success\":false,\"error\":\"Nepavyko prisijungti. Patikrinkite slaptažodį arba tinklo atstumą.\",\"ssid\":\"" + newSsid + "\"}";
-    webServer.send(200, "application/json", resp);
+    webServer.send(400, "application/json", "{\"success\":false,\"error\":\"Nepavyko prisijungti. Patikrinkite slaptažodį arba tinklo atstumą.\"}");
   }
 }
 
@@ -1277,20 +1537,13 @@ inline void handleApiGetSettings() {
 #else
   DynamicJsonDocument doc(1536);
 #endif
-  doc["WIFI_SSID"] = WIFI_SSID;
-  doc["WIFI_PASSWORD"] = WIFI_PASSWORD;
-  doc["BOT_ID"] = BOT_ID;
-  doc["REPEATER_REPLY_TIMEOUT_MS"] = REPEATER_REPLY_TIMEOUT_MS;
-  doc["REPEATER_REMOTE_REPLY_TIMEOUT_MS"] = REPEATER_REMOTE_REPLY_TIMEOUT_MS;
-  doc["INTER_REQUEST_DELAY_MS"] = INTER_REQUEST_DELAY_MS;
-  doc["REPEATER_COOLDOWN_MS"] = REPEATER_COOLDOWN_MS;
-  doc["MY_SEED_HEX"] = MY_SEED_HEX;
-  doc["MY_PUBKEY_HEX"] = MY_PUBKEY_HEX;
-  doc["MY_PRVKEY_HEX"] = MY_PRVKEY_HEX;
-  doc["TELEMETRY_REQUEST_INTERVAL_MS"] = TELEMETRY_REQUEST_INTERVAL_MS;
-  doc["PATH_HASH_BITS"] = PATH_HASH_BITS;
-  doc["ENABLE_SCOPE"] = ENABLE_SCOPE;
-  doc["SCOPE_NAME"] = SCOPE_NAME;
+  const BotConfig& cfg = editableConfig();
+  writeConfigFields(doc, cfg);
+  uint8_t seed[SEED_SIZE], pub[PUB_KEY_SIZE], priv[PRV_KEY_SIZE];
+  if (decodeSeed(cfg.seed, seed)) {
+    MeshCrypto::generateKeypair(pub, priv, seed);
+    doc["MY_PUBKEY_HEX"] = bytesToHexString(pub, sizeof(pub));
+  }
 
   String out;
   serializeJson(doc, out);
@@ -1314,43 +1567,36 @@ inline void handleApiSaveSettings() {
     return;
   }
 
-  JsonObject obj = doc.as<JsonObject>();
-  if (obj.containsKey("WIFI_SSID")) WIFI_SSID = obj["WIFI_SSID"].as<String>();
-  if (obj.containsKey("WIFI_PASSWORD")) WIFI_PASSWORD = obj["WIFI_PASSWORD"].as<String>();
-  if (obj.containsKey("BOT_ID")) BOT_ID = obj["BOT_ID"].as<String>();
-  if (obj.containsKey("REPEATER_REPLY_TIMEOUT_MS")) REPEATER_REPLY_TIMEOUT_MS = obj["REPEATER_REPLY_TIMEOUT_MS"].as<unsigned long>();
-  if (obj.containsKey("REPEATER_REMOTE_REPLY_TIMEOUT_MS")) REPEATER_REMOTE_REPLY_TIMEOUT_MS = obj["REPEATER_REMOTE_REPLY_TIMEOUT_MS"].as<unsigned long>();
-  if (obj.containsKey("INTER_REQUEST_DELAY_MS")) INTER_REQUEST_DELAY_MS = obj["INTER_REQUEST_DELAY_MS"].as<unsigned long>();
-  if (obj.containsKey("REPEATER_COOLDOWN_MS")) REPEATER_COOLDOWN_MS = obj["REPEATER_COOLDOWN_MS"].as<unsigned long>();
-  
-  bool seedChanged = false;
-  if (obj.containsKey("MY_SEED_HEX")) {
-    String newSeed = obj["MY_SEED_HEX"].as<String>();
-    if (newSeed.length() > 0 && newSeed != MY_SEED_HEX) {
-      MY_SEED_HEX = newSeed;
-      seedChanged = true;
-    }
+  BotConfig candidate = editableConfig();
+  JsonObjectConst obj = doc.as<JsonObjectConst>();
+  if (!readConfigFields(obj, candidate, false) ||
+      (obj.containsKey("WIFI_PASSWORD") && !obj["WIFI_PASSWORD"].is<const char*>()) ||
+      (obj.containsKey("MY_SEED_HEX") && !obj["MY_SEED_HEX"].is<const char*>())) {
+    webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Neteisingi nustatymų duomenys\"}");
+    return;
   }
-  if (obj.containsKey("MY_PUBKEY_HEX")) MY_PUBKEY_HEX = obj["MY_PUBKEY_HEX"].as<String>();
-  if (obj.containsKey("MY_PRVKEY_HEX")) MY_PRVKEY_HEX = obj["MY_PRVKEY_HEX"].as<String>();
-  if (obj.containsKey("TELEMETRY_REQUEST_INTERVAL_MS")) TELEMETRY_REQUEST_INTERVAL_MS = obj["TELEMETRY_REQUEST_INTERVAL_MS"].as<unsigned long>();
-  if (obj.containsKey("PATH_HASH_BITS")) PATH_HASH_BITS = obj["PATH_HASH_BITS"].as<uint8_t>();
-  if (obj.containsKey("ENABLE_SCOPE")) ENABLE_SCOPE = obj["ENABLE_SCOPE"].as<bool>();
-  if (obj.containsKey("SCOPE_NAME")) SCOPE_NAME = obj["SCOPE_NAME"].as<String>();
-
-  // Jei seed pasikeitė, perskaičiuojame Ed25519 raktus
-  if (seedChanged) {
-    generateSelfIdentity();
+  String password = obj["WIFI_PASSWORD"] | "";
+  if (password.length() || candidate.wifiSsid != editableConfig().wifiSsid) candidate.wifiPassword = password;
+  String seed = obj["MY_SEED_HEX"] | "";
+  if (seed.length()) candidate.seed = seed;
+  if (!validConfig(candidate, true)) {
+    webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Patikrinkite Wi-Fi, boto ID, kelio hash ir Ed25519 sėklos nustatymus\"}");
+    return;
   }
-
-  saveConfigToNVS();
-  webServer.send(200, "application/json", "{\"success\":true,\"message\":\"Nustatymai sėkmingai išsaugoti į vidinę atmintį!\"}");
+  if (!saveConfigToNVS(candidate)) {
+    webServer.send(500, "application/json", "{\"success\":false,\"message\":\"Nepavyko išsaugoti nustatymų\"}");
+    return;
+  }
+  webServer.send(200, "application/json", "{\"success\":true,\"message\":\"Nustatymai išsaugoti. Jie įsigalios po perkrovimo.\"}");
 }
 
 inline void handleApiResetSettings() {
-  resetConfigNVS();
-  generateSelfIdentity();
-  webServer.send(200, "application/json", "{\"success\":true,\"message\":\"Atstatyti numatytieji nustatymai iš config.h\"}");
+  BotConfig defaults;
+  if (!saveConfigToNVS(defaults)) {
+    webServer.send(500, "application/json", "{\"success\":false,\"message\":\"Nepavyko atstatyti nustatymų\"}");
+    return;
+  }
+  webServer.send(200, "application/json", "{\"success\":true,\"message\":\"Numatytieji nustatymai įsigalios po perkrovimo.\"}");
 }
 
 inline void handleApiRestart() {
@@ -1375,6 +1621,9 @@ inline void handleApiGenerateKeys() {
         size_t sLen = 0;
         if (customSeed.length() == 64 && hexStringToBytes(customSeed.c_str(), seed, SEED_SIZE, sLen) && sLen == SEED_SIZE) {
           haveSeed = true;
+        } else {
+          webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Neteisinga Ed25519 sėkla\"}");
+          return;
         }
       }
     }
@@ -1408,13 +1657,7 @@ inline void handleApiGenerateKeys() {
 }
 
 inline void handleNotFound() {
-  String host = webServer.hostHeader();
-  if (host != "192.168.4.1" && host != "meshbot.local" && host != "meshpuller.local") {
-    webServer.sendHeader("Location", "http://192.168.4.1/", true);
-    webServer.send(302, "text/plain", "");
-    return;
-  }
-  handleRoot();
+  webServer.send(404, "application/json", "{\"success\":false,\"error\":\"Unknown setup endpoint\"}");
 }
 
 // ================================================================================
@@ -1423,36 +1666,43 @@ inline void handleNotFound() {
 
 inline void initWebConfigPortal() {
   // 1. Konfigūruojame Wi-Fi AP + STA režimą
-  WiFi.mode(WIFI_AP_STA);
-
-  IPAddress apIP(192, 168, 4, 1);
-  IPAddress netMsk(255, 255, 255, 0);
-  WiFi.softAPConfig(apIP, apIP, netMsk);
-
-  String apName = DEFAULT_AP_SSID;
-
-  if (strlen(DEFAULT_AP_PASSWORD) > 0) {
-    WiFi.softAP(apName.c_str(), DEFAULT_AP_PASSWORD);
-  } else {
-    WiFi.softAP(apName.c_str());
+  WiFi.persistent(false);
+  if (!WiFi.mode(WIFI_AP_STA) || !WiFi.softAPConfig(webConfigIP, webConfigIP, webConfigMask)) {
+    Serial.println("[WebPortal] Nepavyko paruošti prieigos taško.");
+    WiFi.mode(WIFI_STA);
+    return;
   }
 
-  apStartTime = millis();
+  if (!WiFi.softAP(DEFAULT_AP_SSID, nullptr, 1, 0, 1, false, WIFI_AUTH_OPEN)) {
+    Serial.println("[WebPortal] Nepavyko paleisti konfigūravimo prieigos taško.");
+    WiFi.mode(WIFI_STA);
+    return;
+  }
   lastApActivityTime = millis();
   apActive = true;
 
   Serial.printf("[WebPortal] Wi-Fi Prieigos Taškas (AP) paleistas: SSID: '%s', IP: %s (veiks 10 min.)\n",
-                apName.c_str(), WiFi.softAPIP().toString().c_str());
+                DEFAULT_AP_SSID, WiFi.softAPIP().toString().c_str());
 
-  // 2. Paleidžiame Captive Portal DNS serverį
-  dnsServer.start(53, "*", apIP);
-
-  // 3. Paleidžiame mDNS (meshpuller.local)
-  if (MDNS.begin("meshpuller")) {
-    Serial.println("[WebPortal] mDNS paleistas: http://meshpuller.local");
-  }
-
-  // 4. Užregistruojame maršrutus
+  // Užregistruojame maršrutus
+  // Some core versions listen on all IPs. Keep the destination and browser write checks.
+  const char* headers[] = {"Origin", "Content-Type"};
+  webServer.collectHeaders(headers, 2);
+  webServer.addMiddleware([](WebServer& server, Middleware::Callback next) {
+    if (server.client().localIP() != webConfigIP || !WiFi.AP.started() || stationConflictsWithSetupAP()) {
+      server.send(403, "text/plain", "Configuration is only available on the setup Wi-Fi.");
+      return false;
+    }
+    if ((server.hostHeader() != "192.168.4.1" && server.hostHeader() != "192.168.4.1:80") ||
+        (server.method() != HTTP_GET &&
+         (server.method() != HTTP_POST || server.header("Origin") != "http://192.168.4.1" ||
+          server.header("Content-Type") != "application/json"))) {
+      server.send(403, "application/json", "{\"success\":false,\"error\":\"Open http://192.168.4.1/ to change settings.\"}");
+      return false;
+    }
+    server.sendHeader("Cache-Control", "no-store");
+    return next();
+  });
   webServer.on("/", HTTP_GET, handleRoot);
   webServer.on("/api/status", HTTP_GET, handleApiStatus);
   webServer.on("/api/scan", HTTP_GET, handleApiScan);
@@ -1463,11 +1713,6 @@ inline void initWebConfigPortal() {
   webServer.on("/api/restart", HTTP_POST, handleApiRestart);
   webServer.on("/api/generate_keys", HTTP_POST, handleApiGenerateKeys);
 
-  // Captive Portal automatinis atidarymas (iOS, Android, Windows)
-  webServer.on("/hotspot-detect.html", HTTP_GET, handleRoot);
-  webServer.on("/generate_204", HTTP_GET, handleRoot);
-  webServer.on("/gen_204", HTTP_GET, handleRoot);
-  webServer.on("/canonical.html", HTTP_GET, handleRoot);
   webServer.onNotFound(handleNotFound);
 
   webServer.begin();
@@ -1476,8 +1721,7 @@ inline void initWebConfigPortal() {
 
 inline void handleWebConfigPortal() {
   if (!apActive) return;
-
-  dnsServer.processNextRequest();
+  if (stationConflictsWithSetupAP()) WiFi.disconnect(false);
 
   // Jei klientas buvo pasijungęs, bet atsijungė ir 10 min. nėra jokio veiksmo - išjungiame AP
   int clients = WiFi.softAPgetStationNum();
@@ -1491,6 +1735,7 @@ inline void handleWebConfigPortal() {
 
 // Paleidus ESP32 paleidžiamas AP ir laukiama 1 minutę, ar kas nors prisijungs prie AP 'MeshPuller'
 inline bool waitForApClients(unsigned long waitMs = AP_WAIT_WINDOW_MS) {
+  if (!apActive) return false;
   Serial.println("\n========================================================");
   Serial.printf("[AP] Paleistas prieigos taškas 'MeshPuller' (IP: %s)\n", WiFi.softAPIP().toString().c_str());
   Serial.printf("[AP] Laukiama 1 min. (%lu s.), kol kas nors prisijungs prie AP...\n", waitMs / 1000);
