@@ -247,6 +247,204 @@ SQL;
     }
 
     /**
+     * Pagal heksadecimalinį prefiksą (2 arba 4 simbolių) arba pilną raktą suranda mazgą 'nodes' lentelėje.
+     */
+    private function resolveNodeByPrefixOrKey(string $prefixOrKey, ?string $botId = null): ?array
+    {
+        $clean = strtolower(trim($prefixOrKey));
+        if ($clean === '' || !ctype_xdigit($clean)) {
+            return null;
+        }
+
+        try {
+            $bId = strtoupper(trim((string)($botId ?? '')));
+            if (strlen($clean) >= 32) {
+                $stmt = $this->pdo->prepare("
+                    SELECT public_key, node_id, node_name, is_repeater
+                    FROM nodes
+                    WHERE LOWER(public_key) = :pk
+                    ORDER BY is_repeater DESC, id ASC
+                    LIMIT 1
+                ");
+                $stmt->execute([':pk' => $clean]);
+                return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+            }
+
+            if (strlen($clean) === 4) {
+                $stmt = $this->pdo->prepare("
+                    SELECT public_key, node_id, node_name, is_repeater
+                    FROM nodes
+                    WHERE LOWER(node_id) = :nid OR LOWER(public_key) LIKE :pref
+                    ORDER BY is_repeater DESC, (UPPER(COALESCE(bot_id, '')) = :bot_id) DESC, last_seen_at DESC
+                    LIMIT 1
+                ");
+                $stmt->execute([
+                    ':nid'    => $clean,
+                    ':pref'   => $clean . '%',
+                    ':bot_id' => $bId,
+                ]);
+                return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+            }
+
+            $stmt = $this->pdo->prepare("
+                SELECT public_key, node_id, node_name, is_repeater
+                FROM nodes
+                WHERE LOWER(public_key) LIKE :pref
+                ORDER BY is_repeater DESC,
+                         (UPPER(COALESCE(bot_id, '')) = :bot_id) DESC,
+                         CASE WHEN requested_date IS NOT NULL THEN 1 ELSE 0 END DESC,
+                         last_seen_at DESC
+                LIMIT 1
+            ");
+            $stmt->execute([
+                ':pref'   => $clean . '%',
+                ':bot_id' => $bId,
+            ]);
+            return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Iš iškoduoto paketo nustato siuntėjo ir taikinio vardus bei viešuosius raktus.
+     */
+    private function resolvePacketEndpoints(array $decoded, array $record): array
+    {
+        $direction = strtoupper(trim((string)($record['direction'] ?? 'RX')));
+        $botId = !empty($record['bot_id']) ? strtoupper(trim((string)$record['bot_id'])) : 'KLP';
+        $myPubKey = !empty($record['my_public_key']) ? strtolower(trim((string)$record['my_public_key'])) : null;
+
+        $senderName = !empty($record['sender_name']) ? trim((string)$record['sender_name']) : null;
+        $senderKey  = !empty($record['sender_public_key']) ? strtolower(trim((string)$record['sender_public_key'])) : null;
+        $targetName = !empty($record['target_name']) ? trim((string)$record['target_name']) : null;
+        $targetKey  = !empty($record['target_public_key']) ? strtolower(trim((string)$record['target_public_key'])) : null;
+
+        // 1. ADVERT paketas: siuntėjas yra pats skelbimą išsiuntęs mazgas
+        if (!empty($decoded['advert']) && is_array($decoded['advert']) && !empty($decoded['advert']['public_key'])) {
+            $senderKey = strtolower(trim((string)$decoded['advert']['public_key']));
+            $senderName = !empty($decoded['advert']['node_name'])
+                ? trim((string)$decoded['advert']['node_name'])
+                : substr($senderKey, 0, 4);
+        }
+
+        // 2. ANON_REQ (Login) paketas: siuntėjo pilnas 32 B raktas yra šifravimo antraštėje
+        if (empty($senderKey) && !empty($decoded['encryption']['sender_public_key'])) {
+            $senderKey = strtolower(trim((string)$decoded['encryption']['sender_public_key']));
+        }
+
+        // 3. Jei tai TX paketas iš mūsų boto
+        if ($direction === 'TX') {
+            if (empty($senderName)) {
+                $senderName = $botId;
+            }
+            if (empty($senderKey) && !empty($myPubKey)) {
+                $senderKey = $myPubKey;
+            }
+        }
+
+        // 4. Šifruoto paketo src_hash / dest_hash
+        $srcHash = !empty($decoded['encryption']['src_hash']) ? strtolower(trim((string)$decoded['encryption']['src_hash'])) : null;
+        $destHash = !empty($decoded['encryption']['dest_hash']) ? strtolower(trim((string)$decoded['encryption']['dest_hash'])) : null;
+
+        if ($direction === 'RX' && empty($senderKey) && !empty($srcHash)) {
+            $node = $this->resolveNodeByPrefixOrKey($srcHash, $botId);
+            if ($node) {
+                $senderKey = strtolower(trim((string)$node['public_key']));
+                if (empty($senderName)) {
+                    $senderName = !empty($node['node_id']) ? (string)$node['node_id'] : substr($senderKey, 0, 4);
+                }
+            } elseif (empty($senderName)) {
+                $senderName = $srcHash;
+            }
+        }
+
+        // 5. Jei siuntėjas vis dar nežinomas, bet turime senderKey – surandame vardą iš 'nodes'
+        if (!empty($senderKey) && empty($senderName)) {
+            $node = $this->resolveNodeByPrefixOrKey($senderKey, $botId);
+            if ($node) {
+                $senderName = !empty($node['node_id']) ? (string)$node['node_id'] : substr($senderKey, 0, 4);
+            } else {
+                $senderName = substr($senderKey, 0, 4);
+            }
+        }
+
+        // 6. Jei RX pakete nėra nei advert, nei src_hash, bet yra maršruto šuoliai (pvz. GRP_TXT ar PATH) –
+        // rodome pirmąjį maršruto kartotuvą (hops[0])
+        if ($direction === 'RX' && empty($senderKey) && empty($senderName) && !empty($decoded['path']['hops']) && is_array($decoded['path']['hops'])) {
+            $firstHop = strtolower(trim((string)$decoded['path']['hops'][0]));
+            if ($firstHop !== '') {
+                $node = $this->resolveNodeByPrefixOrKey($firstHop, $botId);
+                if ($node) {
+                    $senderKey = strtolower(trim((string)$node['public_key']));
+                    $senderName = !empty($node['node_id']) ? (string)$node['node_id'] : substr($senderKey, 0, 4);
+                } else {
+                    $senderName = $firstHop;
+                }
+            }
+        }
+
+        // 7. Taikinio (Target) nustatymas pagal dest_hash
+        if (empty($targetKey) && !empty($destHash)) {
+            if ($direction === 'RX' && !empty($myPubKey) && strpos($myPubKey, $destHash) === 0) {
+                $targetKey = $myPubKey;
+                if (empty($targetName)) {
+                    $targetName = $botId;
+                }
+            } else {
+                $node = $this->resolveNodeByPrefixOrKey($destHash, $botId);
+                if ($node) {
+                    $targetKey = strtolower(trim((string)$node['public_key']));
+                    if (empty($targetName)) {
+                        $targetName = !empty($node['node_id']) ? (string)$node['node_id'] : substr($targetKey, 0, 4);
+                    }
+                } elseif (empty($targetName)) {
+                    $targetName = $destHash;
+                }
+            }
+        }
+
+        if (!empty($targetKey) && empty($targetName)) {
+            $node = $this->resolveNodeByPrefixOrKey($targetKey, $botId);
+            if ($node) {
+                $targetName = !empty($node['node_id']) ? (string)$node['node_id'] : substr($targetKey, 0, 4);
+            } else {
+                $targetName = substr($targetKey, 0, 4);
+            }
+        }
+
+        return [
+            'sender_name'       => $senderName,
+            'sender_public_key' => $senderKey,
+            'target_name'       => $targetName,
+            'target_public_key' => $targetKey,
+        ];
+    }
+
+    /**
+     * Atnaujina raw_packets įrašo sender/target stulpelius, jei jie buvo nustatyti dekodavimo metu.
+     */
+    private function updatePacketEndpointsInDb(int $id, array $endpoints): void
+    {
+        try {
+            $sql = "UPDATE {$this->table}
+                    SET sender_name = COALESCE(NULLIF(sender_name, ''), :s_name),
+                        sender_public_key = COALESCE(NULLIF(sender_public_key, ''), :s_key),
+                        target_name = COALESCE(NULLIF(target_name, ''), :t_name),
+                        target_public_key = COALESCE(NULLIF(target_public_key, ''), :t_key)
+                    WHERE id = :id";
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute([
+                ':s_name' => $endpoints['sender_name'] ?? null,
+                ':s_key'  => $endpoints['sender_public_key'] ?? null,
+                ':t_name' => $endpoints['target_name'] ?? null,
+                ':t_key'  => $endpoints['target_public_key'] ?? null,
+                ':id'     => $id,
+            ]);
+        } catch (\Throwable $e) {}
+    }
+
+    /**
      * Pažymi įrašą kaip sėkmingai apdorotą.
      */
     public function completeProcessing(int $id, array $decodedData, ?string $errorMessage = null): bool
@@ -343,6 +541,21 @@ SQL;
             $savedTelemetryId = null;
             if ($this->telemetryRepo !== null) {
                 $savedTelemetryId = $this->telemetryRepo->extractAndSaveTelemetry($id, $decoded, $record);
+            }
+
+            $endpoints = $this->resolvePacketEndpoints($decoded, is_array($record) ? $record : []);
+            $this->updatePacketEndpointsInDb($id, $endpoints);
+            if (empty($record['sender_name']) && !empty($endpoints['sender_name'])) {
+                $record['sender_name'] = $endpoints['sender_name'];
+            }
+            if (empty($record['sender_public_key']) && !empty($endpoints['sender_public_key'])) {
+                $record['sender_public_key'] = $endpoints['sender_public_key'];
+            }
+            if (empty($record['target_name']) && !empty($endpoints['target_name'])) {
+                $record['target_name'] = $endpoints['target_name'];
+            }
+            if (empty($record['target_public_key']) && !empty($endpoints['target_public_key'])) {
+                $record['target_public_key'] = $endpoints['target_public_key'];
             }
 
             if ($savedTelemetryId === null && empty($decoded['advert']) && !empty($record['direction']) && strtoupper((string)$record['direction']) === 'RX') {
@@ -550,6 +763,18 @@ SQL;
             $params[':direction'] = strtoupper(trim($filters['direction']));
         }
 
+        if (isset($filters['packet_type']) && $filters['packet_type'] !== '' && is_numeric($filters['packet_type'])) {
+            $pt = (int)$filters['packet_type'];
+            if ($pt >= 0 && $pt <= 15) {
+                $base = ($pt << 2);
+                $params[':pt0'] = sprintf('%02X', $base | 0);
+                $params[':pt1'] = sprintf('%02X', $base | 1);
+                $params[':pt2'] = sprintf('%02X', $base | 2);
+                $params[':pt3'] = sprintf('%02X', $base | 3);
+                $where[] = "UPPER(SUBSTRING(rp.raw_hex, 1, 2)) IN (:pt0, :pt1, :pt2, :pt3)";
+            }
+        }
+
         if (isset($filters['status']) && $filters['status'] !== '') {
             if ($filters['status'] === 'errors') {
                 $where[] = "(rp.error_message IS NOT NULL AND rp.error_message != '')";
@@ -604,6 +829,7 @@ SQL;
         $sql = "SELECT rp.id, rp.bot_id, rp.direction, rp.length, rp.rssi, rp.snr, 
                        rp.target_name, rp.target_public_key, 
                        rp.sender_name, rp.sender_public_key, 
+                       rp.my_public_key, rp.raw_hex,
                        COALESCE(
                            (SELECT n1.node_name FROM nodes n1 WHERE (n1.public_key = rp.sender_public_key AND n1.public_key != '') OR (n1.node_id = rp.sender_name AND n1.node_id != '') ORDER BY (n1.public_key = rp.sender_public_key) DESC, n1.is_repeater DESC LIMIT 1),
                            rp.sender_name
@@ -621,6 +847,100 @@ SQL;
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
         $packets = $stmt->fetchAll() ?: [];
+
+        $typeLabels = [
+            0  => 'REQ',
+            1  => 'RESPONSE',
+            2  => 'TXT_MSG',
+            3  => 'ACK',
+            4  => 'ADVERT',
+            5  => 'GRP_TXT',
+            6  => 'GRP_DATA',
+            7  => 'ANON_REQ',
+            8  => 'PATH',
+            9  => 'TRACE',
+            10 => 'MULTIPART',
+            11 => 'CONTROL',
+            15 => 'RAW_CUSTOM',
+        ];
+        $routeLabels = [
+            0 => 'TRANSPORT_FLOOD',
+            1 => 'FLOOD',
+            2 => 'DIRECT',
+            3 => 'TRANSPORT_DIRECT',
+        ];
+
+        // Jei tarp grąžinamų įrašų yra jau apdorotų paketų be nustatyto sender/target –
+        // iškart nustatome iš raw_hex ir išsaugome į DB, kad sąraše visiems paketams rodytų siuntėją
+        $lazyDecoder = null;
+        foreach ($packets as &$pkt) {
+            $rawHexStr = (string)($pkt['raw_hex'] ?? ($pkt['raw_hex_preview'] ?? ''));
+            if (strlen($rawHexStr) >= 2 && ctype_xdigit(substr($rawHexStr, 0, 2))) {
+                $hdrByte = hexdec(substr($rawHexStr, 0, 2));
+                $ptCode = ($hdrByte >> 2) & 0x0F;
+                $rtCode = $hdrByte & 0x03;
+                $pkt['packet_type_code'] = $ptCode;
+                $pkt['packet_type'] = $typeLabels[$ptCode] ?? ("TYPE_{$ptCode}");
+                $pkt['route_type_code'] = $rtCode;
+                $pkt['route_type'] = $routeLabels[$rtCode] ?? 'FLOOD';
+                $pathOffset = ($rtCode === 0 || $rtCode === 3) ? 10 : 2;
+                if (strlen($rawHexStr) >= $pathOffset + 2 && ctype_xdigit(substr($rawHexStr, $pathOffset, 2))) {
+                    $pathByte = hexdec(substr($rawHexStr, $pathOffset, 2));
+                    $pkt['hop_count'] = $pathByte & 0x3F;
+                } else {
+                    $pkt['hop_count'] = null;
+                }
+            } else {
+                $pkt['packet_type_code'] = null;
+                $pkt['packet_type'] = null;
+                $pkt['route_type_code'] = null;
+                $pkt['route_type'] = null;
+                $pkt['hop_count'] = null;
+            }
+
+            if (empty($pkt['sender_name']) && empty($pkt['sender_public_key']) && !empty($pkt['raw_hex'])) {
+                if ($lazyDecoder === null) {
+                    $lazyDecoder = new MeshCoreDecoder();
+                }
+                try {
+                    $dec = $lazyDecoder->decodeRawPacket((string)$pkt['raw_hex'], null, $pkt['my_public_key'] ?? null);
+                    $ep = $this->resolvePacketEndpoints($dec, $pkt);
+                    if (!empty($ep['sender_name']) || !empty($ep['sender_public_key']) || !empty($ep['target_name']) || !empty($ep['target_public_key'])) {
+                        $this->updatePacketEndpointsInDb((int)$pkt['id'], $ep);
+                        if (empty($pkt['sender_name']) && !empty($ep['sender_name'])) {
+                            $pkt['sender_name'] = $ep['sender_name'];
+                        }
+                        if (empty($pkt['sender_public_key']) && !empty($ep['sender_public_key'])) {
+                            $pkt['sender_public_key'] = $ep['sender_public_key'];
+                        }
+                        if (empty($pkt['target_name']) && !empty($ep['target_name'])) {
+                            $pkt['target_name'] = $ep['target_name'];
+                        }
+                        if (empty($pkt['target_public_key']) && !empty($ep['target_public_key'])) {
+                            $pkt['target_public_key'] = $ep['target_public_key'];
+                        }
+                        if (!empty($pkt['sender_public_key']) || !empty($pkt['sender_name'])) {
+                            $sNode = $this->resolveNodeByPrefixOrKey($pkt['sender_public_key'] ?: $pkt['sender_name'], $pkt['bot_id'] ?? null);
+                            if ($sNode && !empty($sNode['node_name'])) {
+                                $pkt['sender_node_name'] = $sNode['node_name'];
+                            } elseif (empty($pkt['sender_node_name'])) {
+                                $pkt['sender_node_name'] = $pkt['sender_name'];
+                            }
+                        }
+                        if (!empty($pkt['target_public_key']) || !empty($pkt['target_name'])) {
+                            $tNode = $this->resolveNodeByPrefixOrKey($pkt['target_public_key'] ?: $pkt['target_name'], $pkt['bot_id'] ?? null);
+                            if ($tNode && !empty($tNode['node_name'])) {
+                                $pkt['target_node_name'] = $tNode['node_name'];
+                            } elseif (empty($pkt['target_node_name'])) {
+                                $pkt['target_node_name'] = $pkt['target_name'];
+                            }
+                        }
+                    }
+                } catch (\Throwable $e) {}
+            }
+            unset($pkt['raw_hex'], $pkt['my_public_key']);
+        }
+        unset($pkt);
 
         return [
             'total' => $totalCount,

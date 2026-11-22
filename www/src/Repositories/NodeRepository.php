@@ -169,7 +169,7 @@ class NodeRepository implements NodeRepositoryInterface
                 bot_id = CASE WHEN nodes.is_bot_locked THEN nodes.bot_id ELSE COALESCE(EXCLUDED.bot_id, nodes.bot_id) END,
                 last_path = CASE WHEN UPPER(COALESCE(nodes.last_path, '')) = 'FLOOD' THEN 'FLOOD' ELSE :last_path_upd END,
                 telemetry_fail_count = CASE WHEN :reset_fails_cnt = 1 THEN 0 ELSE nodes.telemetry_fail_count END,
-                last_failed_request_at = CASE WHEN :reset_fails_at = 1 THEN COALESCE(nodes.last_failed_request_at, nodes.requested_date) ELSE nodes.last_failed_request_at END,
+                last_failed_request_at = CASE WHEN :reset_fails_at = 1 THEN nodes.requested_date ELSE nodes.last_failed_request_at END,
                 last_seen_at = CURRENT_TIMESTAMP,
                 "update" = CASE 
                     WHEN EXCLUDED.is_repeater = false OR nodes.is_disabled = true THEN false
@@ -218,7 +218,7 @@ SQL;
                 `bot_id` = CASE WHEN `is_bot_locked` = 1 THEN `bot_id` ELSE COALESCE(VALUES(`bot_id`), `bot_id`) END,
                 `last_path` = IF(UPPER(COALESCE(`last_path`, '')) = 'FLOOD', 'FLOOD', :last_path_upd),
                 `telemetry_fail_count` = IF(:reset_fails_cnt = 1, 0, `telemetry_fail_count`),
-                `last_failed_request_at` = IF(:reset_fails_at = 1, COALESCE(`last_failed_request_at`, `requested_date`), `last_failed_request_at`),
+                `last_failed_request_at` = IF(:reset_fails_at = 1, `requested_date`, `last_failed_request_at`),
                 `last_seen_at` = CURRENT_TIMESTAMP,
                 `update` = CASE 
                     WHEN VALUES(`is_repeater`) = 0 OR `is_disabled` = 1 THEN 0
@@ -349,7 +349,7 @@ SQL;
 
             if (!empty($resolved['reset_fails']) && !$hasTelemetry) {
                 $sets[] = 'telemetry_fail_count = 0';
-                $sets[] = 'last_failed_request_at = COALESCE(last_failed_request_at, requested_date)';
+                $sets[] = 'last_failed_request_at = requested_date';
             }
         } elseif ($existingNode === null && !empty($heardBotId)) {
             if ($driver === 'pgsql') {
@@ -591,12 +591,13 @@ SQL;
             $params[':longitude'] = ($fields['longitude'] !== null && $fields['longitude'] !== '') ? (float)$fields['longitude'] : null;
         }
 
+        $markRequestAccounted = false;
         if (array_key_exists('telemetry_fail_count', $fields)) {
             $sets[] = "telemetry_fail_count = :telemetry_fail_count";
             $cnt = max(0, (int)$fields['telemetry_fail_count']);
             $params[':telemetry_fail_count'] = $cnt;
             if ($cnt === 0) {
-                $sets[] = "last_failed_request_at = NULL";
+                $markRequestAccounted = true;
             }
         }
 
@@ -631,6 +632,13 @@ SQL;
             $params[':last_path'] = ($fields['last_path'] !== null && trim((string)$fields['last_path']) !== '') 
                 ? strtoupper(trim((string)$fields['last_path'])) 
                 : null;
+            if ($params[':last_path'] !== null) {
+                $markRequestAccounted = true;
+            }
+        }
+
+        if ($markRequestAccounted) {
+            $sets[] = "last_failed_request_at = requested_date";
         }
 
         if (empty($sets)) {

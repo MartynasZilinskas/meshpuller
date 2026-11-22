@@ -442,7 +442,11 @@ class PollingQueueService implements PollingQueueServiceInterface
                 SET 
                     telemetry_fail_count = telemetry_fail_count + 1,
                     last_failed_request_at = requested_date,
-                    last_path = CASE WHEN UPPER(COALESCE(last_path, '')) = 'FLOOD' THEN 'FLOOD' ELSE NULL END
+                    last_path = CASE 
+                        WHEN UPPER(COALESCE(last_path, '')) = 'FLOOD' THEN 'FLOOD' 
+                        WHEN COALESCE(telemetry_fail_count, 0) >= 1 THEN NULL 
+                        ELSE last_path 
+                    END
                 WHERE requested_date IS NOT NULL
                   AND requested_date <= (CURRENT_TIMESTAMP - INTERVAL '{$timeout} seconds')
                   AND (telemetry_updated_at IS NULL OR telemetry_updated_at < requested_date)
@@ -455,7 +459,11 @@ class PollingQueueService implements PollingQueueServiceInterface
                 SET 
                     `telemetry_fail_count` = `telemetry_fail_count` + 1,
                     `last_failed_request_at` = `requested_date`,
-                    `last_path` = CASE WHEN UPPER(COALESCE(`last_path`, '')) = 'FLOOD' THEN 'FLOOD' ELSE NULL END
+                    `last_path` = CASE 
+                        WHEN UPPER(COALESCE(`last_path`, '')) = 'FLOOD' THEN 'FLOOD' 
+                        WHEN COALESCE(`telemetry_fail_count`, 0) >= 1 THEN NULL 
+                        ELSE `last_path` 
+                    END
                 WHERE `requested_date` IS NOT NULL
                   AND `requested_date` <= datetime('now', '-{$timeout} seconds')
                   AND (`telemetry_updated_at` IS NULL OR `telemetry_updated_at` < `requested_date`)
@@ -467,7 +475,11 @@ class PollingQueueService implements PollingQueueServiceInterface
             SET 
                 `telemetry_fail_count` = `telemetry_fail_count` + 1,
                 `last_failed_request_at` = `requested_date`,
-                `last_path` = IF(UPPER(COALESCE(`last_path`, '')) = 'FLOOD', 'FLOOD', NULL)
+                `last_path` = CASE 
+                    WHEN UPPER(COALESCE(`last_path`, '')) = 'FLOOD' THEN 'FLOOD' 
+                    WHEN COALESCE(`telemetry_fail_count`, 0) >= 1 THEN NULL 
+                    ELSE `last_path` 
+                END
             WHERE `requested_date` IS NOT NULL
               AND `requested_date` <= DATE_SUB(NOW(), INTERVAL {$timeout} SECOND)
               AND (`telemetry_updated_at` IS NULL OR `telemetry_updated_at` < `requested_date`)
@@ -734,11 +746,11 @@ SQL;
                     }
                 }
 
-                // Jei ankstesnė užklausa nepavyko arba kartotuvą perima kitas botas (failover) –
+                // Jei ankstesnės >= 2 užklausos iš eilės nepavyko arba kartotuvą perima kitas botas (failover) –
                 // numetame maršrutą į NULL (fallback į FLOOD), nebent priverstinai nustatyta 'FLOOD'
                 $rowBotId = strtoupper(trim((string)($row['bot_id'] ?? '')));
                 if (strtoupper(trim((string)$currentPath)) !== 'FLOOD') {
-                    if ($justFailed || ($rowBotId !== '' && $rowBotId !== $cleanBotId)) {
+                    if (($justFailed && $failCount >= 2) || ($rowBotId !== '' && $rowBotId !== $cleanBotId)) {
                         $currentPath = null;
                     }
                 }
@@ -1132,7 +1144,7 @@ SQL;
     }
 
     /**
-     * Nustato telemetry_fail_count = 0 ir išvalo last_failed_request_at konkrečiam mazgui.
+     * Nustato telemetry_fail_count = 0 ir pažymi last_failed_request_at = requested_date konkrečiam mazgui.
      */
     public function resetNodeFailCount(string $identifier): bool
     {
@@ -1141,7 +1153,7 @@ SQL;
         }
         try {
             $cleanId = trim($identifier);
-            $stmt = $this->pdo->prepare("UPDATE nodes SET telemetry_fail_count = 0, last_failed_request_at = NULL WHERE LOWER(public_key) = LOWER(:id1) OR LOWER(node_id) = LOWER(:id2)");
+            $stmt = $this->pdo->prepare("UPDATE nodes SET telemetry_fail_count = 0, last_failed_request_at = requested_date WHERE LOWER(public_key) = LOWER(:id1) OR LOWER(node_id) = LOWER(:id2)");
             return $stmt->execute([':id1' => $cleanId, ':id2' => $cleanId]);
         } catch (\Throwable $e) {
             return false;
@@ -1149,7 +1161,7 @@ SQL;
     }
 
     /**
-     * Nustato telemetry_fail_count = 0 ir last_failed_request_at = NULL visiems mazgams.
+     * Nustato telemetry_fail_count = 0 ir pažymi last_failed_request_at = requested_date visiems mazgams.
      */
     public function resetAllFailCounts(?string $botId = null): int
     {
@@ -1164,7 +1176,7 @@ SQL;
                 $params[':bot_id'] = $botId;
             }
             $whereSql = !empty($where) ? "WHERE " . implode(" AND ", $where) : "";
-            $stmt = $this->pdo->prepare("UPDATE nodes SET telemetry_fail_count = 0, last_failed_request_at = NULL {$whereSql}");
+            $stmt = $this->pdo->prepare("UPDATE nodes SET telemetry_fail_count = 0, last_failed_request_at = requested_date {$whereSql}");
             $stmt->execute($params);
             return $stmt->rowCount();
         } catch (\Throwable $e) {

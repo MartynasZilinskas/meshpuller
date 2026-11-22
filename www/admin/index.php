@@ -1063,6 +1063,19 @@ $isLoggedIn = isAdminLoggedIn();
                             <option value="RX">Tik RX (gauti)</option>
                             <option value="TX">Tik TX (išsiųsti)</option>
                         </select>
+
+                        <select id="rawTypeFilter" class="form-control" style="width: 175px;" onchange="onRawFilterChange()">
+                            <option value="">Visi paketų tipai</option>
+                            <option value="4">📢 ADVERT (Skelbimas)</option>
+                            <option value="7">🔐 LOGIN (ANON_REQ)</option>
+                            <option value="0">📡 REQ (Užklausa)</option>
+                            <option value="1">📥 RESPONSE (Atsakas)</option>
+                            <option value="8">🗺️ PATH (Kelias / Atsakas)</option>
+                            <option value="2">💬 TXT_MSG (Žinutė)</option>
+                            <option value="5">👥 GRP_TXT (Kanalas)</option>
+                            <option value="3">✓ ACK (Patvirtinimas)</option>
+                            <option value="9">🧭 TRACE (Trasavimas)</option>
+                        </select>
                     </div>
 
                     <div>
@@ -1077,6 +1090,7 @@ $isLoggedIn = isAdminLoggedIn();
                                 <th class="sortable" onclick="handleSortTable('raw', 'id')" data-sort="id">ID <span class="sort-icon"></span></th>
                                 <th class="sortable" onclick="handleSortTable('raw', 'bot_id')" data-sort="bot_id">Botas <span class="sort-icon"></span></th>
                                 <th class="sortable" onclick="handleSortTable('raw', 'direction')" data-sort="direction">Kryptis <span class="sort-icon"></span></th>
+                                <th>Tipas</th>
                                 <th class="sortable" onclick="handleSortTable('raw', 'sender')" data-sort="sender">Siuntėjas <span class="sort-icon"></span></th>
                                 <th class="sortable" onclick="handleSortTable('raw', 'target')" data-sort="target">Taikinys <span class="sort-icon"></span></th>
                                 <th class="sortable" onclick="handleSortTable('raw', 'length')" data-sort="length">Ilgis / Radijas <span class="sort-icon"></span></th>
@@ -1087,7 +1101,7 @@ $isLoggedIn = isAdminLoggedIn();
                             </tr>
                         </thead>
                         <tbody id="rawTableBody">
-                            <tr><td colspan="10" style="text-align: center; padding: 24px;">Kraunami RAW paketai...</td></tr>
+                            <tr><td colspan="11" style="text-align: center; padding: 24px;">Kraunami RAW paketai...</td></tr>
                         </tbody>
                     </table>
 
@@ -2148,12 +2162,14 @@ $isLoggedIn = isAdminLoggedIn();
             const tab = overrides.tab !== undefined ? overrides.tab : currentTab;
             params.set('tab', tab || 'nodes');
 
+            const editNode = overrides.edit_node !== undefined ? overrides.edit_node : activeEditNodeKey;
+            const packet = overrides.packet !== undefined ? overrides.packet : activePacketModalId;
+
             if (tab === 'nodes') {
                 const search = overrides.search !== undefined ? overrides.search : (document.getElementById('nodesSearch')?.value || '').trim();
                 const status = overrides.status !== undefined ? overrides.status : (document.getElementById('nodesStatusFilter')?.value || '');
                 const type = overrides.type !== undefined ? overrides.type : (document.getElementById('nodesTypeFilter')?.value || '');
                 const update = overrides.update !== undefined ? overrides.update : (document.getElementById('nodesUpdateFilter')?.value || '');
-                const editNode = overrides.edit_node !== undefined ? overrides.edit_node : activeEditNodeKey;
                 const page = overrides.page !== undefined ? overrides.page : nodesPage;
 
                 if (search) params.set('search', search);
@@ -2161,29 +2177,26 @@ $isLoggedIn = isAdminLoggedIn();
                 if (type) params.set('type', type);
                 if (update) params.set('update', update);
                 if (page > 0) params.set('page', page + 1);
-                if (editNode) params.set('edit_node', editNode);
             } else if (tab === 'telemetry') {
                 const node = overrides.node !== undefined ? overrides.node : (document.getElementById('telemetryNodeInput')?.value || '').trim();
                 const type = overrides.type !== undefined ? overrides.type : (document.getElementById('telemetryTypeFilter')?.value || '');
                 const page = overrides.page !== undefined ? overrides.page : telPage;
-                const packet = overrides.packet !== undefined ? overrides.packet : activePacketModalId;
 
                 if (node) params.set('node', node);
                 if (type) params.set('type', type);
                 if (page > 0) params.set('page', page + 1);
-                if (packet) params.set('packet', packet);
             } else if (tab === 'raw') {
                 const search = overrides.search !== undefined ? overrides.search : (document.getElementById('rawSearchInput')?.value || '').trim();
                 const status = overrides.status !== undefined ? overrides.status : (document.getElementById('rawStatusFilter')?.value || '');
                 const dir = overrides.dir !== undefined ? overrides.dir : (document.getElementById('rawDirectionFilter')?.value || '');
+                const ptype = overrides.packet_type !== undefined ? overrides.packet_type : (document.getElementById('rawTypeFilter')?.value || '');
                 const page = overrides.page !== undefined ? overrides.page : rawPage;
-                const packet = overrides.packet !== undefined ? overrides.packet : activePacketModalId;
 
                 if (search) params.set('search', search);
                 if (status) params.set('status', status);
                 if (dir) params.set('dir', dir);
+                if (ptype !== '' && ptype !== null && ptype !== undefined) params.set('packet_type', ptype);
                 if (page > 0) params.set('page', page + 1);
-                if (packet) params.set('packet', packet);
             } else if (tab === 'bots') {
                 const search = overrides.search !== undefined ? overrides.search : (document.getElementById('botsSearch')?.value || '').trim();
                 const status = overrides.status !== undefined ? overrides.status : (document.getElementById('botsStatusFilter')?.value || '');
@@ -2203,6 +2216,9 @@ $isLoggedIn = isAdminLoggedIn();
             } else if (tab === 'tools') {
                 // Eilė ir įrankiai papildomų parametrų neturi
             }
+
+            if (packet) params.set('packet', packet);
+            if (editNode) params.set('edit_node', editNode);
 
             const qs = params.toString();
             return window.location.pathname + (qs ? '?' + qs : '');
@@ -2339,6 +2355,7 @@ $isLoggedIn = isAdminLoggedIn();
                     const search = params.get('search') || '';
                     const status = params.get('status') || '';
                     const dir = params.get('dir') || '';
+                    const ptype = params.get('packet_type') || '';
                     const pageParam = parseInt(params.get('page'), 10);
                     rawPage = (!isNaN(pageParam) && pageParam > 0) ? (pageParam - 1) : 0;
                     rawNodeFilter = search;
@@ -2346,6 +2363,7 @@ $isLoggedIn = isAdminLoggedIn();
                     if (document.getElementById('rawSearchInput')) document.getElementById('rawSearchInput').value = search;
                     if (document.getElementById('rawStatusFilter')) document.getElementById('rawStatusFilter').value = status;
                     if (document.getElementById('rawDirectionFilter')) document.getElementById('rawDirectionFilter').value = dir;
+                    if (document.getElementById('rawTypeFilter')) document.getElementById('rawTypeFilter').value = ptype;
                     const chip = document.getElementById('rawNodeFilterTag');
                     if (chip) {
                         if (search) {
@@ -2645,8 +2663,8 @@ $isLoggedIn = isAdminLoggedIn();
                     <tr class="${isDis ? 'row-node-disabled' : ''}">
                         <td>
                             <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-                                <span class="badge badge-blue" title="${escapeHtml(key)}">${id.toUpperCase()}</span>
-                                <span style="font-weight: 600; color: #ffffff;">${escapeHtml(name)}</span>
+                                <span class="badge badge-blue" style="cursor: pointer;" onclick="openEditNode('${escapeHtml(key)}')" title="Paspauskite, kad atidarytumėte mazgo nustatymus (${escapeHtml(key)})">${id.toUpperCase()}</span>
+                                <span onclick="openEditNode('${escapeHtml(key)}')" style="font-weight: 600; color: #ffffff; cursor: pointer; text-decoration: underline dotted rgba(167, 139, 250, 0.65); text-underline-offset: 3px;" title="Paspauskite, kad atidarytumėte mazgo „${escapeHtml(name)}“ nustatymus ⚙️">${escapeHtml(name)}</span>
                                 ${isDis ? `<span class="badge badge-red" style="font-size: 0.68rem; font-weight: 700; padding: 1px 5px;" title="Mazgas išjungtas iš eilės ir žemėlapio">⛔ IŠJUNGTAS</span>` : ''}
                                 ${isFlood ? `
                                     <span class="badge badge-purple" style="font-size: 0.68rem; font-weight: 700; padding: 1px 5px; cursor: pointer;" onclick="quickToggleNodePath('${escapeHtml(key)}', true)" title="Path išjungtas (FLOOD). Paspauskite, kad įjungtumėte Source Route">🌐 FLOOD</span>
@@ -2741,19 +2759,45 @@ $isLoggedIn = isAdminLoggedIn();
             }
         }
 
-        // Mazgo redagavimo langas
-        function openEditNode(publicKey, pushHistory = true) {
-            if (!nodesData || nodesData.length === 0) {
-                pendingEditNodeKey = publicKey;
+        // Mazgo redagavimo langas (veikia iš bet kurio skirtuko – jei mazgo nėra aktyviame nodesData puslapyje, užkrauna iš API)
+        async function openEditNode(publicKey, pushHistory = true) {
+            if (!publicKey || publicKey === '-') return;
+            const cleanTarget = String(publicKey).trim().toLowerCase();
+            if (!cleanTarget) return;
+
+            let node = (nodesData && nodesData.length > 0)
+                ? nodesData.find(n =>
+                    (n.public_key && n.public_key.toLowerCase() === cleanTarget) ||
+                    (n.node_id && n.node_id.toLowerCase() === cleanTarget) ||
+                    (n.node_name && n.node_name.toLowerCase() === cleanTarget)
+                )
+                : null;
+
+            if (!node) {
+                try {
+                    const res = await fetch(`api.php?action=nodes&search=${encodeURIComponent(publicKey)}&limit=25`);
+                    const data = await res.json();
+                    if (data.success && Array.isArray(data.nodes) && data.nodes.length > 0) {
+                        node = data.nodes.find(n => n.public_key && n.public_key.toLowerCase() === cleanTarget)
+                            || data.nodes.find(n => n.node_id && n.node_id.toLowerCase() === cleanTarget && (n.is_repeater == 1 || n.is_repeater === true))
+                            || data.nodes.find(n => n.node_id && n.node_id.toLowerCase() === cleanTarget)
+                            || data.nodes.find(n => n.public_key && n.public_key.toLowerCase().startsWith(cleanTarget) && (n.is_repeater == 1 || n.is_repeater === true))
+                            || data.nodes[0];
+                    }
+                } catch (e) {
+                    console.error(e);
+                }
+            }
+
+            if (!node) {
+                showToast(`Mazgas „${publicKey}“ nerastas duomenų bazėje`, 'warning');
                 return;
             }
-            const node = nodesData.find(n => n.public_key === publicKey || n.node_id === publicKey);
-            if (!node) return;
 
             activeEditNodeKey = node.public_key;
             if (pushHistory && !isApplyingUrlState) {
                 modalOpenedInSession = true;
-                updateHistory({ tab: 'nodes', edit_node: node.public_key }, 'push');
+                updateHistory({ tab: currentTab || 'nodes', edit_node: node.public_key }, 'push');
             }
 
             document.getElementById('editNodePublicKey').value = node.public_key;
@@ -2835,7 +2879,10 @@ $isLoggedIn = isAdminLoggedIn();
                 if (data.success) {
                     showToast('Mazgo nustatymai išsaugoti sėkmingai!', 'success');
                     closeModal('editNodeModal');
-                    loadNodes();
+                    loadNodes(nodesPage);
+                    if (currentTab === 'raw') loadRawPackets(rawPage);
+                    else if (currentTab === 'telemetry') loadTelemetry(telPage);
+                    else if (currentTab === 'queue') loadNodeQueue();
                     loadStats();
                 } else {
                     alert('Klaida: ' + (data.error || 'Nepavyko išsaugoti'));
@@ -3280,19 +3327,22 @@ $isLoggedIn = isAdminLoggedIn();
                 const temp = r.temperature_c !== null ? `${parseFloat(r.temperature_c).toFixed(1)} °C` : '-';
                 const updatedAgo = r.recorded_at ? formatRelativeTime(r.recorded_at) : '-';
                 const displayName = r.node_name || r.node_id;
+                const editKey = r.public_key || r.node_id || '';
 
                 return `
                     <tr>
                         <td style="font-family: var(--font-mono); font-size: 0.72rem;">#${r.id}</td>
                         <td>
-                            <div style="font-weight: 600; color: #ffffff;" title="${escapeHtml(displayName)}">
-                                ${escapeHtml(displayName)}
-                            </div>
-                            ${r.node_name && r.node_id && r.node_name !== r.node_id ? `
-                                <div style="font-size: 0.70rem; color: #a78bfa; font-family: var(--font-mono);">
-                                    ${escapeHtml(r.node_id)}
+                            <div onclick="openEditNode('${escapeHtml(editKey)}')" style="cursor: pointer; display: inline-block;" title="Paspauskite, kad atidarytumėte mazgo „${escapeHtml(displayName)}“ nustatymus ⚙️">
+                                <div style="font-weight: 600; color: #ffffff; text-decoration: underline dotted rgba(167, 139, 250, 0.65); text-underline-offset: 3px;">
+                                    ${escapeHtml(displayName)} <span style="font-size: 0.72rem; opacity: 0.75;">⚙️</span>
                                 </div>
-                            ` : ''}
+                                ${r.node_name && r.node_id && r.node_name !== r.node_id ? `
+                                    <div style="font-size: 0.70rem; color: #a78bfa; font-family: var(--font-mono);">
+                                        ${escapeHtml(r.node_id)}
+                                    </div>
+                                ` : ''}
+                            </div>
                         </td>
                         <td><span class="badge badge-gray">${escapeHtml(r.type)}</span></td>
                         <td><span style="color:#2ed573; font-family:var(--font-mono); font-weight:600;">${batt}</span></td>
@@ -3357,9 +3407,10 @@ $isLoggedIn = isAdminLoggedIn();
             const search = document.getElementById('rawSearchInput').value.trim();
             const status = document.getElementById('rawStatusFilter').value;
             const direction = document.getElementById('rawDirectionFilter').value;
+            const packetType = document.getElementById('rawTypeFilter') ? document.getElementById('rawTypeFilter').value : '';
             const offset = page * rawLimit;
 
-            const url = `api.php?action=raw_packets&search=${encodeURIComponent(search)}&status=${encodeURIComponent(status)}&direction=${encodeURIComponent(direction)}&limit=${rawLimit}&offset=${offset}&sort_by=${encodeURIComponent(rawSort.col)}&sort_dir=${rawSort.dir}`;
+            const url = `api.php?action=raw_packets&search=${encodeURIComponent(search)}&status=${encodeURIComponent(status)}&direction=${encodeURIComponent(direction)}&packet_type=${encodeURIComponent(packetType)}&limit=${rawLimit}&offset=${offset}&sort_by=${encodeURIComponent(rawSort.col)}&sort_dir=${rawSort.dir}`;
             try {
                 const res = await fetch(url);
                 const data = await res.json();
@@ -3385,10 +3436,64 @@ $isLoggedIn = isAdminLoggedIn();
             }
         }
 
+        function formatRawPacketTypeBadge(p) {
+            const rawHex = String(p.raw_hex_preview || p.raw_hex || '').trim();
+            let ptCode = (p.packet_type_code !== undefined && p.packet_type_code !== null) ? parseInt(p.packet_type_code, 10) : null;
+            let rtCode = (p.route_type_code !== undefined && p.route_type_code !== null) ? parseInt(p.route_type_code, 10) : null;
+            let hops = (p.hop_count !== undefined && p.hop_count !== null) ? parseInt(p.hop_count, 10) : null;
+
+            if ((ptCode === null || isNaN(ptCode)) && rawHex.length >= 2) {
+                const hdrByte = parseInt(rawHex.substring(0, 2), 16);
+                if (!isNaN(hdrByte)) {
+                    ptCode = (hdrByte >> 2) & 0x0F;
+                    rtCode = hdrByte & 0x03;
+                    const pathOffset = (rtCode === 0 || rtCode === 3) ? 10 : 2;
+                    if (rawHex.length >= pathOffset + 2) {
+                        const pathByte = parseInt(rawHex.substring(pathOffset, pathOffset + 2), 16);
+                        if (!isNaN(pathByte)) {
+                            hops = pathByte & 0x3F;
+                        }
+                    }
+                }
+            }
+
+            const typeMap = {
+                0:  { label: '📡 REQ',      cls: 'badge-purple', title: 'REQ (Užklausa: Telemetrija / Status)' },
+                1:  { label: '📥 RESPONSE', cls: 'badge-green',  title: 'RESPONSE (Atsakas / Telemetrija)' },
+                2:  { label: '💬 TXT_MSG',  cls: 'badge-blue',   title: 'TXT_MSG (Tekstinė žinutė)' },
+                3:  { label: '✓ ACK',       cls: 'badge-green',  title: 'ACK (Patvirtinimas)' },
+                4:  { label: '📢 ADVERT',   cls: 'badge-cyan',   title: 'ADVERT (Mazgo skelbimas)' },
+                5:  { label: '👥 GRP_TXT',  cls: 'badge-gray',   title: 'GRP_TXT (Kanalo / grupės žinutė)' },
+                6:  { label: '📦 GRP_DATA', cls: 'badge-gray',   title: 'GRP_DATA (Grupės duomenys)' },
+                7:  { label: '🔐 LOGIN',    cls: 'badge-amber',  title: 'ANON_REQ (Anoniminė užklausa / Login)' },
+                8:  { label: '🗺️ PATH',     cls: 'badge-blue',   title: 'PATH (Maršruto / Login OK / Telemetrijos atsakas)' },
+                9:  { label: '🧭 TRACE',    cls: 'badge-purple', title: 'TRACE (Kelio trasavimas)' },
+                10: { label: '🧩 MULTI',    cls: 'badge-gray',   title: 'MULTIPART' },
+                11: { label: '🎛️ CTRL',     cls: 'badge-gray',   title: 'CONTROL' },
+                15: { label: '🔧 CUSTOM',   cls: 'badge-gray',   title: 'RAW_CUSTOM' }
+            };
+
+            if (ptCode === null || isNaN(ptCode)) {
+                return '<span style="color:var(--text-dim);">-</span>';
+            }
+
+            const info = typeMap[ptCode] || { label: `TYPE_${ptCode}`, cls: 'badge-gray', title: `Payload tipas: ${ptCode}` };
+            const isDirect = (rtCode === 2 || rtCode === 3);
+            const routeText = isDirect ? 'DIRECT' : 'FLOOD';
+            const hopText = (hops !== null && !isNaN(hops)) ? ` · ${hops} hop` : '';
+
+            return `
+                <div style="display: flex; flex-direction: column; gap: 2px; align-items: flex-start;">
+                    <span class="badge ${info.cls}" style="font-size: 0.70rem; font-weight: 700; cursor: pointer;" onclick="document.getElementById('rawTypeFilter').value='${ptCode}'; onRawFilterChange();" title="${escapeHtml(info.title)} (paspauskite filtruoti)">${info.label}</span>
+                    <span style="font-size: 0.66rem; color: var(--text-dim); font-family: var(--font-mono);">${routeText}${hopText}</span>
+                </div>
+            `;
+        }
+
         function renderRawTable(packets) {
             const tbody = document.getElementById('rawTableBody');
             if (!packets.length) {
-                tbody.innerHTML = '<tr><td colspan="10" style="text-align:center; padding: 24px; color: var(--text-dim);">RAW paketų nerasta.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="11" style="text-align:center; padding: 24px; color: var(--text-dim);">RAW paketų nerasta.</td></tr>';
                 return;
             }
 
@@ -3396,6 +3501,8 @@ $isLoggedIn = isAdminLoggedIn();
                 const dirBadge = (p.direction === 'TX') 
                     ? '<span class="badge badge-green">TX (Išsiųsta)</span>' 
                     : '<span class="badge badge-cyan">RX (Gauta)</span>';
+
+                const typeBadge = formatRawPacketTypeBadge(p);
 
                 let statusBadge = '<span class="badge badge-green">Apdorota</span>';
                 if (p.error_message) {
@@ -3408,28 +3515,43 @@ $isLoggedIn = isAdminLoggedIn();
                 const senderSub = (p.sender_public_key && (p.sender_node_name || p.sender_name))
                     ? p.sender_public_key.substring(0, 8)
                     : (p.sender_name && p.sender_node_name && p.sender_name !== p.sender_node_name ? p.sender_name : '');
+                const senderEditKey = p.sender_public_key || (p.sender_name && p.sender_name !== '-' ? p.sender_name : '');
 
                 const targetName = p.target_node_name || p.target_name || (p.target_public_key ? p.target_public_key.substring(0, 8) : '-');
                 const targetSub = (p.target_public_key && (p.target_node_name || p.target_name))
                     ? p.target_public_key.substring(0, 8)
                     : (p.target_name && p.target_node_name && p.target_name !== p.target_node_name ? p.target_name : '');
+                const targetEditKey = p.target_public_key || (p.target_name && p.target_name !== '-' ? p.target_name : '');
 
                 return `
                     <tr>
                         <td style="font-family: var(--font-mono); font-size: 0.72rem;">#${p.id}</td>
                         <td><span class="badge badge-purple" style="font-size:0.7rem;">${escapeHtml(p.bot_id || 'KLP')}</span></td>
                         <td>${dirBadge}</td>
+                        <td>${typeBadge}</td>
                         <td>
-                            <div style="font-weight: 600; color: #ffffff;" title="${escapeHtml(senderName)}">
-                                ${escapeHtml(senderName)}
-                            </div>
-                            ${senderSub ? `<div style="font-size: 0.70rem; color: #a78bfa; font-family: var(--font-mono);">${escapeHtml(senderSub)}</div>` : ''}
+                            ${senderEditKey ? `
+                                <div onclick="openEditNode('${escapeHtml(senderEditKey)}')" style="cursor: pointer; display: inline-block;" title="Paspauskite, kad atidarytumėte mazgo „${escapeHtml(senderName)}“ nustatymus ⚙️">
+                                    <div style="font-weight: 600; color: #ffffff; text-decoration: underline dotted rgba(167, 139, 250, 0.65); text-underline-offset: 3px;">
+                                        ${escapeHtml(senderName)} <span style="font-size: 0.72rem; opacity: 0.75;">⚙️</span>
+                                    </div>
+                                    ${senderSub ? `<div style="font-size: 0.70rem; color: #a78bfa; font-family: var(--font-mono);">${escapeHtml(senderSub)}</div>` : ''}
+                                </div>
+                            ` : `
+                                <div style="font-weight: 600; color: var(--text-dim);">-</div>
+                            `}
                         </td>
                         <td>
-                            <div style="font-weight: 600; color: #ffffff;" title="${escapeHtml(targetName)}">
-                                ${escapeHtml(targetName)}
-                            </div>
-                            ${targetSub ? `<div style="font-size: 0.70rem; color: #a78bfa; font-family: var(--font-mono);">${escapeHtml(targetSub)}</div>` : ''}
+                            ${targetEditKey ? `
+                                <div onclick="openEditNode('${escapeHtml(targetEditKey)}')" style="cursor: pointer; display: inline-block;" title="Paspauskite, kad atidarytumėte mazgo „${escapeHtml(targetName)}“ nustatymus ⚙️">
+                                    <div style="font-weight: 600; color: #ffffff; text-decoration: underline dotted rgba(167, 139, 250, 0.65); text-underline-offset: 3px;">
+                                        ${escapeHtml(targetName)} <span style="font-size: 0.72rem; opacity: 0.75;">⚙️</span>
+                                    </div>
+                                    ${targetSub ? `<div style="font-size: 0.70rem; color: #a78bfa; font-family: var(--font-mono);">${escapeHtml(targetSub)}</div>` : ''}
+                                </div>
+                            ` : `
+                                <div style="font-weight: 600; color: var(--text-dim);">-</div>
+                            `}
                         </td>
                         <td style="font-family: var(--font-mono); font-size: 0.72rem;">
                             ${p.length ? p.length + ' B' : '-'} 
@@ -3470,12 +3592,14 @@ $isLoggedIn = isAdminLoggedIn();
                     
                     const senderDisp = p.sender_node_name || p.sender_name || (p.sender_public_key ? p.sender_public_key.substring(0, 8) : null);
                     const targetDisp = p.target_node_name || p.target_name || (p.target_public_key ? p.target_public_key.substring(0, 8) : null);
+                    const senderModalKey = p.sender_public_key || p.sender_name || '';
+                    const targetModalKey = p.target_public_key || p.target_name || '';
 
                     const metaRow = document.getElementById('packetMetaRow');
                     metaRow.innerHTML = `
                         <span class="badge badge-purple">🤖 Botas: ${escapeHtml(p.bot_id || 'KLP')}</span>
-                        ${senderDisp ? `<span class="badge badge-gray" title="Siuntėjas">📤 ${escapeHtml(senderDisp)}</span>` : ''}
-                        ${targetDisp ? `<span class="badge badge-gray" title="Taikinys">📥 ${escapeHtml(targetDisp)}</span>` : ''}
+                        ${senderDisp ? `<span class="badge badge-gray" style="cursor: pointer;" onclick="openEditNode('${escapeHtml(senderModalKey)}')" title="Siuntėjas (paspauskite valdyti nustatymus ⚙️)">📤 ${escapeHtml(senderDisp)} ⚙️</span>` : ''}
+                        ${targetDisp ? `<span class="badge badge-gray" style="cursor: pointer;" onclick="openEditNode('${escapeHtml(targetModalKey)}')" title="Taikinys (paspauskite valdyti nustatymus ⚙️)">📥 ${escapeHtml(targetDisp)} ⚙️</span>` : ''}
                         <span class="badge badge-blue">Ilgis: ${p.length || 0} B</span>
                         <span class="badge badge-gray">RSSI: ${p.rssi !== null && p.rssi !== undefined ? p.rssi : '-'} dBm</span>
                         <span class="badge badge-gray">SNR: ${p.snr !== null && p.snr !== undefined ? p.snr : '-'} dB</span>
@@ -4074,8 +4198,8 @@ $isLoggedIn = isAdminLoggedIn();
                         <td>
                             <div style="display: flex; flex-direction: column; gap: 2px;">
                                 <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-                                    <span style="font-weight: 600; color: #ffffff; font-size: 0.88rem;">${nameStr}</span>
-                                    <span class="badge badge-blue" style="font-size: 0.7rem;">${idStr}</span>
+                                    <span onclick="openEditNode('${escapeHtml(item.public_key || nodeIdentifier)}')" style="font-weight: 600; color: #ffffff; font-size: 0.88rem; cursor: pointer; text-decoration: underline dotted rgba(167, 139, 250, 0.65); text-underline-offset: 3px;" title="Paspauskite, kad atidarytumėte mazgo nustatymus ⚙️">${nameStr} <span style="font-size: 0.72rem; opacity: 0.75;">⚙️</span></span>
+                                    <span class="badge badge-blue" style="font-size: 0.7rem; cursor: pointer;" onclick="openEditNode('${escapeHtml(item.public_key || nodeIdentifier)}')" title="Atidaryti mazgo nustatymus">${idStr}</span>
                                     ${isBlocked ? `<span class="badge badge-red" style="font-size: 0.68rem; font-weight: 700; padding: 1px 5px; background: #e84118;" title="Mazgas sustabdytas! Pasiekė ${failCount} fail (limitas: ${maxFails})">⛔ ${failCount} fail (Sustabdytas)</span>` : (failCount > 0 ? `<span class="badge badge-red" style="font-size: 0.68rem; font-weight: 700; padding: 1px 5px; cursor: pointer;" onclick="resetNodeFailCount('${escapeHtml(nodeIdentifier)}', '${safeName}')" title="${failCount} nesėkmingi bandymai. Paspauskite, kad nuresetintumėte į 0.">⚠️ ${failCount} fail 🧹</span>` : '')}
                                     ${isRateLimited ? `<span class="badge badge-amber" style="font-size: 0.68rem; font-weight: 600; padding: 1px 5px;" title="Telemetrijos atnaujinimo intervalas: ${item.min_interval_mins} min. Liko palaukti: ${item.rate_limit_remaining_mins} min.">⏳ Pauzė (${item.rate_limit_remaining_mins} min.)</span>` : ''}
                                     ${!isMonitored ? '<span class="badge badge-gray" style="font-size: 0.65rem;" title="update=0 (Išjungta)">Neaktyvus</span>' : ''}
@@ -4338,19 +4462,6 @@ $isLoggedIn = isAdminLoggedIn();
             const el = document.getElementById(id);
             if (!el) return;
 
-            if (fromUserAction) {
-                if (modalOpenedInSession) {
-                    modalOpenedInSession = false;
-                    history.back();
-                    return;
-                } else {
-                    if (id === 'packetModal') activePacketModalId = null;
-                    if (id === 'editNodeModal') activeEditNodeKey = null;
-                    if (id === 'editBotModal') activeEditBotId = null;
-                    updateHistory({ packet: null, edit_node: null, edit_bot: null }, 'push');
-                }
-            }
-
             el.classList.remove('active');
             if (id === 'packetModal') {
                 activePacketModalId = null;
@@ -4361,6 +4472,16 @@ $isLoggedIn = isAdminLoggedIn();
             }
             if (id === 'editBotModal') {
                 activeEditBotId = null;
+            }
+
+            if (fromUserAction && !isApplyingUrlState) {
+                modalOpenedInSession = false;
+                updateHistory({
+                    tab: currentTab || 'nodes',
+                    packet: activePacketModalId,
+                    edit_node: activeEditNodeKey,
+                    edit_bot: activeEditBotId
+                }, 'replace');
             }
             updateDocumentTitle();
         }

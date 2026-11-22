@@ -589,10 +589,11 @@ if ($action === 'telemetry') {
 // RAW paketų sąrašas debugginimui
 if ($action === 'raw_packets') {
     $filters = [
-        'node'      => $_GET['node'] ?? null,
-        'direction' => $_GET['direction'] ?? null,
-        'status'    => $_GET['status'] ?? null,
-        'search'    => $_GET['search'] ?? null,
+        'node'        => $_GET['node'] ?? null,
+        'direction'   => $_GET['direction'] ?? null,
+        'status'      => $_GET['status'] ?? null,
+        'packet_type' => isset($_GET['packet_type']) && $_GET['packet_type'] !== '' ? $_GET['packet_type'] : null,
+        'search'      => $_GET['search'] ?? null,
     ];
     $limit   = max(1, min(500, (int)($_GET['limit'] ?? 50)));
     $offset  = max(0, (int)($_GET['offset'] ?? 0));

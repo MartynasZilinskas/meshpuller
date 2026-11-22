@@ -461,10 +461,15 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
     sendMeshCoreLogin(repIdx);
     bool lOk = waitForReply(loginTimeout, targetHash, WAIT_LOGIN);
     if (!lOk && monitoredNodes[repIdx].hasRoute) {
-      Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Login! Kelias izoliuojamas (karantinas 15 min.) ir kartojama per FLOOD...\n", rep.name.c_str());
-      quarantineFailedRoute(repIdx);
+      Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Login! Bandomas atsarginis Login per FLOOD (išsaugant DIRECT kelią 22 B telemetrijos bandymui)...\n", rep.name.c_str());
+      monitoredNodes[repIdx].hasRoute = false;
       sendMeshCoreLogin(repIdx);
       lOk = waitForReply(REPEATER_REMOTE_REPLY_TIMEOUT_MS, targetHash, WAIT_LOGIN);
+      if (!lOk && monitoredNodes[repIdx].routePathLen > 0) {
+        // Jei LOGIN_OK aidas pasimetė grįžtant, bet DIRECT Login galėjo pasiekti kartotuvą –
+        // grąžiname DIRECT kelią, kad Žingsnis 3 pirmiausia išbandytų DIRECT telemetriją (ir tik jai neatsakius – FLOOD)!
+        monitoredNodes[repIdx].hasRoute = true;
+      }
     }
     if (lOk) {
       markLocalSessionActive(targetPubKey);
