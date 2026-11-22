@@ -7,6 +7,7 @@ use MeshCore\Contracts\NodeRepositoryInterface;
 use MeshCore\Contracts\PollingQueueServiceInterface;
 use MeshCore\Contracts\SettingsRepositoryInterface;
 use MeshCore\MeshCoreDecoder;
+use MeshCore\RepeaterLoginPassword;
 use PDO;
 
 /**
@@ -544,7 +545,7 @@ SQL;
         if (array_key_exists('password', $fields)) {
             $colPass = ($driver === 'pgsql') ? 'password' : '`password`';
             $sets[] = "{$colPass} = :password";
-            $trimmedPass = $fields['password'] !== null ? trim((string)$fields['password']) : '';
+            $trimmedPass = RepeaterLoginPassword::normalize($fields['password']);
             $params[':password'] = ($trimmedPass !== '') ? $trimmedPass : 'hello';
         }
 

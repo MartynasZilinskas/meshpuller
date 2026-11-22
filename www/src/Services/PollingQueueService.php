@@ -8,6 +8,7 @@ use DateTimeZone;
 use MeshCore\Contracts\GeolocationServiceInterface;
 use MeshCore\Contracts\PollingQueueServiceInterface;
 use MeshCore\Contracts\SettingsRepositoryInterface;
+use MeshCore\RepeaterLoginPassword;
 use MeshCore\Services\GeolocationService;
 use PDO;
 
@@ -122,7 +123,7 @@ class PollingQueueService implements PollingQueueServiceInterface
 
         if ($password !== null) {
             $sets[] = "{$colPass} = :password";
-            $params[':password'] = trim($password);
+            $params[':password'] = RepeaterLoginPassword::normalize($password);
         }
 
         if ($update !== null) {

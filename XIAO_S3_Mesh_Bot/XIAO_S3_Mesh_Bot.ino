@@ -220,7 +220,8 @@ void requestTelemetryFromAllRepeaters();
 void requestTelemetryFromSingleRepeater(size_t repIdx);
 bool waitForReply(unsigned long timeoutMs, uint8_t expectedSenderHash = 0, WaitTarget waitTarget = WAIT_ANY);
 bool processIncomingPacket(uint8_t expectedSenderHash = 0, WaitTarget waitTarget = WAIT_ANY);
-void sendMeshCoreLogin(size_t repIdx);
+constexpr size_t MAX_REPEATER_LOGIN_PASSWORD_BYTES = 15;
+bool sendMeshCoreLogin(size_t repIdx);
 void sendMeshCorePath(size_t repIdx);
 void sendMeshCoreStatusRequest(size_t repIdx);
 void sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const uint8_t* payload, size_t payloadLen,
@@ -448,7 +449,6 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
   const uint8_t* targetPubKey = monitoredNodes[repIdx].pubKey;
   bool sessionActive = rep.skipLogin || hasLocalSession(targetPubKey);
   bool didLoginThisCycle = false;
-  bool loginSucceeded = sessionActive;
 
   auto getDynamicReplyTimeout = [&]() -> unsigned long {
     bool curDirectZero = (monitoredNodes[repIdx].hasRoute && monitoredNodes[repIdx].routeHopCount == 0);
@@ -456,18 +456,17 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
   };
 
   // Pagalbinė lambda funkcija prisijungimui (naudojama arba iškart, arba kaip fallback)
-  auto performLoginStep = [&]() -> bool {
+  enum class LoginResult { ReplyReceived, NoReply, InvalidPassword };
+  auto performLoginStep = [&]() -> LoginResult {
     didLoginThisCycle = true;
     unsigned long loginTimeout = getDynamicReplyTimeout();
 
-    Serial.printf("[Užklausa 1/3] Siunčiamas užšifruotas Login į '%s' (Laukiama iki %.1f s)...\n",
-                  rep.name.c_str(), loginTimeout / 1000.0f);
-    sendMeshCoreLogin(repIdx);
+    if (!sendMeshCoreLogin(repIdx)) return LoginResult::InvalidPassword;
     bool lOk = waitForReply(loginTimeout, targetHash, WAIT_LOGIN);
     if (!lOk && monitoredNodes[repIdx].hasRoute) {
       Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Login! Bandomas atsarginis Login per FLOOD (išsaugant DIRECT kelią 22 B telemetrijos bandymui)...\n", rep.name.c_str());
       monitoredNodes[repIdx].hasRoute = false;
-      sendMeshCoreLogin(repIdx);
+      if (!sendMeshCoreLogin(repIdx)) return LoginResult::InvalidPassword;
       lOk = waitForReply(activeConfig.remoteTimeout, targetHash, WAIT_LOGIN);
       if (!lOk && monitoredNodes[repIdx].routePathLen > 0) {
         // Jei LOGIN_OK aidas pasimetė grįžtant, bet DIRECT Login galėjo pasiekti kartotuvą –
@@ -481,14 +480,13 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
     // Trumpa 3.0 s pauzė eteriui nurimti po Login užklausos (net jei LOGIN_OK aidas pasimetė grįždamas,
     // kartotuvas dažnai jau priėmė Login ir yra pasiruošęs atsakyti į trumpą 22 B telemetrijos užklausą!)
     yieldDelay(3000);
-    loginSucceeded = lOk;
-    return lOk;
+    return lOk ? LoginResult::ReplyReceived : LoginResult::NoReply;
   };
 
   // Žingsnis 1: Jei sesija (ACL) dar neaktyvi – siunčiame Login (ANON_REQ).
   // Jei sesija jau aktyvi – praleidžiame Login ir iškart taupome eterio laiką!
   if (!sessionActive) {
-    if (!performLoginStep()) {
+    if (performLoginStep() == LoginResult::NoReply) {
       Serial.printf("[Ciklas] ⚠️ LOGIN_OK iš '%s' negautas (gali būti prarastas grįžtant per multi-hop), tačiau bandoma 22 B užklausa...\n",
                     rep.name.c_str());
     }
@@ -520,15 +518,16 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
       Serial.printf("[Sesija Fallback] ⚠️ '%s' neatsakė į Status be Login (net per FLOOD). Išvaloma sesija, vykdomas Login...\n",
                     rep.name.c_str());
       clearLocalSession(targetPubKey);
-      performLoginStep();
-      unsigned long retryStatusTimeout = getDynamicReplyTimeout();
-      sendMeshCoreStatusRequest(repIdx);
-      statusOk = waitForReply(retryStatusTimeout, targetHash, WAIT_STATUS);
-      if (!statusOk && monitoredNodes[repIdx].hasRoute) {
-        Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Status po Login! Kartojama per FLOOD...\n", rep.name.c_str());
-        quarantineFailedRoute(repIdx);
+      if (performLoginStep() != LoginResult::InvalidPassword) {
+        unsigned long retryStatusTimeout = getDynamicReplyTimeout();
         sendMeshCoreStatusRequest(repIdx);
-        statusOk = waitForReply(activeConfig.remoteTimeout, targetHash, WAIT_STATUS);
+        statusOk = waitForReply(retryStatusTimeout, targetHash, WAIT_STATUS);
+        if (!statusOk && monitoredNodes[repIdx].hasRoute) {
+          Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Status po Login! Kartojama per FLOOD...\n", rep.name.c_str());
+          quarantineFailedRoute(repIdx);
+          sendMeshCoreStatusRequest(repIdx);
+          statusOk = waitForReply(activeConfig.remoteTimeout, targetHash, WAIT_STATUS);
+        }
       }
     }
     if (statusOk) {
@@ -568,15 +567,16 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
       Serial.printf("[Sesija Fallback] ⚠️ '%s' neatsakė į Telemetriją be Login (net per FLOOD). Išvaloma sesija, vykdomas Login...\n",
                     rep.name.c_str());
       clearLocalSession(targetPubKey);
-      performLoginStep();
-      unsigned long retryTelemTimeout = getDynamicReplyTimeout();
-      sendMeshCoreTelemetryRequest(repIdx);
-      telemOk = waitForReply(retryTelemTimeout, targetHash, WAIT_TELEMETRY);
-      if (!telemOk && monitoredNodes[repIdx].hasRoute) {
-        Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Telemetriją po Login! Kartojama per FLOOD...\n", rep.name.c_str());
-        quarantineFailedRoute(repIdx);
+      if (performLoginStep() != LoginResult::InvalidPassword) {
+        unsigned long retryTelemTimeout = getDynamicReplyTimeout();
         sendMeshCoreTelemetryRequest(repIdx);
-        telemOk = waitForReply(activeConfig.remoteTimeout, targetHash, WAIT_TELEMETRY);
+        telemOk = waitForReply(retryTelemTimeout, targetHash, WAIT_TELEMETRY);
+        if (!telemOk && monitoredNodes[repIdx].hasRoute) {
+          Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Telemetriją po Login! Kartojama per FLOOD...\n", rep.name.c_str());
+          quarantineFailedRoute(repIdx);
+          sendMeshCoreTelemetryRequest(repIdx);
+          telemOk = waitForReply(activeConfig.remoteTimeout, targetHash, WAIT_TELEMETRY);
+        }
       }
     }
     if (telemOk) {
@@ -1072,8 +1072,18 @@ void sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const
 }
 
 // 1. Siunčiama užšifruota prisijungimo (Login) užklausa su slaptažodžiu
-void sendMeshCoreLogin(size_t repIdx) {
+// Returns false if the password was rejected locally; RF outcomes are handled separately.
+bool sendMeshCoreLogin(size_t repIdx) {
   const RepeaterTarget& rep = monitoredRepeaters[repIdx];
+  String password = rep.password;
+  password.trim();
+  if (password.length() == 0) password = "hello";
+  size_t pwdLen = password.length();
+  if (pwdLen > MAX_REPEATER_LOGIN_PASSWORD_BYTES) {
+    Serial.printf("[Login KLAIDA] '%s': kartotuvo slaptažodis negali būti ilgesnis nei %u baitų.\n",
+                  rep.name.c_str(), static_cast<unsigned>(MAX_REPEATER_LOGIN_PASSWORD_BYTES));
+    return false;
+  }
   uint8_t target = monitoredNodes[repIdx].hash;
   const uint8_t* secret = monitoredNodes[repIdx].sharedSecret;
 
@@ -1092,26 +1102,21 @@ void sendMeshCoreLogin(size_t repIdx) {
   pLen += PUB_KEY_SIZE;
 
   // 3. Paruošiame šifruojamus duomenis (Plaintext)
-  uint8_t plain[64];
+  uint8_t plain[sizeof(uint32_t) + MAX_REPEATER_LOGIN_PASSWORD_BYTES + 1];
   size_t plainLen = 0;
 
   uint32_t ts = getNextTimestamp();
   memcpy(&plain[plainLen], &ts, 4);
   plainLen += 4;
 
-  String loginPwd = rep.password;
-  loginPwd.trim();
-  if (loginPwd.length() == 0) {
-    loginPwd = "hello";
-  }
-  size_t pwdLen = loginPwd.length();
-  memcpy(&plain[plainLen], loginPwd.c_str(), pwdLen + 1);
+  memcpy(&plain[plainLen], password.c_str(), pwdLen + 1);
   plainLen += (pwdLen + 1);
 
   int encLen = MeshCrypto::encryptThenMAC(secret, &payload[pLen], plain, plainLen);
   pLen += encLen;
 
   sendMeshCoreRaw(header, pathLen, path, payload, pLen, rep.name.c_str(), rep.public_id.c_str(), secret);
+  return true;
 }
 
 // 2. Siunčiamas tiesioginio kelio registravimas (PAYLOAD_TYPE_PATH) su 0 apynių
