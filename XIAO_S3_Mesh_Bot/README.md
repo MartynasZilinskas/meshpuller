@@ -40,10 +40,10 @@ Darbo eiga taip pat kompiliuoja susijusius pakeitimus į `main` ir pull request;
 pull request atvaizdai neįkeliami. Baigto rankinio ar `main` darbo skiltyje
 **Artifacts** atsisiųskite `meshpuller-xiao-esp32s3-8mb-<SHA>`:
 
-- `XIAO_S3_Mesh_Bot.ino.bin` – programos atvaizdas (`0x10000`), kuriam reikia suderinamo įkroviklio ir skaidinių lentelės.
-- `XIAO_S3_Mesh_Bot.ino.merged.bin` – visas 8 MB atvaizdas (`0x0`); jo įrašymas gali perrašyti NVS nustatymus.
+- `MeshPuller_XIAO_S3_8MB_app.bin` – programos atvaizdas (`0x10000`), kuriam reikia suderinamo įkroviklio ir skaidinių lentelės.
+- `MeshPuller_XIAO_S3_8MB_merged.bin` – visas 8 MB atvaizdas (`0x0`); jo įrašymas gali perrašyti NVS nustatymus.
 
-Naujam arba ištrintam **XIAO ESP32-S3 (8 MB)** įrašykite `*.ino.merged.bin`
+Naujam arba ištrintam **XIAO ESP32-S3 (8 MB)** įrašykite `MeshPuller_XIAO_S3_8MB_merged.bin`
 nuo `0x0`. Darbo eiga pati neįrašo programos į įrenginį ir nepublikuoja GitHub Release.
 
 1. Perkraukite įrenginį ir per pirmą minutę prisijunkite prie atviro

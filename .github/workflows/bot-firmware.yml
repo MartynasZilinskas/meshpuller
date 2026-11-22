@@ -62,12 +62,13 @@ jobs:
           cp .github/firmware/config.h "$sketch_dir/config.h"
 
           arduino-cli compile --fqbn "$FQBN" --build-path "$build_dir" "$sketch_dir"
-          for image in XIAO_S3_Mesh_Bot.ino.bin XIAO_S3_Mesh_Bot.ino.merged.bin; do
+          for image in "$source_dir.ino.bin" "$source_dir.ino.merged.bin"; do
             test -s "$build_dir/$image" || { echo "Missing firmware image: $image" >&2; exit 1; }
-            cp "$build_dir/$image" "$artifact_dir/"
           done
-          app="$artifact_dir/XIAO_S3_Mesh_Bot.ino.bin"
-          merged="$artifact_dir/XIAO_S3_Mesh_Bot.ino.merged.bin"
+          app="$artifact_dir/MeshPuller_XIAO_S3_8MB_app.bin"
+          merged="$artifact_dir/MeshPuller_XIAO_S3_8MB_merged.bin"
+          cp "$build_dir/$source_dir.ino.bin" "$app"
+          cp "$build_dir/$source_dir.ino.merged.bin" "$merged"
           # Verify the 8 MiB merged image contains this build's app at 0x10000.
           test "$(stat -c %s "$merged")" -eq $((8 * 1024 * 1024))
           cmp -n "$(stat -c %s "$app")" "$app" "$merged" 0 "$((0x10000))"
@@ -79,6 +80,6 @@ jobs:
         with:
           name: meshpuller-xiao-esp32s3-8mb-${{ github.sha }}
           path: |
-            ${{ steps.build.outputs.artifact_dir }}/XIAO_S3_Mesh_Bot.ino.bin
-            ${{ steps.build.outputs.artifact_dir }}/XIAO_S3_Mesh_Bot.ino.merged.bin
+            ${{ steps.build.outputs.artifact_dir }}/MeshPuller_XIAO_S3_8MB_app.bin
+            ${{ steps.build.outputs.artifact_dir }}/MeshPuller_XIAO_S3_8MB_merged.bin
           if-no-files-found: error
