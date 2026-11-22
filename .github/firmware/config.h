@@ -42,6 +42,14 @@ constexpr uint8_t LORA_SYNC_WORD = 0x12;
 constexpr int8_t LORA_TX_POWER = 22;
 constexpr uint16_t LORA_PREAMBLE_LEN = 16;
 
+// Reply types used by the sketch's receive loop.
+enum WaitTarget {
+  WAIT_ANY,
+  WAIT_LOGIN,
+  WAIT_STATUS,
+  WAIT_TELEMETRY,
+};
+
 struct RepeaterTarget {
   String name;
   String public_id;
