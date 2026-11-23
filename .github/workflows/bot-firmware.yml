@@ -57,7 +57,7 @@ jobs:
           mkdir -p "$sketch_dir/src" "$artifact_dir"
 
           # Build only from the sketch sources and the credential-free deployment profile.
-          cp "$source_dir/"{XIAO_S3_Mesh_Bot.ino,MeshCorePacket.h,MeshCrypto.h,WebConfigPortal.h} "$sketch_dir/"
+          cp "$source_dir/"{XIAO_S3_Mesh_Bot.ino,MeshCorePacket.h,MeshCrypto.h,MeshRadioTypes.h,WebConfigPortal.h} "$sketch_dir/"
           cp -R "$source_dir/src/ed25519" "$sketch_dir/src/"
           cp .github/firmware/config.h "$sketch_dir/config.h"
 

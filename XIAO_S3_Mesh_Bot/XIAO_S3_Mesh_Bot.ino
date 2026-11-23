@@ -16,6 +16,7 @@
 #include "config.h"
 #include "MeshCrypto.h"
 #include "MeshCorePacket.h"
+#include "MeshRadioTypes.h"
 #include "WebConfigPortal.h"
 
 // ESP-IDF's default public CA bundle, included in the ESP32 Arduino core.
@@ -218,19 +219,6 @@ bool fetchRepeatersFromURL();
 void initMonitoredNodeKeys();
 void requestTelemetryFromAllRepeaters();
 void requestTelemetryFromSingleRepeater(size_t repIdx);
-enum class PollResult { ReplyReceived, ReplyReceivedThenAborted, Timeout, Aborted, InvalidPassword };
-enum class SendResult { ReadyToWait, Paused, InvalidPassword, EncodeFailed, TransmitFailed, ReceiveFailed };
-struct ReciprocalPath {
-  int peer = -1;
-  uint8_t outboundLen = 0;
-  const uint8_t* outbound = nullptr;
-  uint8_t returnLen = 0;
-  const uint8_t* returnPath = nullptr;
-};
-struct ReceivedPacket {
-  bool acceptedReply;
-  bool canContinue;
-};
 PollResult waitForReply(unsigned long timeoutMs, uint8_t expectedSenderHash, WaitTarget waitTarget);
 bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget, ReciprocalPath& reciprocal);
 ReceivedPacket serviceReceivedPacket(uint8_t expectedSenderHash = 0, WaitTarget waitTarget = WAIT_ANY);
