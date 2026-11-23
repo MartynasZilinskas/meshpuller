@@ -220,11 +220,23 @@ void requestTelemetryFromAllRepeaters();
 void requestTelemetryFromSingleRepeater(size_t repIdx);
 enum class PollResult { ReplyReceived, ReplyReceivedThenAborted, Timeout, Aborted, InvalidPassword };
 enum class SendResult { ReadyToWait, Paused, InvalidPassword, EncodeFailed, TransmitFailed, ReceiveFailed };
+struct ReciprocalPath {
+  int peer = -1;
+  uint8_t outboundLen = 0;
+  const uint8_t* outbound = nullptr;
+  uint8_t returnLen = 0;
+  const uint8_t* returnPath = nullptr;
+};
+struct ReceivedPacket {
+  bool acceptedReply;
+  bool canContinue;
+};
 PollResult waitForReply(unsigned long timeoutMs, uint8_t expectedSenderHash, WaitTarget waitTarget);
-bool processIncomingPacket(uint8_t expectedSenderHash = 0, WaitTarget waitTarget = WAIT_ANY);
+bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget, ReciprocalPath& reciprocal);
+ReceivedPacket serviceReceivedPacket(uint8_t expectedSenderHash = 0, WaitTarget waitTarget = WAIT_ANY);
 constexpr size_t MAX_REPEATER_LOGIN_PASSWORD_BYTES = 15;
 SendResult sendMeshCoreLogin(size_t repIdx, bool flood);
-void sendMeshCorePath(size_t repIdx);
+SendResult sendMeshCorePath(const ReciprocalPath& path);
 SendResult sendMeshCoreStatusRequest(size_t repIdx, bool flood);
 SendResult sendMeshCoreTelemetryRequest(size_t repIdx, bool flood);
 SendResult sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const uint8_t* payload, size_t payloadLen,
@@ -332,11 +344,7 @@ void loop() {
   }
 
   // 1. Klausomės eterio (jei kartotuvas atsiunčia paketą, pvz. ADVERT)
-  if (receivedFlag) {
-    receivedFlag = false;
-    processIncomingPacket(0);
-    radio.startReceive();
-  }
+  if (receivedFlag && !serviceReceivedPacket().canContinue) return;
 
   // 2. Periodiškas užklausų inicijavimas po nustatyto laiko intervalo
   if (millis() - lastTelemetryRequest >= activeConfig.interval) {
@@ -363,15 +371,7 @@ void loop() {
 bool yieldDelay(unsigned long ms) {
   unsigned long start = millis();
   while (millis() - start < ms) {
-    if (receivedFlag) {
-      receivedFlag = false;
-      processIncomingPacket(0);
-      int rxState = radio.startReceive();
-      if (rxState != RADIOLIB_ERR_NONE) {
-        Serial.printf("[LoRa RX KLAIDA] Nepavyko atnaujinti priėmimo, klaidos kodas: %d\n", rxState);
-        return false;
-      }
-    }
+    if (receivedFlag && !serviceReceivedPacket().canContinue) return false;
     handleWebConfigPortal();
     if (telemetryPaused) return false;
     delay(10);
@@ -400,6 +400,7 @@ void requestTelemetryFromAllRepeaters() {
   Serial.printf("[Ciklas] Nustatytas laukimo laikas po kiekvienos užklausos: %.1f s\n", activeConfig.replyTimeout / 1000.0f);
   Serial.println("========================================================");
 
+  bool cooldownFailed = false;
   for (size_t i = 0; i < monitoredRepeatersCount && !telemetryPaused; i++) {
     if (!monitoredNodes[i].initialized) {
       Serial.printf("[Ciklas] Kartotuvas '%s' neinicializuotas (patikrinkite raktą). Praleidžiama.\n",
@@ -417,13 +418,18 @@ void requestTelemetryFromAllRepeaters() {
     if (!telemetryPaused && i + 1 < monitoredRepeatersCount) {
       Serial.printf("\n[Pauzė] Baigtas darbas su '%s'. Pauzė %.1f s prieš kreipiantis į sekantį...\n",
                     monitoredRepeaters[i].name.c_str(), activeConfig.cooldown / 1000.0f);
-      yieldDelay(activeConfig.cooldown);
+      if (!yieldDelay(activeConfig.cooldown)) {
+        cooldownFailed = !telemetryPaused;
+        break;
+      }
     }
   }
 
   // Pasibaigus apklausai bandome vėl įjungti LoRa priėmimą.
   radio.startReceive();
-  Serial.println(telemetryPaused ? "\n[Ciklas] Telemetrija pristabdyta iki perkrovimo." : "\n[Ciklas] Visi kartotuvai patikrinti!");
+  if (telemetryPaused) Serial.println("\n[Ciklas] Telemetrija pristabdyta iki perkrovimo.");
+  else if (cooldownFailed) Serial.println("\n[Ciklas] Apklausa nutraukta dėl LoRa klaidos.");
+  else Serial.println("\n[Ciklas] Visi kartotuvai patikrinti!");
 }
 
 void requestTelemetryFromSingleRepeater(size_t repIdx) {
@@ -598,15 +604,10 @@ PollResult waitForReply(unsigned long timeoutMs, uint8_t expectedSenderHash, Wai
   while (millis() - start < timeoutMs) {
     if (telemetryPaused) return PollResult::Aborted;
     if (receivedFlag) {
-      receivedFlag = false;
       packetsCount++;
-      bool valid = processIncomingPacket(expectedSenderHash, waitTarget);
-      int rxState = radio.startReceive();
-      if (rxState != RADIOLIB_ERR_NONE) {
-        Serial.printf("[LoRa RX KLAIDA] Nepavyko atnaujinti priėmimo, klaidos kodas: %d\n", rxState);
-        return valid ? PollResult::ReplyReceivedThenAborted : PollResult::Aborted;
-      }
-      if (valid) {
+      ReceivedPacket packet = serviceReceivedPacket(expectedSenderHash, waitTarget);
+      if (!packet.canContinue) return packet.acceptedReply ? PollResult::ReplyReceivedThenAborted : PollResult::Aborted;
+      if (packet.acceptedReply) {
         Serial.println("[RX Laukimas] Atsakymas sėkmingai gautas ir apdorotas!");
         // Dar 500 ms priimame papildomus paketus. Jau gautas atsakymas lieka galioti.
         return yieldDelay(500) ? PollResult::ReplyReceived : PollResult::ReplyReceivedThenAborted;
@@ -1109,31 +1110,27 @@ SendResult sendMeshCoreLogin(size_t repIdx, bool flood) {
   return sendMeshCoreRaw(header, pathLen, path, payload, pLen, rep.name.c_str(), rep.public_id.c_str(), secret);
 }
 
-// 2. Siunčiamas tiesioginio kelio registravimas (PAYLOAD_TYPE_PATH) su 0 apynių
-void sendMeshCorePath(size_t repIdx) {
+// Išorinis gauto FLOOD paketo kelias tampa kartotuvo grįžimo keliu.
+SendResult sendMeshCorePath(const ReciprocalPath& path) {
+  const size_t repIdx = path.peer;
   const RepeaterTarget& rep = monitoredRepeaters[repIdx];
   uint8_t target = monitoredNodes[repIdx].hash;
   const uint8_t* secret = monitoredNodes[repIdx].sharedSecret;
 
   uint8_t header = ((PAYLOAD_TYPE_PATH & 0x0F) << 2) | ROUTE_TYPE_DIRECT; // 0x22
 
-  uint8_t payload[64];
-  size_t pLen = 0;
+  uint8_t plain[MeshCorePacket::MAX_PATH_BYTES + 6];
+  const size_t returnBytes = MeshCorePacket::pathByteCount(path.returnLen);
+  plain[0] = path.returnLen;
+  memcpy(plain + 1, path.returnPath, returnBytes);
+  plain[1 + returnBytes] = 0xFF; // Nėra įdėto atsakymo.
+  esp_fill_random(plain + 2 + returnBytes, 4);
 
-  payload[pLen++] = target;
-  payload[pLen++] = myNodeHash;
-
-  // Plaintext: [path_len 0x00][extra_type 0xFF][timestamp 4B]
-  uint8_t plain[16] = {0};
-  plain[0] = getPathLengthByte(0); // 0 apynių kelias su pasirinktu hash dydžiu
-  plain[1] = 0xFF; // extra_type dummy
-  uint32_t ts = getNextTimestamp();
-  memcpy(&plain[2], &ts, 4);
-
-  int encLen = MeshCrypto::encryptThenMAC(secret, &payload[pLen], plain, 6);
-  pLen += encLen;
-
-  sendMeshCoreRaw(header, getPathLengthByte(0), nullptr, payload, pLen, rep.name.c_str(), rep.public_id.c_str(), secret);
+  // Du mazgų hash baitai, MAC ir AES iki pilno bloko papildyti duomenys.
+  uint8_t payload[2 + CIPHER_MAC_SIZE + ((sizeof(plain) + 15) / 16) * 16] = {target, myNodeHash};
+  int encLen = MeshCrypto::encryptThenMAC(secret, payload + 2, plain, returnBytes + 6);
+  return sendMeshCoreRaw(header, path.outboundLen, path.outbound, payload, 2 + encLen,
+                         rep.name.c_str(), rep.public_id.c_str(), secret);
 }
 
 // 3. Siunčiama užšifruota būsenos ir statistikos užklausa (REQ_TYPE_GET_STATUS = 0x01)
@@ -1209,8 +1206,12 @@ struct RxDedupEntry {
 };
 
 static const size_t RX_DEDUP_CACHE_SIZE = 32;
-static RxDedupEntry rxDedupCache[RX_DEDUP_CACHE_SIZE];
-static size_t rxDedupHead = 0;
+struct RxDedupCache {
+  RxDedupEntry entries[RX_DEDUP_CACHE_SIZE];
+  size_t head;
+};
+static RxDedupCache rxDedupCache, reciprocalDedupCache;
+static bool isDuplicateRxPayload(RxDedupCache& cache, uint8_t payloadType, const uint8_t* payload, size_t payloadLen);
 
 // FNV-1a greitas hešas paketo kroviniui
 static uint32_t calcPayloadHash(const uint8_t* data, size_t len) {
@@ -1223,26 +1224,24 @@ static uint32_t calcPayloadHash(const uint8_t* data, size_t len) {
 }
 
 // Tikrina, ar toks paketo krovinys jau buvo gautas per pastarąsias 20 sekundžių
-static bool isDuplicateRxPayload(uint8_t payloadType, const uint8_t* payload, size_t payloadLen) {
+static bool isDuplicateRxPayload(RxDedupCache& cache, uint8_t payloadType, const uint8_t* payload, size_t payloadLen) {
   if (payload == nullptr || payloadLen == 0) return false;
 
   uint32_t hash = calcPayloadHash(payload, payloadLen);
   uint32_t nowMs = millis();
   const uint32_t DEDUP_WINDOW_MS = 20000; // 20 sekundžių apsaugos langas
 
-  for (size_t i = 0; i < RX_DEDUP_CACHE_SIZE; i++) {
-    if (rxDedupCache[i].hash == hash && rxDedupCache[i].payloadType == payloadType) {
-      if ((nowMs - rxDedupCache[i].timestampMs) < DEDUP_WINDOW_MS) {
+  for (const auto& entry : cache.entries) {
+    if (entry.hash == hash && entry.payloadType == payloadType) {
+      if ((nowMs - entry.timestampMs) < DEDUP_WINDOW_MS) {
         return true; // Dublikatas rastas!
       }
     }
   }
 
   // Įrašome naują įrašą į žiedinį buferį
-  rxDedupCache[rxDedupHead].hash = hash;
-  rxDedupCache[rxDedupHead].payloadType = payloadType;
-  rxDedupCache[rxDedupHead].timestampMs = nowMs;
-  rxDedupHead = (rxDedupHead + 1) % RX_DEDUP_CACHE_SIZE;
+  cache.entries[cache.head] = {hash, payloadType, nowMs};
+  cache.head = (cache.head + 1) % RX_DEDUP_CACHE_SIZE;
 
   return false;
 }
@@ -1250,17 +1249,30 @@ static bool isDuplicateRxPayload(uint8_t payloadType, const uint8_t* payload, si
 // ================================================================================
 // 📥 GAUTŲ PAKETŲ APDOROJIMAS IR ATSAKYMŲ PARSINIMAS
 // ================================================================================
-bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
-  int length = radio.getPacketLength();
-  if (length <= 0) {
-    return false; // Tuščias arba klaidingas pertraukties sužadinimas
+ReceivedPacket serviceReceivedPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
+  receivedFlag = false;
+  ReciprocalPath reciprocal;
+  const bool accepted = processIncomingPacket(expectedSenderHash, waitTarget, reciprocal);
+  if (reciprocal.peer >= 0) {
+    // Paketo ir iššifruoti buferiai galioja iki kito RX apdorojimo.
+    const SendResult sent = sendMeshCorePath(reciprocal);
+    if (sent != SendResult::Paused && sent != SendResult::EncodeFailed) {
+      return {accepted, sent == SendResult::ReadyToWait}; // TX jau bandė atnaujinti RX.
+    }
   }
+  int rxState = radio.startReceive();
+  if (rxState != RADIOLIB_ERR_NONE) {
+    Serial.printf("[LoRa RX KLAIDA] Nepavyko atnaujinti priėmimo, klaidos kodas: %d\n", rxState);
+  }
+  return {accepted, reciprocal.peer < 0 && rxState == RADIOLIB_ERR_NONE};
+}
 
+bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget, ReciprocalPath& reciprocal) {
+  int length = radio.getPacketLength();
   static uint8_t packetBuffer[256];
+  if (length < 2 || (size_t)length > sizeof(packetBuffer)) return false;
   int state = radio.readData(packetBuffer, length);
-  if (state != RADIOLIB_ERR_NONE || length < 2) {
-    return false;
-  }
+  if (state != RADIOLIB_ERR_NONE) return false;
 
   float rssi = radio.getRSSI();
   float snr  = radio.getSNR();
@@ -1269,6 +1281,7 @@ bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
   uint8_t version = (header >> 6) & 0x03;
   uint8_t payloadType = (header >> 2) & 0x0F;
   uint8_t routeType = header & 0x03;
+  const bool isFloodRx = routeType == ROUTE_TYPE_FLOOD || routeType == ROUTE_TYPE_TRANSPORT_FLOOD;
 
   const char* typeStr = "NEŽINOMAS";
   switch (payloadType) {
@@ -1285,12 +1298,8 @@ bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
   size_t offset = 1;
 
   // 1. Transport codes (jei ROUTE_TYPE_TRANSPORT_FLOOD arba ROUTE_TYPE_TRANSPORT_DIRECT)
-  uint16_t transportCode1 = 0, transportCode2 = 0;
-  bool hasTransportCodes = (routeType == ROUTE_TYPE_TRANSPORT_FLOOD || routeType == ROUTE_TYPE_TRANSPORT_DIRECT);
-  if (hasTransportCodes) {
+  if (MeshCorePacket::hasTransportCodes(routeType)) {
     if ((size_t)length < offset + 4) return false;
-    transportCode1 = packetBuffer[offset] | (packetBuffer[offset + 1] << 8);
-    transportCode2 = packetBuffer[offset + 2] | (packetBuffer[offset + 3] << 8);
     offset += 4;
   }
 
@@ -1305,7 +1314,7 @@ bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
 
   uint8_t pathHashSize = (pathLenByte >> 6) + 1; // 1, 2 arba 3 baitai
   uint8_t pathHopCount = pathLenByte & 0x3F;      // 0..63 šuoliai
-  size_t pathByteLength = (size_t)pathHopCount * pathHashSize;
+  size_t pathByteLength = MeshCorePacket::pathByteCount(pathLenByte);
 
   size_t remainingAfterHeader = (size_t)length - offset;
   bool useLegacy = false;
@@ -1325,6 +1334,9 @@ bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
 
   uint8_t* payload = &packetBuffer[payloadOffset];
   size_t payloadLen = length - payloadOffset;
+  const bool validPathFrame = payloadType == PAYLOAD_TYPE_PATH && version == 0 && !useLegacy &&
+                              MeshCorePacket::validPathLength(pathLenByte) &&
+                              (isFloodRx || pathHopCount == 0) && payloadLen <= MeshCorePacket::MAX_PAYLOAD_BYTES;
 
   // --------------------------------------------------------------------------
   // 1. FILTRUOJAME MŪSŲ PAČIŲ AIDĄ IR SVETIMAS UŽKLAUSAS IŠ ETERIO:
@@ -1351,10 +1363,12 @@ bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
   //    jo krovinys (payload) yra 100% identiškas. Jei tokį jau gavome per 20s – nebesiunčiame pakartotinai į API!
   //    IŠIMTIS: Jei paketas skirtas MŪSŲ mazgui (dHash == myNodeHash) ir naujas paketas atkeliavo per VIETINĮ kartotuvą
   //    (turi daugiau šuolių ir stiprų RSSI nei silpnas tolimas aidas), leidžiame atnaujinti maršrutą!
-  bool isDupe = isDuplicateRxPayload(payloadType, payload, payloadLen);
+  bool isDupe = isDuplicateRxPayload(rxDedupCache, payloadType, payload, payloadLen);
   bool isResponseForUs = ((payloadType == PAYLOAD_TYPE_RESPONSE || payloadType == PAYLOAD_TYPE_PATH) && payloadLen >= 2 && payload[0] == myNodeHash);
+  const bool couldReturnPath = validPathFrame && isResponseForUs && isFloodRx;
+  const bool skipRepeatedRx = isDupe && (!isResponseForUs || pathHopCount <= 1);
 
-  if (isDupe && (!isResponseForUs || pathHopCount <= 1)) {
+  if (skipRepeatedRx && !couldReturnPath) {
     Serial.println("\n--------------------------------------------------------");
     Serial.printf("[LoRa RX Deduplikacija] Dublikatas iš eterio (%s, %d B). Šis paketas jau priimtas neseniai per kitą kartotuvą. Ignoruojama.\n",
                   typeStr, (int)payloadLen);
@@ -1373,7 +1387,7 @@ bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
   rawRxDoc["direction"] = "RX";
   rawRxDoc["bot_id"] = activeConfig.botId;
   time_t now = time(nullptr);
-  rawRxDoc["timestamp"] = (now >= 1700000000UL) ? (uint32_t)now : lastTxTimestamp;
+  rawRxDoc["timestamp"] = (now >= 1700000000) ? (uint32_t)now : lastTxTimestamp;
   rawRxDoc["length"] = length;
   rawRxDoc["rssi"] = rssi;
   rawRxDoc["snr"] = snr;
@@ -1390,6 +1404,7 @@ bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
   bool pathHasLoginOk = false;
   bool pathHasStats = false;
   bool pathHasTelemetry = false;
+  bool validInnerPath = false;
   int decryptedLen = 0;
 
   if ((payloadType == PAYLOAD_TYPE_RESPONSE || payloadType == PAYLOAD_TYPE_PATH) && payloadLen >= 2) {
@@ -1404,9 +1419,8 @@ bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
       }
     }
 
-    // 2. Jei tikslaus sHash neradome, bet paketas skirtas mums (dHash == myNodeHash)
-    // ir šiuo metu laukiame konkretaus kartotuvo atsakymo (expectedSenderHash != 0):
-    if (matchedIdx < 0 && expectedSenderHash != 0 && dHash == myNodeHash) {
+    // Tik RESPONSE leidžia bandyti laukiamo kartotuvo raktą, jei sHash neatpažintas.
+    if (payloadType == PAYLOAD_TYPE_RESPONSE && matchedIdx < 0 && expectedSenderHash != 0 && dHash == myNodeHash) {
       for (size_t i = 0; i < monitoredRepeatersCount; i++) {
         if (monitoredNodes[i].initialized && monitoredNodes[i].hash == expectedSenderHash) {
           matchedIdx = (int)i;
@@ -1445,32 +1459,47 @@ bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
             &payload[2],
             (int)(payloadLen - 2)
           );
-          if (decryptedLen > 0 && payloadType == PAYLOAD_TYPE_PATH) {
+          if (decryptedLen > 0 && validPathFrame) {
             uint8_t pLenByte = decData[0];
             innerPathHashSize = ((pLenByte >> 6) & 0x03) + 1;
             innerPathHops = pLenByte & 0x3F;
-            innerPathByteLen = (size_t)innerPathHops * innerPathHashSize;
+            innerPathByteLen = MeshCorePacket::pathByteCount(pLenByte);
             int k = 1 + (int)innerPathByteLen;
-            if (k <= decryptedLen && innerPathByteLen <= 32) {
-              hasInnerPath = true;
+            // A route-only PATH (0xFF) includes a four-byte nonce.
+            if (MeshCorePacket::validPathLength(pLenByte) && k < decryptedLen &&
+                (decData[k] != 0xFF || decryptedLen - k >= 5)) {
+              validInnerPath = true;
               innerPathPtr = &decData[1];
-            }
-            if (k < decryptedLen) {
+              hasInnerPath = innerPathByteLen <= sizeof(MonitoredNode::routePath);
+              // Tik pirmoji tinkama FLOOD kopija inicijuoja atgalinio kelio siuntimą, jei leidžiamas DIRECT.
+              if (couldReturnPath && !monitoredNodes[matchedIdx].forceFlood &&
+                  !isDuplicateRxPayload(reciprocalDedupCache, payloadType, payload, payloadLen)) {
+                reciprocal.peer = matchedIdx;
+                reciprocal.outboundLen = pLenByte;
+                reciprocal.outbound = innerPathPtr;
+                reciprocal.returnLen = pathLenByte;
+                reciprocal.returnPath = &packetBuffer[pathOffset];
+              }
               uint8_t extraType = decData[k] & 0x0F;
               uint8_t* respPtr = &decData[k + 1];
               int respLen = decryptedLen - (k + 1);
               if (extraType == PAYLOAD_TYPE_RESPONSE && respLen >= 4) {
-                if (respLen >= 5 && respPtr[4] == RESP_SERVER_LOGIN_OK) {
-                  pathHasLoginOk = true;
-                } else if (respLen >= 4 + 44) {
-                  pathHasStats = true;
+                if (waitTarget == WAIT_LOGIN || waitTarget == WAIT_ANY) {
+                  pathHasLoginOk = respLen >= 5 && respLen < 4 + 44 && respPtr[4] == RESP_SERVER_LOGIN_OK;
                 } else {
-                  pathHasTelemetry = true;
+                  // STATUS ir TELEMETRY atsakymai pakartoja užklausos laiko žymą.
+                  uint32_t echoedTimestamp;
+                  memcpy(&echoedTimestamp, respPtr, sizeof(echoedTimestamp));
+                  if (echoedTimestamp == lastTxTimestamp) {
+                    pathHasStats = waitTarget == WAIT_STATUS && respLen >= 4 + 44;
+                    pathHasTelemetry = waitTarget == WAIT_TELEMETRY;
+                  }
                 }
               }
             }
           }
         }
+        if (skipRepeatedRx && reciprocal.peer < 0) return false;
 
         // ------------------------------------------------------------------------
         // 🗺️ UNIVERSALUS DINAMINIS MARŠRUTO IŠMOKYMAS (Reverse Path Learning)
@@ -1479,17 +1508,15 @@ bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
         // Todėl iš išorinės antraštės mokomės TIK tada, kai paketas atkeliavo per FLOOD,
         // arba imame tikrąjį maršrutą iš iššifruoto PAYLOAD_TYPE_PATH vidinio krovinio!
         // ------------------------------------------------------------------------
-        bool isFloodRx = (routeType == ROUTE_TYPE_FLOOD || routeType == ROUTE_TYPE_TRANSPORT_FLOOD);
         if (monitoredNodes[matchedIdx].forceFlood) {
           // Mazgui nustatytas priverstinis FLOOD - nesimokome DIRECT kelio
-        } else if (hasInnerPath || isFloodRx) {
+        } else if (hasInnerPath || (isFloodRx && payloadType != PAYLOAD_TYPE_PATH)) {
           // SVARBU: Jei tai PAYLOAD_TYPE_PATH paketas (net jei atkeliavo per FLOOD 0x21!),
           // jo viduje esantis 'innerPath' yra tikrasis priekinis kelias (Botas -> Kartotuvas),
           // kuriuo mūsų užklausa pasiekė kartotuvą (pvz., B9DD -> 4607), o išorinis FLOOD kelias
           // yra atgalinis (Kartotuvas -> Botas, pvz., 3BBD -> B9DD), kuris gali būti asimetrinis!
           uint8_t learnedHops = hasInnerPath ? innerPathHops : pathHopCount;
           uint8_t learnedHashSize = hasInnerPath ? innerPathHashSize : pathHashSize;
-          size_t learnedByteLen = hasInnerPath ? innerPathByteLen : pathByteLength;
 
           if (monitoredNodes[matchedIdx].hasRoute && learnedHops > monitoredNodes[matchedIdx].routeHopCount) {
             // Jau turime TRUMPESNĮ maršrutą (pvz., 0 arba 1 šuolio) – neperrašome jo ilgesniais eterio aidais!
@@ -1615,43 +1642,34 @@ bool processIncomingPacket(uint8_t expectedSenderHash, WaitTarget waitTarget) {
         }
         return true;
       } else if (payloadType == PAYLOAD_TYPE_PATH) {
-        if (matchedIdx >= 0 && decryptedLen <= 0) {
-          Serial.printf("[LoRa RX] Įspėjimas: PATH paketo MAC patikra nepavyko (galima 1B hash kolizija). Laukiama toliau...\n");
+        if (matchedIdx < 0 || !validInnerPath) {
+          Serial.println("[LoRa RX] Nepavyko patvirtinti PATH paketo arba jo vidinio kelio. Laukiama toliau...");
           return false;
         }
         // MeshCore protokole į FLOOD ANON_REQ (Login) kartotuvas atsako PAYLOAD_TYPE_PATH paketu,
         // kurio viduje yra įdėtas RESP_SERVER_LOGIN_OK (arba STATUS / TELEMETRY atsakymas)!
-        if (waitTarget == WAIT_LOGIN || pathHasLoginOk) {
+        if ((waitTarget == WAIT_LOGIN || waitTarget == WAIT_ANY) && pathHasLoginOk) {
           Serial.printf("[LoRa RX] ✅ Gautas PATH + LOGIN_OK atsakymas iš kartotuvo (Src: 0x%02X -> Dest: 0x%02X)! Sesija ir maršrutas nustatyti.\n",
                         srcHash, destHash);
-          if (matchedIdx >= 0) {
-            markLocalSessionActive(monitoredNodes[matchedIdx].pubKey);
-          }
+          markLocalSessionActive(monitoredNodes[matchedIdx].pubKey);
           return true;
         }
         if (waitTarget == WAIT_STATUS && pathHasStats) {
           Serial.printf("[LoRa RX] ✅ Gautas PATH + STATUS atsakymas iš kartotuvo (Src: 0x%02X -> Dest: 0x%02X)!\n",
                         srcHash, destHash);
-          if (matchedIdx >= 0) {
-            markLocalSessionActive(monitoredNodes[matchedIdx].pubKey);
-          }
+          markLocalSessionActive(monitoredNodes[matchedIdx].pubKey);
           return true;
         }
         if (waitTarget == WAIT_TELEMETRY && pathHasTelemetry) {
           Serial.printf("[LoRa RX] ✅ Gautas PATH + TELEMETRY atsakymas iš kartotuvo (Src: 0x%02X -> Dest: 0x%02X)!\n",
                         srcHash, destHash);
-          if (matchedIdx >= 0) {
-            markLocalSessionActive(monitoredNodes[matchedIdx].pubKey);
-          }
+          markLocalSessionActive(monitoredNodes[matchedIdx].pubKey);
           return true;
         }
 
         Serial.printf("[LoRa RX] Gautas PATH (maršruto) paketas iš kartotuvo (Src: 0x%02X -> Dest: 0x%02X). Perduota į API, toliau laukiama duomenų RESPONSE atsakymo...\n",
                       srcHash, destHash);
-        if (waitTarget == WAIT_STATUS || waitTarget == WAIT_TELEMETRY) {
-          return false;
-        }
-        return true;
+        return false;
       }
     }
   }

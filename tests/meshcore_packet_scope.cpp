@@ -15,6 +15,11 @@ static void expectPacket(const uint8_t (&expected)[N], uint8_t header, uint8_t p
 int main() {
   using MeshCorePacket::repeaterRouteType;
   using MeshCorePacket::validPublicScopeName;
+  assert(MeshCorePacket::validPathLength(0x40)); // Zero-hop, two-byte hashes.
+  assert(MeshCorePacket::pathByteCount(0x82) == 6);
+  assert(MeshCorePacket::validPathLength(0x60)); // 32 two-byte hashes, 64 bytes.
+  assert(!MeshCorePacket::validPathLength(0x61));
+  assert(!MeshCorePacket::validPathLength(0xc0)); // Reserved four-byte hashes.
   constexpr char maxName[] = "Abcdefghijklmnopqrstuvwxyz1234";
   constexpr char maxHashtag[] = "#Abcdefghijklmnopqrstuvwxyz1234";
   constexpr char tooLong[] = "Abcdefghijklmnopqrstuvwxyz12345";

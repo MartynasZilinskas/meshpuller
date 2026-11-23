@@ -23,6 +23,18 @@ inline bool hasTransportCodes(uint8_t routeType) {
   return routeType == ROUTE_TYPE_TRANSPORT_FLOOD || routeType == ROUTE_TYPE_TRANSPORT_DIRECT;
 }
 
+// MeshCore reserves hash width 4 and limits routes to 64 bytes.
+constexpr size_t MAX_PATH_BYTES = 64;
+constexpr size_t MAX_PAYLOAD_BYTES = 184;
+
+inline size_t pathByteCount(uint8_t pathLen) {
+  return ((pathLen >> 6) + 1) * (pathLen & 0x3F);
+}
+
+inline bool validPathLength(uint8_t pathLen) {
+  return (pathLen >> 6) < 3 && pathByteCount(pathLen) <= MAX_PATH_BYTES;
+}
+
 inline uint8_t repeaterRouteType(bool hasKnownRoute, bool scopeEnabled) {
   // Upstream sends known paths as ordinary DIRECT, even with a flood scope set.
   if (hasKnownRoute) return ROUTE_TYPE_DIRECT;
@@ -86,7 +98,7 @@ inline size_t encode(uint8_t* packet, size_t capacity, uint8_t header, uint8_t p
                      const uint8_t* path, const uint8_t* payload, size_t payloadLen,
                      const Scope& scope) {
   const bool scoped = hasTransportCodes(header & 0x03);
-  const size_t pathBytes = ((pathLen >> 6) + 1) * (pathLen & 0x3F);
+  const size_t pathBytes = pathByteCount(pathLen);
   const size_t prefixBytes = 2 + (scoped ? 4 : 0);
   if ((pathBytes && !path) || (payloadLen && !payload) || capacity < prefixBytes + pathBytes ||
       payloadLen > capacity - prefixBytes - pathBytes) return 0;

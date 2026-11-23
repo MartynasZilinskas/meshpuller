@@ -572,13 +572,18 @@ class MeshCoreDecoder
                 }
                 if ($k < $len) {
                     $res['path_extra_type'] = ord($plain[$k]);
+                    if ($res['path_extra_type'] === 0xFF) {
+                        // MeshCore PATH without an embedded response carries a random nonce, not telemetry.
+                        unset($res['timestamp']);
+                        return $res;
+                    }
                     $dataPtr = substr($plain, $k + 1);
                     $dataLen = strlen($dataPtr);
                 }
             }
 
-            // A) Tikriname LOGIN_OK patvirtinimą
-            if ($dataLen >= 5 && ord($dataPtr[4]) === self::RESP_SERVER_LOGIN_OK) {
+            // LOGIN_OK is short; the same byte in a full STATUS response is part of the battery voltage.
+            if ($dataLen >= 5 && $dataLen < 4 + 44 && ord($dataPtr[4]) === self::RESP_SERVER_LOGIN_OK) {
                 $res['response_type'] = 'LOGIN_SUCCESS';
                 $res['permissions'] = ($dataLen >= 8) ? sprintf('0x%02X', ord($dataPtr[7])) : '0x00';
                 return $res;
