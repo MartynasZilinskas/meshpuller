@@ -831,40 +831,40 @@ void initMonitoredNodeKeys() {
       String p = monitoredRepeaters[i].path;
       p.trim();
       monitoredNodes[i].forceFlood = false;
+      monitoredNodes[i].hasRoute = false;
+      monitoredNodes[i].routeHopCount = 0;
+      monitoredNodes[i].routePathLen = 0;
       monitoredNodes[i].routeConfirmed = false;
       monitoredNodes[i].quarantinePathLen = 0;
       monitoredNodes[i].quarantineZeroHop = false;
       monitoredNodes[i].quarantinedAt = 0;
       if (p.equalsIgnoreCase("FLOOD")) {
         monitoredNodes[i].forceFlood = true;
-        monitoredNodes[i].hasRoute = false;
-        monitoredNodes[i].routeHopCount = 0;
-        monitoredNodes[i].routePathLen = 0;
         Serial.printf("    - Maršrutas: PRIVERSTINIS FLOOD (visada transliuojama per visą tinklą)\n");
       } else if (p.equalsIgnoreCase("DIRECT") || (p.length() == 0 && monitoredRepeaters[i].isDirect)) {
         monitoredNodes[i].hasRoute = true;
-        monitoredNodes[i].routeHopCount = 0;
         monitoredNodes[i].routeHashSize = (activeConfig.pathBits == 16) ? 2 : 1;
-        monitoredNodes[i].routePathLen = 0;
         monitoredNodes[i].routeLearnedAt = millis();
         Serial.printf("    - Maršrutas: TIESIOGINIS DIRECT (0 šuolių)\n");
-      } else if (p.length() >= 2 && (p.length() % 2 == 0)) {
+      } else if (p.length() > 0) {
+        // Server routes use two bytes per hop, independent of the local FLOOD setting.
+        constexpr uint8_t serverHopBytes = 2;
         size_t pBytes = 0;
-        if (hexStringToBytes(p.c_str(), monitoredNodes[i].routePath, sizeof(monitoredNodes[i].routePath), pBytes)) {
+        // Require the entire string: hexStringToBytes also accepts a 0x prefix.
+        if (p.length() % (2 * serverHopBytes) == 0 &&
+            hexStringToBytes(p.c_str(), monitoredNodes[i].routePath, sizeof(monitoredNodes[i].routePath), pBytes) &&
+            pBytes * 2 == p.length()) {
           monitoredNodes[i].hasRoute = true;
-          uint8_t defHashSize = (activeConfig.pathBits == 24) ? 3 : ((activeConfig.pathBits == 16) ? 2 : 1);
-          if (pBytes % defHashSize != 0) defHashSize = 1;
-          monitoredNodes[i].routeHashSize = defHashSize;
-          monitoredNodes[i].routeHopCount = (uint8_t)(pBytes / defHashSize);
+          monitoredNodes[i].routeHashSize = serverHopBytes;
+          monitoredNodes[i].routeHopCount = pBytes / serverHopBytes;
           monitoredNodes[i].routePathLen = pBytes;
           monitoredNodes[i].routeLearnedAt = millis();
           Serial.printf("    - Maršrutas: TIKSLINIS DIRECT (%u šuol., kelias: [%s])\n",
                         monitoredNodes[i].routeHopCount, p.c_str());
+        } else {
+          Serial.println("    - Maršrutas: NETINKAMAS serverio kelias (pradžioje bus naudojamas FLOOD)");
         }
       } else {
-        monitoredNodes[i].hasRoute = false;
-        monitoredNodes[i].routeHopCount = 0;
-        monitoredNodes[i].routePathLen = 0;
         Serial.printf("    - Maršrutas: NĖRA (pradžioje bus naudojamas FLOOD)\n");
       }
     } else {

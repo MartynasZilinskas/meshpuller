@@ -194,9 +194,13 @@ Prieš kiekvieną apklausos ciklą ESP32 atlieka HTTP GET užklausą į `REPEATE
 - `name`: Trumpas kartotuvo vardas / žyma.
 - `public_id`: 32 baitų (64 hex simbolių) kartotuvo Ed25519 viešasis raktas. Pirmasis baitas nustato kartotuvo `NodeHash` (pvz. `0xB9` arba `0x1B`).
 - `password`: Kartotuvo administratoriaus slaptažodis, naudojamas šifruotai sesijai atidaryti.
-- `isDirect`:
-  - `true` – Tiesiogiai pasiekiamas kartotuvas (0 apynių / hops). Siunčiamas `PATH 0` registravimas ir `ROUTE_TYPE_DIRECT` užklausos.
-  - `false` – Nutolęs kartotuvas, pasiekiamas per kitus kartotuvus (`ROUTE_TYPE_FLOOD`, praleidžiamas tiesioginis PATH registravimas).
+- `path`: `DIRECT` reiškia 0 šuolių, `FLOOD` išjungia tiesioginį maršrutizavimą.
+  Išsaugotame maršrute kiekvieną šuolį žymi 4 hex simboliai (2 baitai):
+  `A1B2C3D4` reiškia `A1B2 → C3D4`, nepriklausomai nuo vietinio FLOOD hash dydžio.
+  Netinkamas arba į 32 baitų buferį netelpantis kelias atmetamas ir pradedama
+  nuo FLOOD, leidžiant išmokti kelią iš eterio.
+- `isDirect`: Kai `path` nepateiktas arba tuščias, `true` reiškia `DIRECT`
+  (0 šuolių), o `false` – nežinomą kelią (pradedama nuo FLOOD).
 - `status` *(neprivalomas, numatytoji reikšmė* `true`*)*:
   - `true` – Siųsti būsenos ir radijo statistikos užklausą (`REQ_TYPE_GET_STATUS`).
   - `false` – Praleisti būsenos užklausą.
