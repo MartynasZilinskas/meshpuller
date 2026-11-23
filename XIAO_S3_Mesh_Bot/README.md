@@ -82,11 +82,14 @@ rakto, šis viešas atvaizdas tam diegimui netinka. Artifakte nėra vietinio
 
 Visi keičiami parametrai yra sutelkti faile `config.h`.
 
-**MeshCore regionas.** Įjungus `ENABLE_SCOPE`, į `SCOPE_NAME` įrašykite viešo regiono
-pavadinimą, pvz., `kun` arba `#kun` (abu lygiaverčiai). Regionas turi leisti FLOOD
-persiuntimą maršruto kartotuvuose. Transporto kodas skaičiuojamas kiekvienam FLOOD
-paketui; žinomam keliui naudojamas įprastas DIRECT maršrutas be transporto kodų.
-Privatūs `$` regionai nepalaikomi. Suderinamumui su MeshCore palikite `SCOPE_CODE_1`
+**Numatytasis FLOOD regionas.** Įjungę šį nustatymą (`ENABLE_SCOPE`), įrašykite
+viešo regiono pavadinimą (`SCOPE_NAME`). `kun` ir `#kun` yra lygiaverčiai, bet
+didžiosios ir mažosios raidės skiriasi. Persiunčiantys kartotuvai turi leisti
+FLOOD tam pačiam regionui. Portalas neleidžia išsaugoti tuščio ar nepalaikomo
+viešo regiono pavadinimo. Transporto kodas skaičiuojamas kiekvienam FLOOD
+paketui. Išjungus regioną naudojamas įprastas FLOOD; DIRECT maršrutai (įskaitant
+0 šuolių) nepriklauso nuo regiono. Privatūs `$` regionai nepalaikomi.
+Suderinamumui su MeshCore palikite `SCOPE_CODE_1`
 ir `SCOPE_CODE_2` lygius nuliui. Nenulinis `SCOPE_CODE_1` įjungia seną fiksuotų FLOOD
 kodų režimą; `SCOPE_CODE_2` vienas neveikia.
 

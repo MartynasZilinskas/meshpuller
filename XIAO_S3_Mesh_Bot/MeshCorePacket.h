@@ -29,13 +29,25 @@ inline uint8_t repeaterRouteType(bool hasKnownRoute, bool scopeEnabled) {
   return scopeEnabled ? ROUTE_TYPE_TRANSPORT_FLOOD : ROUTE_TYPE_FLOOD;
 }
 
+inline bool validPublicScopeName(const char* name, size_t length) {
+  if (!name || !length || *name == '$') return false;
+  if (*name == '#') { ++name; --length; }
+  // Upstream RegionEntry stores up to 30 bytes. The optional '#' is not
+  // counted here because a repeater can store the same region without it.
+  if (!length || length > 30) return false;
+  for (size_t i = 0; i < length; ++i) {
+    unsigned char c = name[i];
+    // Same name characters as upstream RegionMap for public regions.
+    if (!(c == '-' || c == '$' || c == '#' || (c >= '0' && c <= '9') || c >= 'A')) return false;
+  }
+  return true;
+}
+
 inline bool publicScopeCode(const char* name, uint8_t payloadType, const uint8_t* payload,
                             size_t payloadLen, uint16_t& code) {
-  if (!name || !*name || *name == '$' || (*name == '#' && !name[1])) return false;
-  for (const unsigned char* c = reinterpret_cast<const unsigned char*>(name); *c; ++c) {
-    // Same name characters as upstream RegionMap for public regions.
-    if (!(*c == '-' || *c == '$' || *c == '#' || (*c >= '0' && *c <= '9') || *c >= 'A')) return false;
-  }
+  if (!name) return false;
+  const size_t nameLength = strlen(name);
+  if (!validPublicScopeName(name, nameLength)) return false;
 
   // MeshCore RegionMap / TransportKeyStore: SHA-256 of the hashtag name,
   // then HMAC with its first 16 bytes over [payload type][wire payload].
@@ -48,7 +60,7 @@ inline bool publicScopeCode(const char* name, uint8_t payloadType, const uint8_t
   bool ok = mbedtls_md_setup(&ctx, sha256, 0) == 0 &&
             mbedtls_md_starts(&ctx) == 0 &&
             (*name == '#' || mbedtls_md_update(&ctx, &prefix, 1) == 0) &&
-            mbedtls_md_update(&ctx, reinterpret_cast<const uint8_t*>(name), strlen(name)) == 0 &&
+            mbedtls_md_update(&ctx, reinterpret_cast<const uint8_t*>(name), nameLength) == 0 &&
             mbedtls_md_finish(&ctx, digest) == 0;
   mbedtls_md_free(&ctx);
   if (!ok) return false;

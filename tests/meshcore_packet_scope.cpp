@@ -14,6 +14,16 @@ static void expectPacket(const uint8_t (&expected)[N], uint8_t header, uint8_t p
 
 int main() {
   using MeshCorePacket::repeaterRouteType;
+  using MeshCorePacket::validPublicScopeName;
+  constexpr char maxName[] = "Abcdefghijklmnopqrstuvwxyz1234";
+  constexpr char maxHashtag[] = "#Abcdefghijklmnopqrstuvwxyz1234";
+  constexpr char tooLong[] = "Abcdefghijklmnopqrstuvwxyz12345";
+  assert(validPublicScopeName(maxName, sizeof(maxName) - 1));
+  assert(validPublicScopeName(maxHashtag, sizeof(maxHashtag) - 1));
+  assert(!validPublicScopeName(tooLong, sizeof(tooLong) - 1));
+  assert(!validPublicScopeName(nullptr, 0));
+  assert(!validPublicScopeName("kun\0bad", 7));
+  assert(validPublicScopeName("#Žemė-2", sizeof("#Žemė-2") - 1));
   const uint8_t scoped = repeaterRouteType(false, true);
   const uint8_t plain = repeaterRouteType(false, false);
   const uint8_t direct = repeaterRouteType(true, true);
@@ -38,11 +48,11 @@ int main() {
   const uint8_t relayed[] = {0x1c, 0xde, 0xcd, 0x00, 0x00, 0x41, 0xaa, 0xbb, 0x0c, 0x0b, 0x01, 0x02, 0x03};
   expectPacket(relayed, anon, 0x41, hop, payload, {"kun", 0, 0});
   const uint8_t plainPacket[] = {0x01, 0x40, 0x0c, 0x0b, 0x01, 0x02, 0x03};
-  expectPacket(plainPacket, plain, 0x40, nullptr, payload, {"kun", 0, 0});
+  expectPacket(plainPacket, plain, 0x40, nullptr, payload, {"", 0, 0});
   const uint8_t directPacket[] = {0x02, 0x41, 0xaa, 0xbb, 0x0c, 0x0b, 0x01, 0x02, 0x03};
-  expectPacket(directPacket, direct, 0x41, hop, payload, {"kun", 0, 0});
+  expectPacket(directPacket, direct, 0x41, hop, payload, {"$kun", 0, 0});
   const uint8_t zeroHopDirect[] = {0x02, 0x40, 0x0c, 0x0b, 0x01, 0x02, 0x03};
-  expectPacket(zeroHopDirect, direct, 0x40, nullptr, payload, {"kun", 0, 0});
+  expectPacket(zeroHopDirect, direct, 0x40, nullptr, payload, {"", 0, 0});
 
   const uint8_t zeroPayload[] = {0x7f, 0xd6, 0x01, 0x00};
   const uint8_t zeroCode[] = {0x1c, 0x01, 0x00, 0x00, 0x00, 0x40, 0x7f, 0xd6, 0x01, 0x00};
@@ -54,7 +64,7 @@ int main() {
   const uint8_t legacy[] = {0x00, 0x49, 0x5b, 0x34, 0x12, 0x40, 0x0c, 0x0b, 0x01, 0x02, 0x03};
   expectPacket(legacy, scoped, 0x40, nullptr, payload, {"", 0x5b49, 0x1234});
   const Scope invalid[] = {{"", 0, 0}, {"#", 0, 0}, {"$kun", 0, 0}, {"*", 0, 0},
-                           {"ku n", 0, 0}, {"kun", 0, 1}};
+                           {"ku n", 0, 0}, {tooLong, 0, 0}, {"kun", 0, 1}};
   for (const Scope& scope : invalid) {
     uint8_t packet[sizeof(request)] = {};
     assert(MeshCorePacket::encode(packet, sizeof(packet), scoped, 0x40, nullptr, payload,

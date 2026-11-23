@@ -12,6 +12,7 @@
 #include <nvs.h>
 #include <type_traits>
 #include "config.h"
+#include "MeshCorePacket.h"
 #include "MeshCrypto.h"
 
 // ================================================================================
@@ -570,6 +571,13 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       color: var(--text-dim);
       margin-left: 4px;
     }
+    .field-help, .field-error {
+      margin-top: 6px;
+      font-size: 0.8rem;
+      overflow-wrap: anywhere;
+    }
+    .field-help { color: var(--text-muted); }
+    .field-error { color: #f87171; }
     .input-wrap {
       position: relative;
       display: flex;
@@ -608,6 +616,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     .toggle-pass:hover { color: var(--cyan); }
 
     .switch-wrap {
+      position: relative;
       display: flex;
       align-items: center;
       gap: 12px;
@@ -616,7 +625,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     }
     .switch {
       position: relative;
-      width: 44px;
+      flex: 0 0 44px;
       height: 24px;
       background: #334155;
       border-radius: 999px;
@@ -639,7 +648,17 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     input[type="checkbox"]:checked + .switch::after {
       transform: translateX(20px);
     }
-    input[type="checkbox"] { display: none; }
+    .switch-wrap input[type="checkbox"] {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      opacity: 0;
+    }
+    #SCOPE_NAME:focus-visible, .switch-wrap input:focus-visible + .switch {
+      outline: 2px solid var(--cyan);
+      outline-offset: 2px;
+    }
 
     .actions-bar {
       display: flex;
@@ -889,7 +908,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     <div class="card">
       <div class="card-header">
         <div class="card-title">
-          <span>🌐 MeshCore Maršrutizavimas & Scope</span>
+          <span>🌐 MeshCore maršrutizavimas</span>
         </div>
       </div>
       <div class="form-grid">
@@ -902,16 +921,18 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
           </select>
         </div>
         <div class="form-group">
-          <label for="SCOPE_NAME">SCOPE_NAME <span class="label-hint">(Regiono/potinklio pavadinimas)</span></label>
-          <input type="text" id="SCOPE_NAME" placeholder="lt">
+          <label for="SCOPE_NAME">Numatytasis FLOOD regionas</label>
+          <input type="text" id="SCOPE_NAME" placeholder="kun" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="scopeNameHelp">
+          <p id="scopeNameError" class="field-error" hidden></p>
+          <p id="scopeNameHelp" class="field-help">„kun“ ir „#kun“ reiškia tą patį regioną. Didžiosios ir mažosios raidės skiriamos. Maršruto kartotuvai turi leisti persiųsti FLOOD paketus tame pačiame regione.</p>
         </div>
         <div class="form-group full">
-          <label>ENABLE_SCOPE</label>
           <label class="switch-wrap">
-            <input type="checkbox" id="ENABLE_SCOPE">
-            <span class="switch"></span>
-            <span style="font-size:0.85rem; color:#fff; font-weight:600;">Įjungti regioninį potinklio Scoped Flood (TRANSPORT_FLOOD)</span>
+            <input type="checkbox" id="ENABLE_SCOPE" aria-describedby="scopeModeHelp">
+            <span class="switch" aria-hidden="true"></span>
+            <span style="font-size:0.85rem; color:#fff; font-weight:600;">Naudoti numatytąjį FLOOD regioną</span>
           </label>
+          <p id="scopeModeHelp" class="field-help">Išjungus naudojamas įprastas FLOOD. Žinomi DIRECT maršrutai, įskaitant maršrutus be tarpinių kartotuvų, nesikeičia.</p>
         </div>
       </div>
     </div>
@@ -986,7 +1007,9 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       if (!res.ok || data?.success === false || (payload !== undefined && data?.success !== true)) {
         const message = [data?.message, data?.error].find(text => typeof text === 'string' && text);
         const detail = message || (!res.ok && contentType.startsWith('text/plain') ? await res.text() : '');
-        throw new Error(detail || (res.ok ? fallback : `${fallback} (HTTP ${res.status})`));
+        const err = new Error(detail || (res.ok ? fallback : `${fallback} (HTTP ${res.status})`));
+        if (res.status === 400 && data?.success === false) err.field = data.field;
+        throw err;
       }
       if (!data) throw new Error(fallback);
       return data;
@@ -1239,7 +1262,22 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       alert.textContent = message;
     }
 
+    function setScopeError(message = '') {
+      const field = document.getElementById('SCOPE_NAME');
+      const error = document.getElementById('scopeNameError');
+      error.textContent = message;
+      error.hidden = !message;
+      if (message) {
+        field.setAttribute('aria-invalid', 'true');
+        field.setAttribute('aria-describedby', 'scopeNameError scopeNameHelp');
+      } else {
+        field.removeAttribute('aria-invalid');
+        field.setAttribute('aria-describedby', 'scopeNameHelp');
+      }
+    }
+
     async function loadSettings(savedMessage = '') {
+      setScopeError();
       setSettingsReady(false);
       showSettingsStatus(savedMessage || 'Kraunami išsaugoti nustatymai...', 'info');
       try {
@@ -1263,6 +1301,8 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     async function saveSettings(restartAfter) {
       if (!settingsReady || portalWritePending) return;
       const seedField = document.getElementById('MY_SEED_HEX');
+      const scopeField = document.getElementById('SCOPE_NAME');
+      const scopeToggle = document.getElementById('ENABLE_SCOPE');
       const seed = seedField.value.trim();
       if (seed && !/^[a-f0-9]{64}$/i.test(seed)) {
         showToast('Įveskite 64 šešioliktainius sėklos simbolius arba palikite lauką tuščią.', 'error');
@@ -1273,8 +1313,8 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         WIFI_SSID: document.getElementById('WIFI_SSID').value,
         WIFI_PASSWORD: document.getElementById('WIFI_PASSWORD').value,
         BOT_ID: document.getElementById('BOT_ID').value.trim(),
-        ENABLE_SCOPE: document.getElementById('ENABLE_SCOPE').checked,
-        SCOPE_NAME: document.getElementById('SCOPE_NAME').value.trim()
+        ENABLE_SCOPE: scopeToggle.checked,
+        SCOPE_NAME: scopeField.value.trim()
       };
       if (seed) payload.MY_SEED_HEX = seed;
       for (const id of numericSettings) {
@@ -1288,6 +1328,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         payload[id] = value;
       }
 
+      setScopeError();
       const unlock = beginPortalWrite();
       let restarting = false;
       try {
@@ -1299,7 +1340,16 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         if (restarting) return;
         await loadSettings('Nustatymai išsaugoti. Norėdami juos pritaikyti, spauskite „Perkrauti ESP32“.');
       } catch (err) {
-        showToast(`Nustatymų išsaugojimo klaida: ${err.message}`, 'error');
+        if (err.field === 'SCOPE_NAME') {
+          if (scopeToggle.checked === payload.ENABLE_SCOPE && scopeField.value.trim() === payload.SCOPE_NAME) {
+            setScopeError(err.message);
+            scopeField.focus();
+          } else {
+            showToast('Nustatymai neišsaugoti. Išsaugokite dar kartą.', 'error');
+          }
+        } else {
+          showToast(`Nustatymų išsaugojimo klaida: ${err.message}`, 'error');
+        }
       } finally {
         if (!restarting) unlock();
       }
@@ -1357,6 +1407,10 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       statusPoll = setInterval(fetchStatus, 4000);
 
       document.getElementById('MY_SEED_HEX').addEventListener('input', clearKeyPreview);
+      document.getElementById('SCOPE_NAME').addEventListener('input', () => setScopeError());
+      document.getElementById('ENABLE_SCOPE').addEventListener('change', event => {
+        if (!event.target.checked) setScopeError();
+      });
     };
   </script>
 </body>
@@ -1574,6 +1628,16 @@ inline void handleApiSaveSettings() {
       (obj.containsKey("MY_SEED_HEX") && !obj["MY_SEED_HEX"].is<const char*>())) {
     webServer.send(400, "application/json", "{\"success\":false,\"message\":\"Neteisingi nustatymų duomenys\"}");
     return;
+  }
+  if (candidate.scopeEnabled && SCOPE_CODE_1 == 0 && SCOPE_CODE_2 == 0) {
+    const JsonString scope = obj["SCOPE_NAME"].as<JsonString>();
+    // Detect truncation, e.g. if Arduino String conversion stopped at a NUL byte.
+    if ((scope && scope.size() != candidate.scope.length()) ||
+        !MeshCorePacket::validPublicScopeName(candidate.scope.c_str(), candidate.scope.length())) {
+      webServer.send(400, "application/json",
+                     "{\"success\":false,\"field\":\"SCOPE_NAME\",\"message\":\"Įveskite viešo regiono pavadinimą, pvz., kun arba #kun. Pavadinimas turi būti be tarpų ir ne ilgesnis nei 30 baitų (neskaitant pradinio #).\"}");
+      return;
+    }
   }
   String password = obj["WIFI_PASSWORD"] | "";
   if (password.length() || candidate.wifiSsid != editableConfig().wifiSsid) candidate.wifiPassword = password;
