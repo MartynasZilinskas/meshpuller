@@ -218,15 +218,18 @@ bool fetchRepeatersFromURL();
 void initMonitoredNodeKeys();
 void requestTelemetryFromAllRepeaters();
 void requestTelemetryFromSingleRepeater(size_t repIdx);
-bool waitForReply(unsigned long timeoutMs, uint8_t expectedSenderHash = 0, WaitTarget waitTarget = WAIT_ANY);
+enum class PollResult { ReplyReceived, ReplyReceivedThenAborted, Timeout, Aborted, InvalidPassword };
+enum class SendResult { ReadyToWait, Paused, InvalidPassword, EncodeFailed, TransmitFailed, ReceiveFailed };
+PollResult waitForReply(unsigned long timeoutMs, uint8_t expectedSenderHash, WaitTarget waitTarget);
 bool processIncomingPacket(uint8_t expectedSenderHash = 0, WaitTarget waitTarget = WAIT_ANY);
 constexpr size_t MAX_REPEATER_LOGIN_PASSWORD_BYTES = 15;
-bool sendMeshCoreLogin(size_t repIdx);
+SendResult sendMeshCoreLogin(size_t repIdx, bool flood);
 void sendMeshCorePath(size_t repIdx);
-void sendMeshCoreStatusRequest(size_t repIdx);
-void sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const uint8_t* payload, size_t payloadLen,
+SendResult sendMeshCoreStatusRequest(size_t repIdx, bool flood);
+SendResult sendMeshCoreTelemetryRequest(size_t repIdx, bool flood);
+SendResult sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const uint8_t* payload, size_t payloadLen,
                      const char* targetName = nullptr, const char* targetPubKey = nullptr, const uint8_t* sharedSecret = nullptr);
-void yieldDelay(unsigned long ms);
+bool yieldDelay(unsigned long ms);
 uint8_t getPathLengthByte(uint8_t hops = 0);
 
 // Foninės API siuntimo eilės ir užduoties kintamieji (Core 0):
@@ -353,21 +356,27 @@ void loop() {
 }
 
 // ================================================================================
-// ⏳ NE-BLOKUOJANTI PAUZĖ (Pauzės metu radijas toliau aktyviai klausosi ir sugaudo
-// visus eteryje atsiradusius ADVERT skelbimus, akimirksniu išsiųsdamas juos į API)
+// ⏳ APKLAUSOS PAUZĖ
+// Laukimo metu apdoroja gautus LoRa paketus ir aptarnauja konfigūracijos portalą.
+// Grąžina false, jei telemetrija pristabdoma arba nepavyksta atnaujinti LoRa priėmimo.
 // ================================================================================
-void yieldDelay(unsigned long ms) {
+bool yieldDelay(unsigned long ms) {
   unsigned long start = millis();
   while (millis() - start < ms) {
     if (receivedFlag) {
       receivedFlag = false;
       processIncomingPacket(0);
-      radio.startReceive();
+      int rxState = radio.startReceive();
+      if (rxState != RADIOLIB_ERR_NONE) {
+        Serial.printf("[LoRa RX KLAIDA] Nepavyko atnaujinti priėmimo, klaidos kodas: %d\n", rxState);
+        return false;
+      }
     }
     handleWebConfigPortal();
-    if (telemetryPaused) return;
+    if (telemetryPaused) return false;
     delay(10);
   }
+  return !telemetryPaused;
 }
 
 // ================================================================================
@@ -412,7 +421,7 @@ void requestTelemetryFromAllRepeaters() {
     }
   }
 
-  // Grįžtame į nuolatinio klausymosi režimą
+  // Pasibaigus apklausai bandome vėl įjungti LoRa priėmimą.
   radio.startReceive();
   Serial.println(telemetryPaused ? "\n[Ciklas] Telemetrija pristabdyta iki perkrovimo." : "\n[Ciklas] Visi kartotuvai patikrinti!");
 }
@@ -450,43 +459,74 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
   bool sessionActive = rep.skipLogin || hasLocalSession(targetPubKey);
   bool didLoginThisCycle = false;
 
-  auto getDynamicReplyTimeout = [&]() -> unsigned long {
-    bool curDirectZero = (monitoredNodes[repIdx].hasRoute && monitoredNodes[repIdx].routeHopCount == 0);
-    return curDirectZero ? activeConfig.replyTimeout : activeConfig.remoteTimeout;
+  // Atsakymo laukiame tik jei paketas išsiųstas ir LoRa priėmimas vėl įjungtas.
+  auto sendAndWait = [&](SendResult (*send)(size_t, bool), bool flood, WaitTarget target) -> PollResult {
+    unsigned long timeout = !flood && monitoredNodes[repIdx].routeHopCount == 0
+        ? activeConfig.replyTimeout : activeConfig.remoteTimeout;
+    switch (send(repIdx, flood)) {
+      case SendResult::ReadyToWait: return waitForReply(timeout, targetHash, target);
+      case SendResult::InvalidPassword: return PollResult::InvalidPassword;
+      default: return PollResult::Aborted;
+    }
   };
 
-  // Pagalbinė lambda funkcija prisijungimui (naudojama arba iškart, arba kaip fallback)
-  enum class LoginResult { ReplyReceived, NoReply, InvalidPassword };
-  auto performLoginStep = [&]() -> LoginResult {
-    didLoginThisCycle = true;
-    unsigned long loginTimeout = getDynamicReplyTimeout();
+  // Laukiant atsakymo maršrutas gali pasikeisti. Pasibaigus laukimo laikui vertiname tik naudotą kelią.
+  struct AttemptedRoute {
+    bool direct;
+    uint8_t hops;
+    uint8_t hashSize;
+    size_t length;
+    uint8_t path[sizeof(MonitoredNode::routePath)];
 
-    if (!sendMeshCoreLogin(repIdx)) return LoginResult::InvalidPassword;
-    bool lOk = waitForReply(loginTimeout, targetHash, WAIT_LOGIN);
-    if (!lOk && monitoredNodes[repIdx].hasRoute) {
-      Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Login! Bandomas atsarginis Login per FLOOD (išsaugant DIRECT kelią 22 B telemetrijos bandymui)...\n", rep.name.c_str());
-      monitoredNodes[repIdx].hasRoute = false;
-      if (!sendMeshCoreLogin(repIdx)) return LoginResult::InvalidPassword;
-      lOk = waitForReply(activeConfig.remoteTimeout, targetHash, WAIT_LOGIN);
-      if (!lOk && monitoredNodes[repIdx].routePathLen > 0) {
-        // Jei LOGIN_OK aidas pasimetė grįžtant, bet DIRECT Login galėjo pasiekti kartotuvą –
-        // grąžiname DIRECT kelią, kad Žingsnis 3 pirmiausia išbandytų DIRECT telemetriją (ir tik jai neatsakius – FLOOD)!
-        monitoredNodes[repIdx].hasRoute = true;
+    explicit AttemptedRoute(const MonitoredNode& node)
+        : direct(node.hasRoute), hops(node.routeHopCount), hashSize(node.routeHashSize), length(node.routePathLen) {
+      if (direct && length) memcpy(path, node.routePath, length);
+    }
+
+    bool matches(const MonitoredNode& node) const {
+      return direct && node.hasRoute && hops == node.routeHopCount && hashSize == node.routeHashSize &&
+             length == node.routePathLen && (!length || memcmp(path, node.routePath, length) == 0);
+    }
+  };
+  auto receivedReply = [](PollResult result) {
+    return result == PollResult::ReplyReceived || result == PollResult::ReplyReceivedThenAborted;
+  };
+  auto aborted = [](PollResult result) {
+    return result == PollResult::Aborted || result == PollResult::ReplyReceivedThenAborted;
+  };
+
+  // Prisijungimas prieš apklausą arba po neatsakytos FLOOD užklausos.
+  auto performLoginStep = [&]() -> PollResult {
+    didLoginThisCycle = true;
+    MonitoredNode& node = monitoredNodes[repIdx];
+    AttemptedRoute route(node);
+    PollResult result = sendAndWait(sendMeshCoreLogin, !route.direct, WAIT_LOGIN);
+    if (result == PollResult::Timeout && route.direct) {
+      Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Login. Kartojama per FLOOD.\n", rep.name.c_str());
+      // Laikinai paslepiame tik išbandytą kelią, kad FLOOD atsakymas galėtų jį pakeisti.
+      const bool hidden = route.matches(node);
+      if (hidden) node.hasRoute = false;
+      result = sendAndWait(sendMeshCoreLogin, true, WAIT_LOGIN);
+      const bool restoreRoute = result == PollResult::Aborted || result == PollResult::InvalidPassword ||
+                                (result == PollResult::Timeout && route.length > 0);
+      if (hidden && !node.hasRoute && restoreRoute) {
+        node.hasRoute = true;
       }
     }
-    if (lOk) {
+    if (receivedReply(result)) {
       markLocalSessionActive(targetPubKey);
     }
-    // Trumpa 3.0 s pauzė eteriui nurimti po Login užklausos (net jei LOGIN_OK aidas pasimetė grįždamas,
-    // kartotuvas dažnai jau priėmė Login ir yra pasiruošęs atsakyti į trumpą 22 B telemetrijos užklausą!)
-    yieldDelay(3000);
-    return lOk ? LoginResult::ReplyReceived : LoginResult::NoReply;
+    if (aborted(result) || result == PollResult::InvalidPassword) return result;
+    // Po išsiųstos Login užklausos palaukiame 3 s, net jei atsakymo negavome.
+    if (!yieldDelay(3000)) return receivedReply(result) ? PollResult::ReplyReceivedThenAborted : PollResult::Aborted;
+    return result;
   };
 
-  // Žingsnis 1: Jei sesija (ACL) dar neaktyvi – siunčiame Login (ANON_REQ).
-  // Jei sesija jau aktyvi – praleidžiame Login ir iškart taupome eterio laiką!
+  // Žingsnis 1: Login praleidžiame, jei serveris nurodė skip_login arba turime vietinę sesiją.
   if (!sessionActive) {
-    if (performLoginStep() == LoginResult::NoReply) {
+    PollResult result = performLoginStep();
+    if (aborted(result)) return;
+    if (result == PollResult::Timeout) {
       Serial.printf("[Ciklas] ⚠️ LOGIN_OK iš '%s' negautas (gali būti prarastas grįžtant per multi-hop), tačiau bandoma 22 B užklausa...\n",
                     rep.name.c_str());
     }
@@ -495,136 +535,94 @@ void requestTelemetryFromSingleRepeater(size_t repIdx) {
                   rep.name.c_str());
   }
 
+  auto pollRequest = [&](SendResult (*send)(size_t, bool), WaitTarget target, const char* label) -> PollResult {
+    auto tryRoute = [&]() -> PollResult {
+      AttemptedRoute route(monitoredNodes[repIdx]);
+      PollResult result = sendAndWait(send, !route.direct, target);
+      if (result == PollResult::Timeout && route.direct) {
+        Serial.printf("[Maršrutizatorius] '%s' neatsakė į %s per DIRECT. Kartojama per FLOOD.\n",
+                      rep.name.c_str(), label);
+        if (route.matches(monitoredNodes[repIdx])) quarantineFailedRoute(repIdx);
+        result = sendAndWait(send, true, target);
+      }
+      return result;
+    };
+
+    PollResult result = tryRoute();
+    if (result == PollResult::Timeout && !didLoginThisCycle) {
+      Serial.printf("[Sesija Fallback] '%s' neatsakė į %s per FLOOD. Išvaloma sesija, vykdomas Login.\n",
+                    rep.name.c_str(), label);
+      clearLocalSession(targetPubKey);
+      PollResult login = performLoginStep();
+      if (aborted(login) || login == PollResult::InvalidPassword) return login;
+      result = tryRoute();
+    }
+    if (receivedReply(result)) markLocalSessionActive(targetPubKey);
+    return result;
+  };
+
   // Žingsnis 2: Būsenos ir statistikos užklausa (REQ_TYPE_GET_STATUS)
   if (rep.reqStatus) {
-    unsigned long statusTimeout = getDynamicReplyTimeout();
-    Serial.printf("[Užklausa 2/3] Siunčiama būsenos užklausa (REQ_TYPE_GET_STATUS) į '%s' (Laukiama iki %.1f s)...\n",
-                  rep.name.c_str(), statusTimeout / 1000.0f);
-    sendMeshCoreStatusRequest(repIdx);
-    bool statusOk = waitForReply(statusTimeout, targetHash, WAIT_STATUS);
-
-    // 1) Jei siuntėme per DIRECT maršrutą ir jis neatsakė – pirmiausia izoliuojame DIRECT kelią
-    // ir pakartojame trumpą 22 B Status užklausą per FLOOD (nes sesija kartotuve greičiausiai vis dar aktyvi, o sugedo tik asimetrinis DIRECT kelias!)
-    if (!statusOk && monitoredNodes[repIdx].hasRoute) {
-      Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Status! Kelias izoliuojamas (karantinas 15 min.) ir kartojama per FLOOD...\n", rep.name.c_str());
-      quarantineFailedRoute(repIdx);
-      sendMeshCoreStatusRequest(repIdx);
-      statusOk = waitForReply(activeConfig.remoteTimeout, targetHash, WAIT_STATUS);
-    }
-
-    // 2) Jei net per FLOOD neatsakė ir šį ciklą buvome praleidę Login – vadinasi pasibaigė sesija (pvz. kartotuvas persikrovė):
-    // atliekame Login ir pakartojame Status užklausą
-    if (!statusOk && !didLoginThisCycle) {
-      Serial.printf("[Sesija Fallback] ⚠️ '%s' neatsakė į Status be Login (net per FLOOD). Išvaloma sesija, vykdomas Login...\n",
-                    rep.name.c_str());
-      clearLocalSession(targetPubKey);
-      if (performLoginStep() != LoginResult::InvalidPassword) {
-        unsigned long retryStatusTimeout = getDynamicReplyTimeout();
-        sendMeshCoreStatusRequest(repIdx);
-        statusOk = waitForReply(retryStatusTimeout, targetHash, WAIT_STATUS);
-        if (!statusOk && monitoredNodes[repIdx].hasRoute) {
-          Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Status po Login! Kartojama per FLOOD...\n", rep.name.c_str());
-          quarantineFailedRoute(repIdx);
-          sendMeshCoreStatusRequest(repIdx);
-          statusOk = waitForReply(activeConfig.remoteTimeout, targetHash, WAIT_STATUS);
-        }
-      }
-    }
-    if (statusOk) {
-      markLocalSessionActive(targetPubKey);
-    }
+    Serial.printf("[Užklausa 2/3] Siunčiama būsenos užklausa į '%s'.\n", rep.name.c_str());
+    if (aborted(pollRequest(sendMeshCoreStatusRequest, WAIT_STATUS, "Status"))) return;
   } else {
     Serial.printf("[Užklausa 2/3] Būsenos užklausa ('status') išjungta kartotuvui '%s'. Praleidžiama.\n", rep.name.c_str());
   }
 
-  // Tarpas tarp užklausų laukimo (10 sekundžių):
+  // Nustatytas tarpas tarp būsenos ir telemetrijos užklausų.
   if (rep.reqStatus && rep.reqTelemetry) {
     Serial.printf("[Pauzė] Laukimo tarpas tarp užklausų: %.1f s...\n", activeConfig.interDelay / 1000.0f);
-    yieldDelay(activeConfig.interDelay);
+    if (!yieldDelay(activeConfig.interDelay)) return;
   }
 
   // Žingsnis 3: Telemetrijos užklausa (REQ_TYPE_GET_TELEMETRY_DATA - Baterija ir Temp)
   if (rep.reqTelemetry) {
-    unsigned long telemTimeout = getDynamicReplyTimeout();
-    Serial.printf("[Užklausa 3/3] Siunčiama telemetrijos užklausa (REQ_TYPE_GET_TELEMETRY_DATA) į '%s' (Laukiama iki %.1f s)...\n",
-                  rep.name.c_str(), telemTimeout / 1000.0f);
-    sendMeshCoreTelemetryRequest(repIdx);
-    bool telemOk = waitForReply(telemTimeout, targetHash, WAIT_TELEMETRY);
-
-    // 1) Jei siuntėme per DIRECT maršrutą (pvz., iš ADVERT išmoktą asimetrinį B9DD4BBD) ir jis neatsakė –
-    // pirmiausia izoliuojame DIRECT kelią ir iškart pakartojame trumpą 22 B Telemetrijos užklausą per FLOOD!
-    // Kai sesija kartotuve aktyvi (skip_login: true), kartotuvas į FLOOD telemetriją atsako per 5–7 sek. be jokio 53 B Login!
-    if (!telemOk && monitoredNodes[repIdx].hasRoute) {
-      Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Telemetriją! Kelias izoliuojamas (karantinas 15 min.) ir kartojama 22 B Telemetrija per FLOOD...\n", rep.name.c_str());
-      quarantineFailedRoute(repIdx);
-      sendMeshCoreTelemetryRequest(repIdx);
-      telemOk = waitForReply(activeConfig.remoteTimeout, targetHash, WAIT_TELEMETRY);
-    }
-
-    // 2) Jei net per FLOOD neatsakė ir šį ciklą buvome praleidę Login – vadinasi kartotuve tikrai pasibaigė sesija:
-    // išvalome sesiją, atliekame Login ir dar kartą išsiunčiame 22 B Telemetrijos užklausą!
-    if (!telemOk && !didLoginThisCycle) {
-      Serial.printf("[Sesija Fallback] ⚠️ '%s' neatsakė į Telemetriją be Login (net per FLOOD). Išvaloma sesija, vykdomas Login...\n",
-                    rep.name.c_str());
-      clearLocalSession(targetPubKey);
-      if (performLoginStep() != LoginResult::InvalidPassword) {
-        unsigned long retryTelemTimeout = getDynamicReplyTimeout();
-        sendMeshCoreTelemetryRequest(repIdx);
-        telemOk = waitForReply(retryTelemTimeout, targetHash, WAIT_TELEMETRY);
-        if (!telemOk && monitoredNodes[repIdx].hasRoute) {
-          Serial.printf("[Maršrutizatorius] DIRECT maršrutas į '%s' neatsakė į Telemetriją po Login! Kartojama per FLOOD...\n", rep.name.c_str());
-          quarantineFailedRoute(repIdx);
-          sendMeshCoreTelemetryRequest(repIdx);
-          telemOk = waitForReply(activeConfig.remoteTimeout, targetHash, WAIT_TELEMETRY);
-        }
-      }
-    }
-    if (telemOk) {
-      markLocalSessionActive(targetPubKey);
-    }
+    Serial.printf("[Užklausa 3/3] Siunčiama telemetrijos užklausa į '%s'.\n", rep.name.c_str());
+    if (aborted(pollRequest(sendMeshCoreTelemetryRequest, WAIT_TELEMETRY, "Telemetriją"))) return;
   } else {
     Serial.printf("[Užklausa 3/3] Telemetrijos užklausa ('telemetry') išjungta kartotuvui '%s'. Praleidžiama.\n", rep.name.c_str());
   }
 
-  // Visi gauti ir išsiųsti paketai automatiškai perduodami į RAW endpoint (/api/raw) ir apdorojami serveryje!
-  Serial.printf("\n[Ciklas] Kartotuvo '%s' užklausų etapas baigtas. Visi RAW paketai jau nukreipti į serverį.\n", rep.name.c_str());
+  Serial.printf("\n[Ciklas] Kartotuvo '%s' užklausų etapas baigtas.\n", rep.name.c_str());
 }
 
 // ================================================================================
-// ⏳ AKTYVUS ATSAKYMO LAUKIMAS (LAUKIAMA IKI TIMEOUT ARBA IKI TIKSLINIO ATSAKYMO)
+// ⏳ ATSAKYMO LAUKIMAS
+// Atsakymo nebuvimą atskiriame nuo pristabdytos apklausos ar LoRa priėmimo klaidos.
 // ================================================================================
-bool waitForReply(unsigned long timeoutMs, uint8_t expectedSenderHash, WaitTarget waitTarget) {
-  if (telemetryPaused) return false;
+PollResult waitForReply(unsigned long timeoutMs, uint8_t expectedSenderHash, WaitTarget waitTarget) {
   unsigned long start = millis();
   int packetsCount = 0;
-  bool gotTargetResponse = false;
   Serial.printf("[RX Laukimas] Klausomasi kartotuvo atsakymo (iki %.1f s)...\n", timeoutMs / 1000.0f);
 
   while (millis() - start < timeoutMs) {
+    if (telemetryPaused) return PollResult::Aborted;
     if (receivedFlag) {
       receivedFlag = false;
       packetsCount++;
       bool valid = processIncomingPacket(expectedSenderHash, waitTarget);
-      radio.startReceive(); // Grįžtame į priėmimo režimą tolesniems paketams
+      int rxState = radio.startReceive();
+      if (rxState != RADIOLIB_ERR_NONE) {
+        Serial.printf("[LoRa RX KLAIDA] Nepavyko atnaujinti priėmimo, klaidos kodas: %d\n", rxState);
+        return valid ? PollResult::ReplyReceivedThenAborted : PollResult::Aborted;
+      }
       if (valid) {
-        gotTargetResponse = true;
-        // Trumpa 500 ms ne-blokuojanti pauzė leisti atvykti galimiems papildomiems paketams
-        yieldDelay(500);
-        break;
+        Serial.println("[RX Laukimas] Atsakymas sėkmingai gautas ir apdorotas!");
+        // Dar 500 ms priimame papildomus paketus. Jau gautas atsakymas lieka galioti.
+        return yieldDelay(500) ? PollResult::ReplyReceived : PollResult::ReplyReceivedThenAborted;
       }
     }
     delay(15);
   }
 
-  if (gotTargetResponse) {
-    Serial.println("[RX Laukimas] Atsakymas sėkmingai gautas ir apdorotas!");
-  } else if (packetsCount == 0) {
+  if (telemetryPaused) return PollResult::Aborted;
+  if (packetsCount == 0) {
     Serial.println("[RX Laukimas] Per skirtą laiką atsakymo paketų negauta.");
   } else {
     Serial.printf("[RX Laukimas] Lango pabaiga. Gauta eterio paketų: %d (atsakymo iš tikslinio kartotuvo negauta).\n", packetsCount);
   }
 
-  return gotTargetResponse;
+  return PollResult::Timeout;
 }
 
 // ================================================================================
@@ -938,12 +936,10 @@ void confirmRoute(size_t repIdx) {
   }
 }
 
-// Grąžina maršrutizavimo antraštę konkrečiam kartotuvui:
-// Jei kelias žinomas: ROUTE_TYPE_DIRECT (be Scope)
-// Jei kelias nežinomas: ROUTE_TYPE_FLOOD (arba ROUTE_TYPE_TRANSPORT_FLOOD su Scope)
-uint8_t getRepeaterRouteHeader(uint8_t payloadType, size_t repIdx) {
-  bool hasKnownRoute = repIdx < monitoredRepeatersCount && monitoredNodes[repIdx].hasRoute;
-  uint8_t rType = MeshCorePacket::repeaterRouteType(hasKnownRoute, activeConfig.scopeEnabled);
+// Antraštę parenkame pagal šio bandymo maršrutą: DIRECT be scope arba FLOOD.
+// Jei numatytasis scope įjungtas, FLOOD bandymui naudojame TRANSPORT_FLOOD.
+uint8_t getRepeaterRouteHeader(uint8_t payloadType, bool flood) {
+  uint8_t rType = MeshCorePacket::repeaterRouteType(!flood, activeConfig.scopeEnabled);
   return ((payloadType & 0x0F) << 2) | rType;
 }
 
@@ -983,9 +979,9 @@ uint8_t getPathLengthByte(uint8_t hops) {
 // 📤 MESHCORE PAKETŲ SIUNTIMAS
 // ================================================================================
 
-void sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const uint8_t* payload, size_t payloadLen,
+SendResult sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const uint8_t* payload, size_t payloadLen,
                      const char* targetName, const char* targetPubKey, const uint8_t* sharedSecret) {
-  if (telemetryPaused) return;
+  if (telemetryPaused) return SendResult::Paused;
   uint8_t packet[256];
   size_t idx = MeshCorePacket::encode(packet, sizeof(packet), header, pathLen, path, payload, payloadLen,
                                        {activeConfig.scope.c_str(), static_cast<uint16_t>(SCOPE_CODE_1),
@@ -993,9 +989,9 @@ void sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const
   uint8_t rType = header & 0x03;
   if (!idx) {
     Serial.println(MeshCorePacket::hasTransportCodes(rType)
-      ? "[LoRa TX KLAIDA] Nepavyko paruošti Scope paketo: patikrinkite viešą SCOPE_NAME ir transporto kodų nustatymus."
+      ? "[LoRa TX KLAIDA] Nepavyko koduoti paketo su scope: patikrinkite paketo dydį, SCOPE_NAME ir transporto kodus."
       : "[LoRa TX KLAIDA] Nepavyko paruošti paketo.");
-    return;
+    return SendResult::EncodeFailed;
   }
 
   uint8_t pType = (header >> 2) & 0x0F;
@@ -1009,7 +1005,24 @@ void sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const
   printHexBuffer(packet, idx);
   Serial.println();
 
-  // Neapdoroto TX srauto siuntimas į /api/raw
+  // Po TX bandome atnaujinti priėmimą net jei siuntimas nepavyko.
+  receivedFlag = false;
+  digitalWrite(PIN_LORA_RXEN, LOW);
+  int txState = radio.transmit(packet, idx);
+  digitalWrite(PIN_LORA_RXEN, HIGH);
+  receivedFlag = false; // Prieš įjungdami RX išvalome TXDone nustatytą programinę vėliavėlę.
+  int rxState = radio.startReceive();
+
+  if (rxState != RADIOLIB_ERR_NONE) {
+    Serial.printf("[LoRa RX KLAIDA] Nepavyko atnaujinti priėmimo po TX, klaidos kodas: %d\n", rxState);
+  }
+  if (txState != RADIOLIB_ERR_NONE) {
+    Serial.printf("[LoRa TX KLAIDA] Nepavyko išsiųsti, klaidos kodas: %d\n", txState);
+    return SendResult::TransmitFailed;
+  }
+  Serial.println("[LoRa TX] Paketas sėkmingai ištransliuotas į eterį.");
+
+  // Į API eilę perduodame tik išsiųstus paketus, net jei po TX nepavyko atnaujinti RX.
   #if ARDUINOJSON_VERSION_MAJOR >= 7
   JsonDocument rawTxDoc;
   #else
@@ -1019,7 +1032,7 @@ void sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const
   rawTxDoc["direction"] = "TX";
   rawTxDoc["bot_id"] = activeConfig.botId;
   time_t now = time(nullptr);
-  rawTxDoc["timestamp"] = (now >= 1700000000UL) ? (uint32_t)now : lastTxTimestamp;
+  rawTxDoc["timestamp"] = (now >= 1700000000) ? (uint32_t)now : lastTxTimestamp;
   rawTxDoc["length"] = idx;
 
   String rawHex = "";
@@ -1047,33 +1060,11 @@ void sendMeshCoreRaw(uint8_t header, uint8_t pathLen, const uint8_t* path, const
   }
 
   sendToAPI(rawTxDoc);
-
-  // Siuntimo metu atjungiame RX vėliavėlę, kad TXDone pertrauktis nesukeltų klaidingo RX
-  receivedFlag = false;
-
-  // 📡 Wio-SX1262 RF SWITCH VALDYMAS:
-  // Siuntimo metu RXEN (Pin 38) PRIVALO būti LOW, kad siųstuvo PA galia patektų į anteną!
-  digitalWrite(PIN_LORA_RXEN, LOW);
-
-  int state = radio.transmit(packet, idx);
-
-  // Po siuntimo vėl įjungiame RXEN (Pin 38 = HIGH), kad antena būtų nukreipta į imtuvą
-  digitalWrite(PIN_LORA_RXEN, HIGH);
-
-  // IŠVALOME TXDone pertraukties vėliavėlę po siuntimo ir grįžtame į klausymąsi
-  receivedFlag = false;
-  radio.startReceive();
-
-  if (state == RADIOLIB_ERR_NONE) {
-    Serial.println("[LoRa TX] Paketas sėkmingai ištransliuotas į eterį.");
-  } else {
-    Serial.printf("[LoRa TX KLAIDA] Nepavyko išsiųsti, klaidos kodas: %d\n", state);
-  }
+  return rxState == RADIOLIB_ERR_NONE ? SendResult::ReadyToWait : SendResult::ReceiveFailed;
 }
 
 // 1. Siunčiama užšifruota prisijungimo (Login) užklausa su slaptažodžiu
-// Returns false if the password was rejected locally; RF outcomes are handled separately.
-bool sendMeshCoreLogin(size_t repIdx) {
+SendResult sendMeshCoreLogin(size_t repIdx, bool flood) {
   const RepeaterTarget& rep = monitoredRepeaters[repIdx];
   String password = rep.password;
   password.trim();
@@ -1082,14 +1073,14 @@ bool sendMeshCoreLogin(size_t repIdx) {
   if (pwdLen > MAX_REPEATER_LOGIN_PASSWORD_BYTES) {
     Serial.printf("[Login KLAIDA] '%s': kartotuvo slaptažodis negali būti ilgesnis nei %u baitų.\n",
                   rep.name.c_str(), static_cast<unsigned>(MAX_REPEATER_LOGIN_PASSWORD_BYTES));
-    return false;
+    return SendResult::InvalidPassword;
   }
   uint8_t target = monitoredNodes[repIdx].hash;
   const uint8_t* secret = monitoredNodes[repIdx].sharedSecret;
 
-  uint8_t header = getRepeaterRouteHeader(PAYLOAD_TYPE_ANON_REQ, repIdx);
-  uint8_t pathLen = getRepeaterRoutePathLen(repIdx);
-  const uint8_t* path = getRepeaterRoutePath(repIdx);
+  uint8_t header = getRepeaterRouteHeader(PAYLOAD_TYPE_ANON_REQ, flood);
+  uint8_t pathLen = flood ? getPathLengthByte(0) : getRepeaterRoutePathLen(repIdx);
+  const uint8_t* path = flood ? nullptr : getRepeaterRoutePath(repIdx);
 
   uint8_t payload[128];
   size_t pLen = 0;
@@ -1115,8 +1106,7 @@ bool sendMeshCoreLogin(size_t repIdx) {
   int encLen = MeshCrypto::encryptThenMAC(secret, &payload[pLen], plain, plainLen);
   pLen += encLen;
 
-  sendMeshCoreRaw(header, pathLen, path, payload, pLen, rep.name.c_str(), rep.public_id.c_str(), secret);
-  return true;
+  return sendMeshCoreRaw(header, pathLen, path, payload, pLen, rep.name.c_str(), rep.public_id.c_str(), secret);
 }
 
 // 2. Siunčiamas tiesioginio kelio registravimas (PAYLOAD_TYPE_PATH) su 0 apynių
@@ -1147,14 +1137,14 @@ void sendMeshCorePath(size_t repIdx) {
 }
 
 // 3. Siunčiama užšifruota būsenos ir statistikos užklausa (REQ_TYPE_GET_STATUS = 0x01)
-void sendMeshCoreStatusRequest(size_t repIdx) {
+SendResult sendMeshCoreStatusRequest(size_t repIdx, bool flood) {
   const RepeaterTarget& rep = monitoredRepeaters[repIdx];
   uint8_t target = monitoredNodes[repIdx].hash;
   const uint8_t* secret = monitoredNodes[repIdx].sharedSecret;
 
-  uint8_t header = getRepeaterRouteHeader(PAYLOAD_TYPE_REQ, repIdx);
-  uint8_t pathLen = getRepeaterRoutePathLen(repIdx);
-  const uint8_t* path = getRepeaterRoutePath(repIdx);
+  uint8_t header = getRepeaterRouteHeader(PAYLOAD_TYPE_REQ, flood);
+  uint8_t pathLen = flood ? getPathLengthByte(0) : getRepeaterRoutePathLen(repIdx);
+  const uint8_t* path = flood ? nullptr : getRepeaterRoutePath(repIdx);
 
   uint8_t payload[64];
   size_t pLen = 0;
@@ -1174,18 +1164,18 @@ void sendMeshCoreStatusRequest(size_t repIdx) {
   int encLen = MeshCrypto::encryptThenMAC(secret, &payload[pLen], plain, 13);
   pLen += encLen;
 
-  sendMeshCoreRaw(header, pathLen, path, payload, pLen, rep.name.c_str(), rep.public_id.c_str(), secret);
+  return sendMeshCoreRaw(header, pathLen, path, payload, pLen, rep.name.c_str(), rep.public_id.c_str(), secret);
 }
 
 // 4. Siunčiama užšifruota jutiklių telemetrijos užklausa (REQ_TYPE_GET_TELEMETRY_DATA = 0x03)
-void sendMeshCoreTelemetryRequest(size_t repIdx) {
+SendResult sendMeshCoreTelemetryRequest(size_t repIdx, bool flood) {
   const RepeaterTarget& rep = monitoredRepeaters[repIdx];
   uint8_t target = monitoredNodes[repIdx].hash;
   const uint8_t* secret = monitoredNodes[repIdx].sharedSecret;
 
-  uint8_t header = getRepeaterRouteHeader(PAYLOAD_TYPE_REQ, repIdx);
-  uint8_t pathLen = getRepeaterRoutePathLen(repIdx);
-  const uint8_t* path = getRepeaterRoutePath(repIdx);
+  uint8_t header = getRepeaterRouteHeader(PAYLOAD_TYPE_REQ, flood);
+  uint8_t pathLen = flood ? getPathLengthByte(0) : getRepeaterRoutePathLen(repIdx);
+  const uint8_t* path = flood ? nullptr : getRepeaterRoutePath(repIdx);
 
   uint8_t payload[64];
   size_t pLen = 0;
@@ -1206,7 +1196,7 @@ void sendMeshCoreTelemetryRequest(size_t repIdx) {
   int encLen = MeshCrypto::encryptThenMAC(secret, &payload[pLen], plain, 13);
   pLen += encLen;
 
-  sendMeshCoreRaw(header, pathLen, path, payload, pLen, rep.name.c_str(), rep.public_id.c_str(), secret);
+  return sendMeshCoreRaw(header, pathLen, path, payload, pLen, rep.name.c_str(), rep.public_id.c_str(), secret);
 }
 
 // ================================================================================
